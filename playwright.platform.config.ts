@@ -85,7 +85,7 @@ export default defineConfig({
         ...localGoEnv,
       },
       reuseExistingServer: reuseE2EServers,
-      timeout: 120_000,
+      timeout: 300_000,
     },
     {
       command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${webPort}`,

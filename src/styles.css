@@ -784,7 +784,7 @@ kbd { display: grid; place-items: center; min-width: 18px; height: 18px; backgro
 /* Readability corrections */
 .project-primary small, .project-stage small, .home-rail small, .evidence-item small, .method-card small, .diagnostic-card p, .action-row span, .action-row em, .field label, .table-surface th, .table-surface td small, .activity-item small, .setting-row small { font-size: 11px; }.project-order, .project-updated, .home-system-index, .chart-axis, .source-chip, .mix-legend, .mix-row small, .source-note, .action-head, .asset-row > span, .asset-row small, .canvas-toolbar, .time-ruler, .track b, .clip { font-size: 10px; }
 
-@media (min-width: 1280px) and (max-width: 1360px) {
+@media (min-width: 1280px) and (max-width: 1366px) {
   .page-frame { padding-left: 20px; padding-right: 20px; }
   .workspace-surface { grid-template-columns: minmax(440px, 1.45fr) minmax(220px, .72fr) minmax(200px, .58fr); }
   .strategy-row { grid-template-columns: 82px 1fr 25px 20px; padding-left: 14px; padding-right: 14px; }
