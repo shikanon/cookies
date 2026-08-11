@@ -35,10 +35,10 @@
   "golden": {
     "timeline_duration_ms": 12000,
     "caption": "固定黄金字幕",
-    "video_framemd5_sha256": "527e64690adaab7909477dd526af92182997d15ea30d9ea7c7fd575252c2e1ff",
+    "video_framemd5_sha256": "db2f1497de05c516d0157616cf1d32d522072dca70ef342940e9c7200782c1cc",
     "audio_framemd5_sha256": "59e84dc19eb19bce52ef77aa0813e3ed115de784409a0b81fc620ecf814e4264",
-    "c3_visual_framemd5_sha256": "3c86f68394225fb119552cd43487f525064d381d0773a8715ae532e91c6b8930",
-    "c7_video_framemd5_sha256": "700e3e60cd0030bd183990b4c154884e222d20dbdab02f6525514fa3c2bf6c37",
+    "c3_visual_framemd5_sha256": "305376a20f8b0ea0b6d8d35471aff9d514400541865529714df3751c872ac0c8",
+    "c7_video_framemd5_sha256": "922f908504c14c26c84156607b4e37229bcbb0352e5f05a08f4225476c22b24c",
     "c7_audio_framemd5_sha256": "8848dde4490768da7e150656678f204e3ddc1473b930e72fd7c9e26d31755c38"
   }
 }

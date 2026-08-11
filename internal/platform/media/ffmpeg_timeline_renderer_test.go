@@ -19,6 +19,26 @@ func (squareTimelineProbe) Probe(context.Context, []byte) (assets.VideoMetadata,
 	return assets.VideoMetadata{DurationMS: 3000, WidthPixels: 1080, HeightPixels: 1080, FrameRate: "30/1", VideoCodec: "h264", AudioCodec: "aac"}, nil
 }
 
+func TestFFmpegTimelineRendererDeterministicModePinsCPUAndThreads(t *testing.T) {
+	runner := &timelineProgressRunnerStub{}
+	request := TimelineRenderRequest{OrganizationID: "org_1", ProjectID: "project_1", DurationMS: 3000, Width: 720, Height: 1280, FrameRate: 30, SampleRate: 48000,
+		Video: []TimelineVideoClip{{ID: "v1", Asset: contract.AssetVersionRef{AssetID: "video", Version: 1}, EndMS: 3000}}}
+	renderer := FFmpegTimelineRenderer{FFmpegPath: "ffmpeg", WorkRoot: t.TempDir(), Videos: audioMixTestSource{}, Audio: audioMixTestSource{}, Probe: audioMixTestProbe{duration: 3000}, Runner: runner, Deterministic: true}
+	output, err := renderer.Render(context.Background(), request, func(TimelineProgress) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := output.Content.Close(); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(runner.args, " ")
+	for _, expected := range []string{"-cpuflags 0", "-filter_threads 1", "-filter_complex_threads 1", "-threads 1", "-x264-params asm=0"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("deterministic FFmpeg args missing %q: %s", expected, joined)
+		}
+	}
+}
+
 type timelineProgressRunnerStub struct {
 	args []string
 }

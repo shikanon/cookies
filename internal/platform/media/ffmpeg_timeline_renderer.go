@@ -78,6 +78,9 @@ type FFmpegTimelineRenderer struct {
 	Probe      assets.VideoMetadataProbe
 	Runner     ProgressCommandRunner
 	TempTTL    time.Duration
+	// Deterministic disables CPU- and core-count-dependent FFmpeg paths for
+	// portable golden tests. Production rendering keeps the optimized default.
+	Deterministic bool
 }
 
 func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRenderRequest, report TimelineProgressFunc) (CompositionOutput, error) {
@@ -106,6 +109,9 @@ func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRend
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	fail := func(err error) (CompositionOutput, error) { cleanup(); return CompositionOutput{}, err }
 	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-progress", "pipe:1", "-nostats"}
+	if r.Deterministic {
+		args = append(args, "-cpuflags", "0", "-filter_threads", "1", "-filter_complex_threads", "1")
+	}
 	video := append([]TimelineVideoClip(nil), request.Video...)
 	sort.Slice(video, func(i, j int) bool { return video[i].StartMS < video[j].StartMS })
 	request.Video = video
@@ -191,7 +197,11 @@ func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRend
 	}
 	graph, videoLabel, audioLabel := BuildTimelineFilter(request, subtitlePath)
 	outputPath := filepath.Join(dir, "final.mp4")
-	args = append(args, "-filter_complex", graph, "-map", videoLabel, "-map", audioLabel, "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-r", strconv.Itoa(request.FrameRate), "-c:a", "aac", "-b:a", "192k", "-ar", strconv.Itoa(request.SampleRate), "-ac", "2", "-t", seconds(request.DurationMS), "-movflags", "+faststart", outputPath)
+	args = append(args, "-filter_complex", graph, "-map", videoLabel, "-map", audioLabel, "-c:v", "libx264", "-preset", "medium", "-crf", "20")
+	if r.Deterministic {
+		args = append(args, "-threads", "1", "-x264-params", "asm=0")
+	}
+	args = append(args, "-pix_fmt", "yuv420p", "-r", strconv.Itoa(request.FrameRate), "-c:a", "aac", "-b:a", "192k", "-ar", strconv.Itoa(request.SampleRate), "-ac", "2", "-t", seconds(request.DurationMS), "-movflags", "+faststart", outputPath)
 	runner := r.Runner
 	if runner == nil {
 		runner = ExecProgressCommandRunner{}

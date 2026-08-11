@@ -78,7 +78,7 @@ func TestFFmpegC3VisualLayersMatchFixedGolden(t *testing.T) {
 		"overlay-alpha":   filepath.Join(fixtureRoot, "overlay-alpha.png"),
 	}}
 	probe := assets.FFprobeVideoProbe{Path: ffprobePath, WorkRoot: t.TempDir()}
-	renderer := FFmpegTimelineRenderer{FFmpegPath: ffmpegPath, WorkRoot: t.TempDir(), Visuals: source, Audio: source, Probe: probe}
+	renderer := FFmpegTimelineRenderer{FFmpegPath: ffmpegPath, WorkRoot: t.TempDir(), Visuals: source, Audio: source, Probe: probe, Deterministic: true}
 	request := TimelineRenderRequest{OrganizationID: "org_c3", ProjectID: "project_c3", DurationMS: 3000, Width: 720, Height: 1280, FrameRate: 30, SampleRate: 48000, Visual: []TimelineVisualClip{
 		{ID: "primary", Kind: "video", Asset: contract.AssetVersionRef{AssetID: "video-landscape", Version: 1}, EndMS: 3000, Fit: "contain", PositionX: 0.5, PositionY: 0.5, Scale: 1, Opacity: 1, ZIndex: 0},
 		{ID: "opaque", Kind: "image", Asset: contract.AssetVersionRef{AssetID: "overlay-opaque", Version: 1}, StartMS: 500, EndMS: 2500, Fit: "contain", PositionX: 0.1, PositionY: 0.8, Scale: 0.4, CropLeft: 0.05, CropRight: 0.05, Opacity: 0.8, ZIndex: 1},
@@ -118,7 +118,7 @@ func TestFFmpegTimelinePreviewAndExportMatchGoldenMedia(t *testing.T) {
 	refs := map[contract.AssetID]string{"video-a": videoA, "video-b": videoB, "music": audio}
 	source := goldenTimelineSource{files: refs}
 	probe := assets.FFprobeVideoProbe{Path: ffprobePath, WorkRoot: t.TempDir()}
-	renderer := FFmpegTimelineRenderer{FFmpegPath: ffmpegPath, WorkRoot: t.TempDir(), Videos: source, Audio: source, Probe: probe}
+	renderer := FFmpegTimelineRenderer{FFmpegPath: ffmpegPath, WorkRoot: t.TempDir(), Videos: source, Audio: source, Probe: probe, Deterministic: true}
 	request := TimelineRenderRequest{OrganizationID: "org_golden", ProjectID: "project_golden", DurationMS: manifest.Golden.TimelineDurationMS, Width: 720, Height: 1280, FrameRate: 30, SampleRate: 48000, Video: []TimelineVideoClip{{ID: "a", Asset: contract.AssetVersionRef{AssetID: "video-a", Version: 1}, EndMS: 6000}, {ID: "b", Asset: contract.AssetVersionRef{AssetID: "video-b", Version: 1}, StartMS: 6000, EndMS: 12000}}, Audio: []TimelineAudioClip{{ID: "music", Role: TimelineAudioMusic, Asset: contract.AssetVersionRef{AssetID: "music", Version: 1}, EndMS: 12000, GainDB: -12, Loop: true}}, Captions: []TimelineCaption{{StartMS: 1000, EndMS: 5000, Text: manifest.Golden.Caption}}}
 	render := func(name string) string {
 		output, err := renderer.Render(context.Background(), request, nil)
@@ -181,7 +181,7 @@ func TestFFmpegC7FrozenMultitrackPreviewAndExportMatchGolden(t *testing.T) {
 	}
 	source := goldenTimelineSource{files: files, withAudio: map[contract.AssetID]bool{"video-original-audio": true}}
 	probe := assets.FFprobeVideoProbe{Path: ffprobePath, WorkRoot: t.TempDir()}
-	renderer := FFmpegTimelineRenderer{FFmpegPath: ffmpegPath, WorkRoot: t.TempDir(), Visuals: source, Audio: source, Probe: probe}
+	renderer := FFmpegTimelineRenderer{FFmpegPath: ffmpegPath, WorkRoot: t.TempDir(), Visuals: source, Audio: source, Probe: probe, Deterministic: true}
 	fontSHA := ""
 	for _, fixture := range manifest.Assets {
 		if fixture.ID == "font" {
