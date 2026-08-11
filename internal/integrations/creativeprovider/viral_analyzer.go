@@ -259,12 +259,7 @@ func (a *ViralAnalyzer) callVisionModel(ctx context.Context, route provider.Gate
 	if err != nil {
 		return creative.ViralAnalysisResult{}, err
 	}
-	endpoint := strings.TrimRight(route.BaseURL, "/")
-	if strings.HasSuffix(endpoint, "/v1") {
-		endpoint += "/chat/completions"
-	} else {
-		endpoint += "/v1/chat/completions"
-	}
+	endpoint := route.ChatCompletionsEndpoint()
 	timeout, cancel := context.WithTimeout(ctx, time.Duration(route.TimeoutSeconds)*time.Second)
 	defer cancel()
 	httpRequest, err := http.NewRequestWithContext(timeout, http.MethodPost, endpoint, bytes.NewReader(body))

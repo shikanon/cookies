@@ -36,6 +36,11 @@ jobs:
       - name: Run tests
         run: go test -race ./...
 
+      - name: Verify video editor MVP FFmpeg golden
+        run: |
+          docker build --target verifier -f deployments/render-worker/Dockerfile -t cookies-render-verifier:c0 .
+          docker run --rm --volume "$PWD:/workspace" --workdir /workspace cookies-render-verifier:c0 sh scripts/verify-video-editor-c0.sh
+
       - name: Build platform API
         run: go build ./cmd/cookies-api
 
@@ -62,6 +67,15 @@ jobs:
 
       - name: Build root frontend
         run: npm run build
+
+      - name: Verify OpenCut exit boundary and timeline performance budgets
+        run: npm run test:video-editor-governance
+
+      - name: Install Chromium for video editor acceptance
+        run: npx playwright install --with-deps chromium
+
+      - name: Run video editor real-browser acceptance
+        run: npx playwright test e2e/video-editor-phase1.spec.ts --config=playwright.platform.config.ts
 
       - name: Validate API contracts
         run: npm run contract:check
@@ -104,6 +118,11 @@ jobs:
         env:
           COOKIES_TEST_MYSQL_DSN: cookies:cookies_local_development_only@tcp(127.0.0.1:3306)/cookies?parseTime=true&multiStatements=true
         run: go test ./internal/systems/delivery -run TestMySQLPlatformRuntimeRoundTripAndLegacyUpgradeCompatibility -count=1
+
+      - name: Verify interrupted video-editor migration recovery
+        env:
+          COOKIES_TEST_MYSQL_DSN: cookies:cookies_local_development_only@tcp(127.0.0.1:3306)/cookies?parseTime=true&multiStatements=true
+        run: go test ./internal/platform/migration -run TestC7CreativeVersionMigrationRecoversAfterTrackingLoss -count=1
 
       - name: Verify the Knowledge and Research center projection
         env:

@@ -155,6 +155,8 @@ type JobRecord struct {
 	ExecutionDeadlineAt   *time.Time
 	SubmittedAt           *time.Time
 	ResponseReceivedAt    *time.Time
+	Usage                 *JobUsage
+	Events                []JobEvent
 }
 
 type SubmissionState string
@@ -202,6 +204,7 @@ type GeneratedIntakeClient interface {
 // Service is the small application seam used by transport and workers.
 type Service struct {
 	Store         JobStore
+	JobQueryStore JobQueryStore
 	Scheduler     ExecutionScheduler
 	ImageAdapter  ImageProviderAdapter
 	VideoAdapter  VideoProviderAdapter

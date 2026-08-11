@@ -420,6 +420,29 @@ paths:
           $ref: '#/components/responses/ProjectAccessDenied'
         '404':
           $ref: '#/components/responses/NotFound'
+  /platform/v1/projects/{project_id}/knowledge/documents/{document_id}/media:extract:
+    post:
+      operationId: extractKnowledgeDocumentMedia
+      summary: Extract bounded PNG and JPEG media from one parsed Project PDF.
+      parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - name: document_id
+        in: path
+        required: true
+        schema: {type: string}
+      responses:
+        '200':
+          description: Embedded document media with page metadata and base64 content.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractedDocumentMediaList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/ProjectAccessDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /platform/v1/projects/{project_id}/workbench:
     get:
       operationId: getProjectWorkbench
@@ -5846,6 +5869,55 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/KnowledgeDocument'
+      additionalProperties: false
+    ExtractedDocumentMedia:
+      type: object
+      required:
+      - filename
+      - mime_type
+      - page_number
+      - width
+      - height
+      - size_bytes
+      - sha256
+      - content
+      properties:
+        filename:
+          type: string
+        mime_type:
+          type: string
+          enum: [image/png, image/jpeg]
+        page_number:
+          type: integer
+          minimum: 1
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 1
+        sha256:
+          type: string
+        page_text:
+          type: string
+        content:
+          type: string
+          contentEncoding: base64
+      additionalProperties: false
+    ExtractedDocumentMediaList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/ExtractedDocumentMedia'
       additionalProperties: false
     KnowledgeChunk:
       type: object

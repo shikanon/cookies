@@ -1,30 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, FileText, Film, Image, LoaderCircle, Lock, RefreshCw, Sparkles, Upload, Volume2, VolumeX, WandSparkles } from 'lucide-react'
+import { ArrowRight, Check, FileText, Film, Image, LoaderCircle, Lock, Plus, RefreshCw, Sparkles, Trash2, Upload, Volume2, VolumeX, WandSparkles } from 'lucide-react'
 import { useProject } from '../context/ProjectContext'
-import { api, type ApiAssetVersionRef, type ApiBrandAudioMixOperation, type ApiBrandAudioWorkspace, type ApiBrandBriefAnalysis, type ApiBrandCreativeConcept, type ApiBrandFilmGenerationAttempt, type ApiBrandFilmPlan, type ApiBrandFilmWorkspace, type ApiSpeechCapability } from '../data/api'
+import { api, type ApiAssetVersionRef, type ApiBrandAudioMixOperation, type ApiBrandAudioWorkspace, type ApiBrandBriefAnalysis, type ApiBrandBriefAssetCandidate, type ApiBrandCreativeConcept, type ApiBrandFilmGenerationAttempt, type ApiBrandFilmPlan, type ApiBrandFilmWorkspace, type ApiCreativeTaskSummary, type ApiSpeechCapability } from '../data/api'
 import { BrandFilmWorkbenchShell } from '../features/brand-film/BrandFilmWorkbenchShell'
-import { runWithLatestCreativeRevision } from '../features/brand-film/revisionRetry'
+import { briefProductNames, extractAndUploadBrandBriefAssets } from '../features/brand-film/pdfBriefAssets'
+import { recoverCompletedBrandFilmMutation } from '../features/brand-film/revisionRetry'
 import { deriveBrandFilmStages, resolveBrandFilmStage } from '../features/brand-film/stage'
 import { useBrandFilmStageRoute } from '../features/brand-film/useBrandFilmStageRoute'
 
-type Props = { taskId?: string; onNotice: (message: string) => void }
+type Props = {
+  taskId?: string
+  taskOptions: ApiCreativeTaskSummary[]
+  onOpenTask: (taskId: string) => void
+  onCreateNew: () => void
+  onNotice: (message: string) => void
+}
 const last = <T,>(items?: T[] | null) => items?.at(-1)
 const compactLines = (items: string[]) => items.map(item => item.trim()).filter(Boolean)
-const compactConceptTitle = (value: string) => {
-  const quoted = value.match(/^「([^」]+)」/u)?.[1]?.trim()
-  if (quoted) return quoted
-  return value.length > 36 ? `${value.slice(0, 36).trim()}…` : value
-}
 const editableBriefPayload = (brief: ApiBrandBriefAnalysis): ApiBrandBriefAnalysis => ({
   ...brief,
+  selling_points: brief.selling_points.map(point => ({ ...point, text: point.text.trim() })).filter(point => Boolean(point.text)),
   mandatory_elements: compactLines(brief.mandatory_elements),
   prohibited_claims: compactLines(brief.prohibited_claims),
   image_requirements: compactLines(brief.image_requirements),
   video_requirements: compactLines(brief.video_requirements),
   uncertainties: compactLines(brief.uncertainties),
 })
-const fixtureReferenceUri = (role: string, uri = '') => {
+const isProductReference = (asset: Pick<ApiBrandBriefAssetCandidate, 'role'>) => asset.role === 'product_front' || asset.role.startsWith('product_')
+const sameAssetRef = (left: ApiAssetVersionRef | null | undefined, right: ApiAssetVersionRef | null | undefined) => Boolean(left && right && left.asset_id === right.asset_id && left.version === right.version)
+const savedProjectName = (displayName: string | undefined, fallback: string) => displayName && !displayName.startsWith('未命名') ? displayName : fallback
+const fixtureReferenceUri = (sourceLocator: string, role: string, uri = '') => {
   if (uri && uri !== '/assets/guerlain-25x-bee-water.png') return uri
+  if (!sourceLocator.startsWith('fixture://')) return ''
   return role === 'product_front' ? '/assets/guerlain-25x-bee-water-product-front.png' : role === 'logo' ? '/assets/guerlain-logo.png' : uri
 }
 const briefAssetSource = (sourceLocator: string, role: string) => {
@@ -37,51 +44,25 @@ const briefAssetSource = (sourceLocator: string, role: string) => {
 
 function ModelBadge({ alias, version }: { alias?: string; version?: string }) {
   if (!alias) return null
-  const fixture = alias === 'fixture.deterministic'
-  const displayVersion = version?.startsWith('sha256:') ? `${version.slice(0, 18)}…` : version
-  return <span className={fixture ? 'brand-model-badge fallback' : 'brand-model-badge'} title={version}>{fixture ? '本地验收模型' : alias}{displayVersion ? ` · ${displayVersion}` : ''}</span>
+  const fallback = alias === 'fixture.deterministic'
+  return <span className={fallback ? 'brand-model-badge fallback' : 'brand-model-badge'}>{fallback ? '固定样例回退' : alias}{version ? ` · ${version}` : ''}</span>
 }
 
-function ConceptCard({ concept, ordinal, editing, busy, onChange, onSelect }: {
+function ConceptCard({ concept, editing, busy, onChange, onSelect }: {
   concept: ApiBrandCreativeConcept
-  ordinal: number
   editing: boolean
   busy: boolean
   onChange: (changes: Partial<ApiBrandCreativeConcept>) => void
   onSelect: () => void
 }) {
   if (editing) return <article className="brand-concept-editor">
-    <span>方向 {String(ordinal).padStart(2, '0')}</span>
+    <span>{concept.id}</span>
     <small>仅修改方向级表达；画面、运镜、旁白等执行细节在剧本分镜阶段编辑。</small>
     <label>方向标题<input value={concept.title} onChange={event => onChange({ title: event.target.value })}/></label>
     <label>核心创意句<textarea value={concept.one_liner} onChange={event => onChange({ one_liner: event.target.value })}/></label>
     <label>叙事机制<textarea value={concept.story_mechanism} onChange={event => onChange({ story_mechanism: event.target.value })}/></label>
   </article>
-  return <article className={concept.selected ? 'selected' : ''}>
-    <header className="brand-concept-heading"><span>方向 {String(ordinal).padStart(2, '0')}</span>{concept.selected ? <small><Check size={12}/>已选母版</small> : null}</header>
-    <h4>{compactConceptTitle(concept.title)}</h4><b>{concept.one_liner}</b><p>{concept.story_mechanism}</p>
-    <div className="brand-concept-keywords">{concept.visual_language.slice(0, 3).map(item => <span key={item}>{item}</span>)}</div>
-    <details className="brand-concept-details"><summary>查看依据与执行边界</summary><dl>{compactConceptTitle(concept.title) !== concept.title ? <div><dt>完整方向定义</dt><dd>{concept.title}</dd></div> : null}<div><dt>品牌进入</dt><dd>{concept.brand_entrance}</dd></div><div><dt>声音线索</dt><dd>{concept.sound_idea}</dd></div><div><dt>Brief 依据</dt><dd>{concept.brief_rationale}</dd></div><div><dt>制作风险</dt><dd>{concept.risk}</dd></div></dl></details>
-    <button className={concept.selected ? 'secondary-button' : 'primary-button'} disabled={busy || concept.selected} onClick={onSelect}>{concept.selected ? '已选择' : '选择此方向'}</button>
-  </article>
-}
-
-function ConfirmedBrandBriefSummary({ brief, busy, onEdit }: {
-  brief: ApiBrandBriefAnalysis
-  busy: boolean
-  onEdit: () => void
-}) {
-  return <div className="brand-confirmed-brief">
-    <div className="brand-confirmed-brief-hero"><span><Check size={15}/>Brief 已冻结</span><h4>{brief.core_message}</h4><p>{brief.summary}</p></div>
-    <div className="brand-confirmed-brief-grid">
-      <article><span>目标人群</span><b>{brief.audience}</b></article>
-      <article><span>口播方向</span><b>{brief.voice_direction || '在声音导演阶段确定'}</b></article>
-      <article><span>事实与边界</span><b>{brief.selling_points.length} 个卖点 · {brief.mandatory_elements.length} 个必须项 · {brief.prohibited_claims.length} 个禁用项</b></article>
-    </div>
-    <div className="brand-confirmed-brief-facts">{brief.selling_points.slice(0, 4).map(fact => <span key={`${fact.locator}-${fact.text}`}><Check size={12}/>{fact.text}</span>)}</div>
-    {brief.uncertainties.length ? <details className="brand-confirmed-brief-notes"><summary>{brief.uncertainties.length} 项在制作阶段持续核对</summary><ul>{brief.uncertainties.map(item => <li key={item}>{item}</li>)}</ul></details> : null}
-    <div className="brand-actions"><span className="brand-confirmed"><Check size={14}/>当前制作均继承此版本</span><button className="secondary-button" disabled={busy} onClick={onEdit}>编辑并创建新修订</button></div>
-  </div>
+  return <article className={concept.selected ? 'selected' : ''}><span>{concept.id}</span><h4>{concept.title}</h4><b>{concept.one_liner}</b><p>{concept.story_mechanism}</p><dl><div><dt>品牌进入</dt><dd>{concept.brand_entrance}</dd></div><div><dt>视觉语言</dt><dd>{concept.visual_language.join('、')}</dd></div><div><dt>声音</dt><dd>{concept.sound_idea}</dd></div><div><dt>Brief 依据</dt><dd>{concept.brief_rationale}</dd></div><div><dt>风险</dt><dd>{concept.risk}</dd></div></dl><button className={concept.selected ? 'secondary-button' : 'primary-button'} disabled={busy || concept.selected} onClick={onSelect}>{concept.selected ? '已选择' : '选择此方向'}</button></article>
 }
 
 function ShotEditor({ shot, disabled, onChange }: { shot: ApiBrandFilmPlan['shots'][number]; disabled: boolean; onChange: (changes: Partial<ApiBrandFilmPlan['shots'][number]>) => void }) {
@@ -188,11 +169,10 @@ function AudioWorkspaceEditor({ audio, videoURL, mixedVideoURL, assetURLs, speec
   </div>
 }
 
-export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
+export function BrandFilmWorkspace({ taskId, taskOptions, onOpenTask, onCreateNew, onNotice }: Props) {
   const { currentProject } = useProject()
   const { requestedStage, navigateToStage } = useBrandFilmStageRoute()
   const [workspace, setWorkspace] = useState<ApiBrandFilmWorkspace | null>(null)
-  const [loadError, setLoadError] = useState('')
   const [brief, setBrief] = useState<ApiBrandBriefAnalysis | null>(null)
   const [briefEditMode, setBriefEditMode] = useState(false)
   const [conceptCandidates, setConceptCandidates] = useState<ApiBrandCreativeConcept[]>([])
@@ -209,9 +189,12 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
   const [mixedAudioPreview, setMixedAudioPreview] = useState('')
   const [speechCapability, setSpeechCapability] = useState<ApiSpeechCapability>()
   const [feedbackByUnit, setFeedbackByUnit] = useState<Record<string, string>>({})
+  const [pendingDestination, setPendingDestination] = useState<string | null | undefined>(undefined)
+  const [projectName, setProjectName] = useState('')
   const planConfirmationInFlight = useRef(false)
+  const conceptGenerationInFlight = useRef(false)
   const reloadWorkspace = useCallback(
-    () => taskId ? api.restoreBrandFilmWorkspace(currentProject.id, taskId) : api.ensureBrandFilmFixtureWorkspace(currentProject.id),
+    () => taskId ? api.getBrandFilmWorkspace(currentProject.id, taskId) : api.ensureBrandFilmFixtureWorkspace(currentProject.id),
     [currentProject.id, taskId],
   )
 
@@ -233,13 +216,8 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
   useEffect(() => {
     let active = true
     setBusy('loading')
-    setLoadError('')
-    void reloadWorkspace()
-      .then(value => { if (active) setWorkspace(value) }).catch(cause => {
-      if (!active) return
-      const message = cause instanceof Error ? cause.message : '品牌广告任务恢复失败。'
-      setLoadError(message)
-      onNotice(message)
+    void reloadWorkspace().then(value => { if (active) setWorkspace(value) }).catch(cause => {
+      if (active) onNotice(cause instanceof Error ? cause.message : '品牌广告工作区载入失败。')
     }).finally(() => { if (active) setBusy('') })
     return () => { active = false }
   }, [onNotice, reloadWorkspace])
@@ -256,7 +234,7 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
     setConceptEditMode(false)
     setPlan(currentPlan)
     setPlanEditMode(Boolean(currentPlan && !currentPlan.confirmed))
-    const product = last(brand.brief_analysis_versions)?.asset_candidates.find(asset => asset.role === 'product_front')?.asset_ref
+    const product = last(brand.brief_analysis_versions)?.asset_candidates.find(asset => isProductReference(asset) && asset.user_confirmed && asset.asset_ref)?.asset_ref
     setGenerationReference(brand.generation?.reference_asset ?? product ?? null)
   }, [workspace])
 
@@ -265,7 +243,7 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
     let active = true
     void Promise.all(assets.map(async asset => {
       if (asset.asset_ref) return [asset.id, await api.getProjectAssetPreview(currentProject.id, asset.asset_ref)] as const
-      return [asset.id, source.source_type === 'strategy_handoff' ? '' : fixtureReferenceUri(asset.role, asset.fixture_uri)] as const
+      return [asset.id, fixtureReferenceUri(asset.source_locator, asset.role, asset.fixture_uri)] as const
     })).then(entries => {
       if (active) setAssetPreviews(Object.fromEntries(entries))
     }).catch(() => undefined)
@@ -304,25 +282,10 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
     void api.getProjectAssetPreview(currentProject.id, ref).then(setMixedAudioPreview).catch(() => setMixedAudioPreview(''))
   }, [currentProject.id, workspace?.video_draft.brand_film.audio?.mixed_preview_asset_ref])
 
-  useEffect(() => () => {
-    if (generationReferencePreview) URL.revokeObjectURL(generationReferencePreview)
-  }, [generationReferencePreview])
-
-  const refreshRevision = async () => {
-    const latest = await reloadWorkspace()
-    setWorkspace(latest)
-    return latest.video_draft.revision
-  }
-
-  const mutateLatestRevision = <T,>(action: (expectedRevision: number) => Promise<T>) => {
-    if (!workspace) throw new Error('品牌广告任务尚未恢复完成。')
-    return runWithLatestCreativeRevision(workspace.video_draft.revision, action, refreshRevision)
-  }
-
-  const commit = async (key: string, action: (expectedRevision: number) => Promise<ApiBrandFilmWorkspace>, message: string) => {
+  const commit = async (key: string, action: () => Promise<ApiBrandFilmWorkspace>, message: string) => {
     setBusy(key)
     try {
-      const value = await mutateLatestRevision(action)
+      const value = await action()
       setWorkspace(value)
       onNotice(message)
       return value
@@ -332,7 +295,6 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
     } finally { setBusy('') }
   }
 
-  if (!workspace && loadError) return <section className="image-text-v2-start brand-direction-failed" role="alert"><FileText size={24}/><div><h3>这是旧版品牌任务，无法无损恢复</h3><p>该任务创建时还没有“确认 Brief → 方向 → 品牌制作”的完整契约，因此缺少可验证的 Brief 血缘。系统不会强行拼接错误数据。</p><small>{loadError}</small></div><button className="secondary-button" type="button" onClick={() => window.history.back()}><RefreshCw size={15}/>返回任务列表</button></section>
   if (!workspace) return <div className="brand-film-loading"><LoaderCircle className="spin" size={18}/><span>{busy === 'loading' ? '正在载入品牌广告任务…' : '尚未建立品牌广告工作区'}</span></div>
 
   const draft = workspace.video_draft.brand_film
@@ -342,35 +304,86 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
   const lockedBrief = Boolean(brief?.confirmed && !briefEditMode)
   const lockedPlan = Boolean(plan?.confirmed && !planEditMode)
   const planReady = Boolean(plan?.confirmed && !planEditMode)
-  const generationDurationSeconds = Math.round((draft.generation?.master_duration_ms ?? source.duration_seconds * 1000) / 1000)
-  const allRequiredReferencesConfirmed = ['product_front', 'logo'].every(role => brief?.asset_candidates.some(asset => asset.role === role && asset.user_confirmed))
+  const productReferences = brief?.asset_candidates.filter(isProductReference) ?? []
+  const logoReferences = brief?.asset_candidates.filter(asset => asset.role === 'logo') ?? []
+  const referenceIsUsable = (asset: ApiBrandBriefAssetCandidate) => Boolean(asset.asset_ref || asset.fixture_uri)
+  const allRequiredReferencesConfirmed = productReferences.length > 0 && logoReferences.length > 0
+    && [...productReferences, ...logoReferences].every(asset => asset.user_confirmed && referenceIsUsable(asset) && asset.label.trim())
+  const generationProductReferences = productReferences.filter(asset => asset.user_confirmed && asset.asset_ref)
+  const selectedGenerationProduct = generationProductReferences.find(asset => sameAssetRef(asset.asset_ref, generationReference))
+  const selectedGenerationPreview = generationReferencePreview || (selectedGenerationProduct ? assetPreviews[selectedGenerationProduct.id] : '')
 
-  const analyze = () => commit('analyze', expectedRevision => api.analyzeBrandFilmBrief(currentProject.id, workspace.task.id, expectedRevision), 'Brief 已重新解析；请编辑并确认新的修订。')
+  const analyze = async () => {
+    setBusy('analyze')
+    try {
+      let analyzed = await api.analyzeBrandFilmBrief(currentProject.id, workspace.task.id, revision)
+      const analyzedBrief = last(analyzed.video_draft.brand_film.brief_analysis_versions)
+      const documentRef = source.evidence_refs.find(value => value.startsWith('knowledge://documents/'))
+      const documentId = documentRef?.slice('knowledge://documents/'.length).split(/[?#]/)[0]
+      const expectedProducts = briefProductNames(source.brief_text).length
+      const usableProducts = analyzedBrief?.asset_candidates.filter(asset => isProductReference(asset) && referenceIsUsable(asset)).length ?? 0
+      if (documentId && analyzedBrief && usableProducts < expectedProducts) {
+        onNotice(`已识别 ${expectedProducts} 个商品，正在从原 PDF 提取对应正面图与 Logo…`)
+        const document = await api.getKnowledgeDocument(currentProject.id, documentId)
+        const extracted = await extractAndUploadBrandBriefAssets(currentProject.id, document)
+        if (extracted.length) {
+          analyzed = await api.updateBrandFilmBrief(currentProject.id, workspace.task.id, analyzed.video_draft.revision, {
+            ...analyzedBrief,
+            asset_candidates: extracted,
+          })
+        }
+      }
+      setWorkspace(analyzed)
+      onNotice('Brief 已重新解析；商品、卖点和参考素材均可人工增删后再确认。')
+    } catch (cause) {
+      onNotice(cause instanceof Error ? cause.message : 'Brief 重新解析失败。')
+    } finally {
+      setBusy('')
+    }
+  }
   const reanalyze = () => {
     if ((draft.concept_sets?.length ?? 0) > 0 && !window.confirm('重新解析会清空当前创意、分镜、生成与交付结果，是否继续？')) return
     return analyze()
   }
-  const saveBrief = () => brief && commit('save-brief', expectedRevision => api.updateBrandFilmBrief(currentProject.id, workspace.task.id, expectedRevision, editableBriefPayload(brief)), 'Brief 修改已保存为新的待确认修订，后续内容已等待重新生成。')
-  const cancelBriefEdit = () => {
-    setBrief(last(draft.brief_analysis_versions) ?? null)
-    setBriefEditMode(false)
-  }
+  const saveBrief = () => brief && commit('save-brief', () => api.updateBrandFilmBrief(currentProject.id, workspace.task.id, revision, editableBriefPayload(brief)), 'Brief 修改已保存为新的待确认修订，后续内容已等待重新生成。')
   const confirmBrief = async () => {
     if (!brief) return
     setBusy('confirm-brief')
     try {
-      const saved = await mutateLatestRevision(expectedRevision => api.updateBrandFilmBrief(currentProject.id, workspace.task.id, expectedRevision, editableBriefPayload(brief)))
+      const saved = await api.updateBrandFilmBrief(currentProject.id, workspace.task.id, revision, editableBriefPayload(brief))
       setWorkspace(await api.confirmBrandFilmBrief(currentProject.id, workspace.task.id, saved.video_draft.revision))
       onNotice('Brief 与商品参考图已确认。')
     } catch (cause) { onNotice(cause instanceof Error ? cause.message : 'Brief 确认失败。') } finally { setBusy('') }
   }
-  const generateConcepts = () => commit('concepts', expectedRevision => api.generateBrandFilmConcepts(currentProject.id, workspace.task.id, expectedRevision), '已生成 3 个有差异的创意方向。')
+  const generateConcepts = async () => {
+    if (conceptGenerationInFlight.current) return null
+    conceptGenerationInFlight.current = true
+    setBusy('concepts')
+    const previousConceptSetCount = draft.concept_sets?.length ?? 0
+    try {
+      const result = await recoverCompletedBrandFilmMutation(
+        () => api.generateBrandFilmConcepts(currentProject.id, workspace.task.id, revision),
+        reloadWorkspace,
+        latest => latest.video_draft.revision > revision
+          && (latest.video_draft.brand_film.concept_sets?.length ?? 0) > previousConceptSetCount,
+      )
+      setWorkspace(result.value)
+      onNotice(result.recovered ? '创意方向已生成；页面已自动同步到服务端最新修订。' : '已生成 3 个有差异的创意方向。')
+      return result.value
+    } catch (cause) {
+      onNotice(cause instanceof Error ? cause.message : '创意方向生成失败。')
+      return null
+    } finally {
+      conceptGenerationInFlight.current = false
+      setBusy('')
+    }
+  }
   const regenerateConcepts = () => {
     if ((draft.film_plan_versions?.length ?? 0) > 0 && !window.confirm('重新生成创意会清空当前选择、分镜、视频生成与交付结果，是否继续？')) return
     return generateConcepts()
   }
   const updateConcept = (conceptId: string, changes: Partial<ApiBrandCreativeConcept>) => setConceptCandidates(items => items.map(item => item.id === conceptId ? { ...item, ...changes } : item))
-  const saveConcepts = () => commit('save-concepts', expectedRevision => api.updateBrandFilmConcepts(currentProject.id, workspace.task.id, expectedRevision, conceptCandidates), '创意方向修改已保存为新的待选择修订，后续内容已等待重新生成。')
+  const saveConcepts = () => commit('save-concepts', () => api.updateBrandFilmConcepts(currentProject.id, workspace.task.id, revision, conceptCandidates), '创意方向修改已保存为新的待选择修订，后续内容已等待重新生成。')
   const cancelConceptEdit = () => {
     setConceptCandidates(conceptSet?.candidates ?? [])
     setConceptEditMode(false)
@@ -378,16 +391,16 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
   const selectConcept = (conceptId: string) => {
     if (conceptId === draft.selected_concept_id) return
     if (draft.selected_concept_id && !window.confirm('切换创意方向会清空当前剧本、视频生成与交付结果，是否继续？')) return
-    return commit('select', expectedRevision => api.selectBrandFilmConcept(currentProject.id, workspace.task.id, expectedRevision, conceptId), '创意方向已选择并冻结。')
+    return commit('select', () => api.selectBrandFilmConcept(currentProject.id, workspace.task.id, revision, conceptId), '创意方向已选择并冻结。')
   }
-  const generatePlan = () => commit('plan', expectedRevision => api.generateBrandFilmPlan(currentProject.id, workspace.task.id, expectedRevision), `${source.duration_seconds} 秒剧本与分镜已生成。`)
-  const savePlan = () => plan && commit('save-plan', expectedRevision => api.updateBrandFilmPlan(currentProject.id, workspace.task.id, expectedRevision, plan), '剧本与分镜修改已保存为新的待确认修订，视频生成结果已等待重新生成。')
+  const generatePlan = () => commit('plan', () => api.generateBrandFilmPlan(currentProject.id, workspace.task.id, revision), '15 秒剧本与分镜已生成。')
+  const savePlan = () => plan && commit('save-plan', () => api.updateBrandFilmPlan(currentProject.id, workspace.task.id, revision, plan), '剧本与分镜修改已保存为新的待确认修订，视频生成结果已等待重新生成。')
   const confirmPlan = async () => {
     if (!plan || planConfirmationInFlight.current) return
     planConfirmationInFlight.current = true
     setBusy('confirm-plan')
     try {
-      const saved = await mutateLatestRevision(expectedRevision => api.updateBrandFilmPlan(currentProject.id, workspace.task.id, expectedRevision, plan))
+      const saved = await api.updateBrandFilmPlan(currentProject.id, workspace.task.id, revision, plan)
       setWorkspace(await api.confirmBrandFilmPlan(currentProject.id, workspace.task.id, saved.video_draft.revision))
       onNotice('剧本与分镜已保存并确认。')
     } catch (cause) {
@@ -410,6 +423,33 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
   }
 
   const updateAsset = (id: string, changes: Partial<ApiBrandBriefAnalysis['asset_candidates'][number]>) => setBrief(value => value ? { ...value, asset_candidates: value.asset_candidates.map(asset => asset.id === id ? { ...asset, ...changes } : asset) } : value)
+  const addProductAsset = () => setBrief(value => {
+    if (!value) return value
+    const ordinal = value.asset_candidates.filter(isProductReference).length + 1
+    const id = `asset_product_manual_${Date.now()}`
+    return {
+      ...value,
+      asset_candidates: [...value.asset_candidates, {
+        id,
+        role: 'product_front',
+        label: `商品 ${ordinal}`,
+        source_locator: `manual://brand-film/${workspace.task.id}/${id}`,
+        rights_status: 'needs_confirmation',
+        user_confirmed: false,
+        replacement_note: '人工添加，等待上传商品图片',
+      }],
+    }
+  })
+  const removeProductAsset = (asset: ApiBrandBriefAssetCandidate) => {
+    if (!isProductReference(asset)) return
+    setBrief(value => value ? { ...value, asset_candidates: value.asset_candidates.filter(item => item.id !== asset.id) } : value)
+    setAssetPreviews(value => {
+      const next = { ...value }
+      delete next[asset.id]
+      return next
+    })
+    if (sameAssetRef(asset.asset_ref, generationReference)) setGenerationReference(null)
+  }
   const uploadReferenceAsset = async (assetId: string, file?: File) => {
     if (!file) return
     setBusy('upload')
@@ -420,18 +460,7 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
       onNotice('参考素材已上传；保存 Brief 后写入新的修订。')
     } catch (cause) { onNotice(cause instanceof Error ? cause.message : '参考素材上传失败。') } finally { setBusy('') }
   }
-  const uploadGenerationReference = async (file?: File) => {
-    if (!file) return
-    setBusy('generation-reference')
-    try {
-      const ref = await api.uploadProjectAsset(currentProject.id, file)
-      setGenerationReference(ref)
-      setGenerationReferencePreview(URL.createObjectURL(file))
-      onNotice('商品参考图已上传，可用于生成。')
-    } catch (cause) { onNotice(cause instanceof Error ? cause.message : '商品参考图上传失败。') } finally { setBusy('') }
-  }
-
-  const prepareGeneration = () => generationReference && commit('prepare-generation', expectedRevision => api.prepareBrandFilmGeneration(currentProject.id, workspace.task.id, expectedRevision, generationReference), '已编排 GenerationUnit 并冻结 PromptPackage。')
+  const prepareGeneration = () => generationReference && commit('prepare-generation', () => api.prepareBrandFilmGeneration(currentProject.id, workspace.task.id, revision, generationReference), '已编排 GenerationUnit 并冻结 PromptPackage。')
   const generateUnit = async (unitId: string, feedback = '') => {
     setBusy(`generate-${unitId}`)
     try {
@@ -447,13 +476,13 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
       onNotice(job.status === 'succeeded' ? 'Seedance 片段已生成，请预览后锁定或反馈重生成。' : `片段生成未成功：${job.diagnostic ?? job.status}`)
     } catch (cause) { onNotice(cause instanceof Error ? cause.message : '片段生成失败。') } finally { setBusy('') }
   }
-  const lockUnit = (unitId: string, attemptId: string) => commit(`lock-${unitId}`, expectedRevision => api.lockBrandFilmUnit(currentProject.id, workspace.task.id, expectedRevision, unitId, attemptId), '片段已锁定。')
-  const composePreview = () => commit('compose-preview', expectedRevision => api.composeBrandFilmPreview(currentProject.id, workspace.task.id, expectedRevision), `${generationDurationSeconds} 秒品牌广告预览已完成裁切与拼接。`)
-  const prepareAudio = () => commit('prepare-audio', expectedRevision => api.prepareBrandFilmAudio(currentProject.id, workspace.task.id, expectedRevision), '旁白、音乐与音效草稿已自动编排。')
+  const lockUnit = (unitId: string, attemptId: string) => commit(`lock-${unitId}`, () => api.lockBrandFilmUnit(currentProject.id, workspace.task.id, revision, unitId, attemptId), '片段已锁定。')
+  const composePreview = () => commit('compose-preview', () => api.composeBrandFilmPreview(currentProject.id, workspace.task.id, revision), '15 秒品牌广告预览已完成裁切与拼接。')
+  const prepareAudio = () => commit('prepare-audio', () => api.prepareBrandFilmAudio(currentProject.id, workspace.task.id, revision), '旁白、音乐与音效草稿已自动编排。')
   const startAudioDirector = async () => {
     setBusy('start-audio-director')
     try {
-      let value = await mutateLatestRevision(expectedRevision => api.prepareBrandFilmAudio(currentProject.id, workspace.task.id, expectedRevision))
+      let value = await api.prepareBrandFilmAudio(currentProject.id, workspace.task.id, revision)
 	  setWorkspace(value)
       if (value.video_draft.brand_film.audio && !brandAudioMaterialized(value.video_draft.brand_film.audio)) {
         value = await api.materializeBrandFilmAudioAssets(currentProject.id, workspace.task.id, value.video_draft.revision)
@@ -469,21 +498,21 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
       onNotice(cause instanceof Error ? cause.message : 'AI 声音导演启动失败。')
     } finally { setBusy('') }
   }
-  const materializeAudio = () => commit('materialize-audio', expectedRevision => api.materializeBrandFilmAudioAssets(currentProject.id, workspace.task.id, expectedRevision), 'Audio A1 Fixture 已真实入库，现在可以逐段试听。')
+  const materializeAudio = () => commit('materialize-audio', () => api.materializeBrandFilmAudioAssets(currentProject.id, workspace.task.id, revision), 'Audio A1 Fixture 已真实入库，现在可以逐段试听。')
   const replaceAudioClip = async (clipId: string, file?: File) => {
     if (!file) return
     setBusy(`replace-audio-${clipId}`)
     try {
       const ref = await api.uploadProjectAsset(currentProject.id, file)
-      setWorkspace(await mutateLatestRevision(expectedRevision => api.updateBrandFilmAudioMix(currentProject.id, workspace.task.id, expectedRevision, [{ op: 'replace_clip_asset', clip_id: clipId, asset_ref: ref }])))
+      setWorkspace(await api.updateBrandFilmAudioMix(currentProject.id, workspace.task.id, revision, [{ op: 'replace_clip_asset', clip_id: clipId, asset_ref: ref }]))
       onNotice('音频片段已替换，并保存为新的 Mix 修订。')
     } catch (cause) { onNotice(cause instanceof Error ? cause.message : '音频替换失败。') } finally { setBusy('') }
   }
-  const saveAudio = (operations: ApiBrandAudioMixOperation[]) => commit('save-audio', expectedRevision => api.updateBrandFilmAudioMix(currentProject.id, workspace.task.id, expectedRevision, operations), '音轨修改已保存为新的 Mix 修订。')
+  const saveAudio = (operations: ApiBrandAudioMixOperation[]) => commit('save-audio', () => api.updateBrandFilmAudioMix(currentProject.id, workspace.task.id, revision, operations), '音轨修改已保存为新的 Mix 修订。')
   const selectAudioVariant = async (variantId: string) => {
     setBusy('select-audio-variant')
     try {
-      let value = await mutateLatestRevision(expectedRevision => api.selectBrandFilmAudioVariant(currentProject.id, workspace.task.id, expectedRevision, variantId))
+      let value = await api.selectBrandFilmAudioVariant(currentProject.id, workspace.task.id, revision, variantId)
 	  setWorkspace(value)
       if (value.video_draft.brand_film.audio && !brandAudioMaterialized(value.video_draft.brand_film.audio)) {
         value = await api.materializeBrandFilmAudioAssets(currentProject.id, workspace.task.id, value.video_draft.revision)
@@ -510,7 +539,7 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
   const generateVoice = async (clipId: string, voiceAlias: string) => {
     setBusy(`generate-voice-${clipId}`)
     try {
-      const value = await mutateLatestRevision(expectedRevision => api.generateBrandFilmVoiceClip(currentProject.id, workspace.task.id, expectedRevision, clipId, voiceAlias))
+      const value = await api.generateBrandFilmVoiceClip(currentProject.id, workspace.task.id, revision, clipId, voiceAlias)
       setWorkspace(value)
       const attempt = value.video_draft.brand_film.audio?.generation_attempts.filter(item => item.clip_id === clipId).at(-1)
       onNotice(attempt?.status === 'succeeded' ? 'MiniMax 真实旁白已生成并入库；请试听后重新生成混音预览。' : `MiniMax 生成失败，已保留 Fixture：${attempt?.error_code ?? 'unknown'}`)
@@ -519,7 +548,7 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
   const renderAudioPreview = async () => {
     setBusy('render-audio-preview')
     try {
-      let value = await mutateLatestRevision(expectedRevision => api.renderBrandFilmAudioPreview(currentProject.id, workspace.task.id, expectedRevision))
+      let value = await api.renderBrandFilmAudioPreview(currentProject.id, workspace.task.id, revision)
       setWorkspace(value)
       for (let attempt = 0; attempt < 45 && ['preview_queued', 'preview_rendering'].includes(value.video_draft.brand_film.audio?.status ?? ''); attempt++) {
         await new Promise(resolve => window.setTimeout(resolve, 2000))
@@ -532,11 +561,50 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
     } catch (cause) { onNotice(cause instanceof Error ? cause.message : '混音预览生成失败。') } finally { setBusy('') }
   }
 
-  return <BrandFilmWorkbenchShell
+  const leaveFor = (destination: string | null) => {
+    if (destination) onOpenTask(destination)
+    else onCreateNew()
+  }
+  const requestTaskChange = (destination: string | null) => {
+    if (destination === workspace.task.id) return
+    const hasLocalEdits = briefEditMode || conceptEditMode || planEditMode
+    if (draft.stage === 'delivered' && !hasLocalEdits) {
+      leaveFor(destination)
+      return
+    }
+    setProjectName(savedProjectName(workspace.task.display_name, source.product_name || '未命名品牌广告'))
+    setPendingDestination(destination)
+  }
+  const saveAndChangeTask = async () => {
+    const name = projectName.trim()
+    if (!name) return
+    setBusy('save-project')
+    try {
+      let saved = workspace
+      if (briefEditMode && brief) {
+        saved = await api.updateBrandFilmBrief(currentProject.id, workspace.task.id, saved.video_draft.revision, editableBriefPayload(brief))
+      } else if (conceptEditMode) {
+        saved = await api.updateBrandFilmConcepts(currentProject.id, workspace.task.id, saved.video_draft.revision, conceptCandidates)
+      } else if (planEditMode && plan) {
+        saved = await api.updateBrandFilmPlan(currentProject.id, workspace.task.id, saved.video_draft.revision, plan)
+      }
+      await api.renameCreativeTask(currentProject.id, workspace.task.id, saved.task.version, name)
+      const destination = pendingDestination
+      setPendingDestination(undefined)
+      onNotice(`“${name}”已保存，可随时从品牌广告任务下拉框继续。`)
+      if (destination !== undefined) leaveFor(destination)
+    } catch (cause) {
+      onNotice(cause instanceof Error ? cause.message : '当前品牌广告保存失败，请重试。')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return <><BrandFilmWorkbenchShell
     productName={source.product_name}
     briefName={source.brief_name}
-    sourceLabel={source.source_type === 'strategy_handoff' || source.source_kind === 'strategy_package' || source.source_kind === 'task_strategy'
-      ? `StrategyPackage ${source.strategy_package_id} v${source.strategy_package_version} · ${source.route_id}`
+    sourceLabel={source.source_kind === 'strategy_package'
+      ? `策略交接 · ${source.strategy_package_id || source.intake_id || '已绑定'}`
       : `${source.fixture_id || 'PDF Brief'}${source.fixture_version ? ` v${source.fixture_version}` : ''}`}
     specification={`${source.duration_seconds}s · ${source.aspect_ratio} · ${source.channel}`}
     revision={revision}
@@ -545,20 +613,48 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
     activeStage={activeStage}
     busy={Boolean(busy)}
     assets={(brief?.asset_candidates ?? []).map(asset => ({ id: asset.id, label: asset.label, preview: assetPreviews[asset.id], source: briefAssetSource(asset.source_locator, asset.role), confirmed: asset.user_confirmed }))}
+    headerActions={<div className="brand-project-switcher"><label><span>当前品牌广告</span><select aria-label="切换品牌广告任务" value={workspace.task.id} onChange={event => requestTaskChange(event.target.value)}><option value={workspace.task.id}>{savedProjectName(workspace.task.display_name, source.product_name)} · r{revision}</option>{taskOptions.filter(task => task.id !== workspace.task.id).map(task => <option value={task.id} key={task.id}>{savedProjectName(task.display_name, task.direction.focus || task.direction.concept || '未命名品牌广告')} · v{task.version}</option>)}</select></label><button className="primary-button" type="button" onClick={() => requestTaskChange(null)}><Plus size={14}/>新建品牌广告</button></div>}
     onStageChange={navigateToStage}
   >
 
       {activeStage === 'brief' ? <section className="brand-film-section"><header><div><span className="section-label">PHASE 01</span><h3>Brief 分析与事实确认</h3></div><ModelBadge alias={brief?.model_alias} version={brief?.model_version}/></header>
-        {!brief ? <div className="brand-film-empty"><FileText size={24}/><p>{source.source_type === 'strategy_handoff' ? '从已确认的 Strategy Brand Brief 恢复事实与来源，不重新猜测上游结论。' : '解析当前验收 Brief，并保留事实定位与模型版本。'}</p><button className="primary-button" disabled={Boolean(busy)} onClick={() => void analyze()}><WandSparkles size={15}/>解析 Brief</button></div> : lockedBrief ? <ConfirmedBrandBriefSummary brief={brief} busy={Boolean(busy)} onEdit={() => setBriefEditMode(true)}/> : <>
+        {!brief ? <div className="brand-film-empty"><FileText size={24}/><p>使用 Seed-2-pro 解析固定娇兰 Brief；不可用时回退固定样例。</p><button className="primary-button" disabled={Boolean(busy)} onClick={() => void analyze()}><WandSparkles size={15}/>解析 Brief</button></div> : <>
           <div className="brand-form-grid"><label className="wide">Brief 摘要<textarea disabled={lockedBrief} value={brief.summary} onChange={event => setBrief({ ...brief, summary: event.target.value })}/></label><label>目标人群<textarea disabled={lockedBrief} value={brief.audience} onChange={event => setBrief({ ...brief, audience: event.target.value })}/></label><label>核心传播信息<textarea disabled={lockedBrief} value={brief.core_message} onChange={event => setBrief({ ...brief, core_message: event.target.value })}/></label><label className="wide">统一口播音色<textarea disabled={lockedBrief} value={brief.voice_direction} onChange={event => setBrief({ ...brief, voice_direction: event.target.value })}/></label></div>
           {!lockedBrief && brief.confirmed ? <div className="brand-edit-notice">当前正在修改已确认 Brief。保存后会创建新的待确认修订，并清空依赖旧 Brief 的创意、分镜、生成与交付结果。</div> : null}
-          <div className="brand-fact-grid"><div><h4>广告要点 / 卖点</h4>{brief.selling_points.map((fact, index) => <label className="brand-fact" key={`${fact.locator}-${index}`}><input disabled={lockedBrief} value={fact.text} onChange={event => setBrief({ ...brief, selling_points: brief.selling_points.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item) })}/><small>{fact.locator} · {Math.round(fact.confidence * 100)}% · {fact.status}</small></label>)}</div><EditableList title="必须保留" items={brief.mandatory_elements} disabled={lockedBrief} onChange={items => setBrief({ ...brief, mandatory_elements: items })}/><EditableList title="禁用表述" items={brief.prohibited_claims} disabled={lockedBrief} onChange={items => setBrief({ ...brief, prohibited_claims: items })}/><EditableList title="图片要求" items={brief.image_requirements} disabled={lockedBrief} onChange={items => setBrief({ ...brief, image_requirements: items })}/><EditableList title="视频要求" items={brief.video_requirements} disabled={lockedBrief} onChange={items => setBrief({ ...brief, video_requirements: items })}/><EditableList title="待人工确认" items={brief.uncertainties} disabled={lockedBrief} onChange={items => setBrief({ ...brief, uncertainties: items })}/></div>
-          <div className="brand-assets"><h4>商品与品牌参考素材</h4><p>系统会展示来源中可可靠识别的图片；未能识别时保留待补充位置，请上传或替换后逐项确认。</p>{brief.asset_candidates.map(asset => <article key={asset.id}><div className="brand-asset-thumb">{assetPreviews[asset.id] ? <img src={assetPreviews[asset.id]} alt={asset.label}/> : <Image size={22}/>}</div><div><b>{asset.label}</b><small>{briefAssetSource(asset.source_locator, asset.role)}</small><small>{asset.asset_ref ? `项目素材 · Asset ${asset.asset_ref.asset_id} v${asset.asset_ref.version}` : asset.replacement_note || '等待识别或人工上传'}</small></div><label className="brand-checkbox"><input type="checkbox" disabled={lockedBrief} checked={asset.user_confirmed} onChange={event => updateAsset(asset.id, { user_confirmed: event.target.checked, rights_status: event.target.checked ? 'user_confirmed' : 'needs_confirmation' })}/><Check size={13}/>确认使用</label>{!lockedBrief ? <label className="secondary-button brand-upload"><Upload size={13}/>替换图片<input type="file" accept="image/png,image/jpeg" onChange={event => { void uploadReferenceAsset(asset.id, event.target.files?.[0]) }}/></label> : null}</article>)}</div>
-          <div className="brand-actions">{brief.confirmed ? <button className="secondary-button" disabled={Boolean(busy)} onClick={cancelBriefEdit}>取消编辑</button> : null}<button className="secondary-button" disabled={Boolean(busy)} onClick={() => void reanalyze()}><Sparkles size={14}/>重新解析</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void saveBrief()}>保存修改</button><button className="primary-button" disabled={Boolean(busy) || !allRequiredReferencesConfirmed} onClick={() => void confirmBrief()}>确认 Brief</button></div>
+          <div className="brand-fact-grid"><div><div className="brand-facts-heading"><h4>广告要点 / 卖点</h4>{!lockedBrief ? <button type="button" onClick={() => setBrief({ ...brief, selling_points: [...brief.selling_points, { text: '', locator: `user://brand-film/brief#selling-point-${brief.selling_points.length + 1}`, confidence: 1, status: 'brief_fact' }] })}><Plus size={13}/>添加卖点</button> : null}</div>{brief.selling_points.map((fact, index) => <div className="brand-fact-row" key={`${fact.locator}-${index}`}><label className="brand-fact"><input disabled={lockedBrief} value={fact.text} onChange={event => setBrief({ ...brief, selling_points: brief.selling_points.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item) })}/><small>{fact.locator} · {Math.round(fact.confidence * 100)}% · {fact.status}</small></label>{!lockedBrief ? <button className="brand-fact-delete" type="button" aria-label={`删除卖点 ${index + 1}`} title={brief.selling_points.length <= 1 ? '至少保留一条卖点' : '删除这条卖点'} disabled={brief.selling_points.length <= 1} onClick={() => setBrief({ ...brief, selling_points: brief.selling_points.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={14}/></button> : null}</div>)}</div><EditableList title="必须保留" items={brief.mandatory_elements} disabled={lockedBrief} onChange={items => setBrief({ ...brief, mandatory_elements: items })}/><EditableList title="禁用表述" items={brief.prohibited_claims} disabled={lockedBrief} onChange={items => setBrief({ ...brief, prohibited_claims: items })}/><EditableList title="图片要求" items={brief.image_requirements} disabled={lockedBrief} onChange={items => setBrief({ ...brief, image_requirements: items })}/><EditableList title="视频要求" items={brief.video_requirements} disabled={lockedBrief} onChange={items => setBrief({ ...brief, video_requirements: items })}/><EditableList title="待人工确认" items={brief.uncertainties} disabled={lockedBrief} onChange={items => setBrief({ ...brief, uncertainties: items })}/></div>
+          <div className="brand-assets">
+            <div className="brand-assets-heading"><div><h4>商品与品牌参考素材</h4><span>{productReferences.length} 个商品 · {logoReferences.length} 个品牌标识</span></div>{!lockedBrief ? <button className="secondary-button" type="button" onClick={addProductAsset}><Plus size={13}/>添加商品</button> : null}</div>
+            <p>优先展示 Brief 中已提取并入库的图片。每个商品独立命名、确认和替换；未提取到图片时才需要人工上传。</p>
+            {brief.asset_candidates.map(asset => {
+              const sourceLabel = briefAssetSource(asset.source_locator, asset.role)
+              const product = isProductReference(asset)
+              const hasImage = referenceIsUsable(asset)
+              return <article key={asset.id} className={hasImage ? 'has-image' : 'needs-image'}>
+                <div className="brand-asset-thumb">{assetPreviews[asset.id] ? <img src={assetPreviews[asset.id]} alt={asset.label}/> : <Image size={22}/>}</div>
+                <div className="brand-asset-copy">
+                  <span className="brand-asset-kind">{product ? '商品参考图' : asset.role === 'logo' ? '品牌 Logo' : '参考素材'}</span>
+                  {lockedBrief ? (
+                    <b>{asset.label}</b>
+                  ) : (
+                    <input aria-label={`${product ? '商品' : '素材'}名称`} value={asset.label} onChange={event => updateAsset(asset.id, { label: event.target.value })}/>
+                  )}
+                  <small className="brand-asset-source" title={sourceLabel}>{sourceLabel || '人工补充'}</small>
+                  <small className={hasImage ? 'brand-asset-state ready' : 'brand-asset-state'}>{asset.asset_ref ? `已入库 · Asset ${asset.asset_ref.asset_id} v${asset.asset_ref.version}` : asset.fixture_uri ? '固定样例素材 · 确认后可使用' : '未提取到可用图片，请上传'}</small>
+                </div>
+                <div className="brand-asset-controls">
+                  <label className="brand-checkbox"><input type="checkbox" disabled={lockedBrief || !hasImage} checked={asset.user_confirmed} onChange={event => updateAsset(asset.id, { user_confirmed: event.target.checked, rights_status: event.target.checked ? 'user_confirmed' : 'needs_confirmation' })}/><Check size={13}/>确认使用</label>
+                  {!lockedBrief ? <label className="secondary-button brand-upload"><Upload size={13}/>{hasImage ? '替换图片' : '上传图片'}<input type="file" accept="image/png,image/jpeg" onChange={event => { void uploadReferenceAsset(asset.id, event.target.files?.[0]) }}/></label> : null}
+                  {!lockedBrief && product ? <button className="brand-asset-delete" type="button" aria-label={`删除${asset.label}`} onClick={() => removeProductAsset(asset)}><Trash2 size={13}/>删除</button> : null}
+                </div>
+              </article>
+            })}
+            {!productReferences.length ? <button className="brand-add-product-empty" type="button" disabled={lockedBrief} onClick={addProductAsset}><Plus size={16}/>添加第一个商品及参考图</button> : null}
+          </div>
+          <div className="brand-actions">{!lockedBrief ? <><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void reanalyze()}><Sparkles size={14}/>重新解析</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void saveBrief()}>保存修改</button><button className="primary-button" disabled={Boolean(busy) || !allRequiredReferencesConfirmed} onClick={() => void confirmBrief()}>确认 Brief</button></> : <><span className="brand-confirmed"><Check size={14}/>Brief 已确认</span><button className="secondary-button" disabled={Boolean(busy)} onClick={() => setBriefEditMode(true)}>编辑 Brief</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void reanalyze()}><Sparkles size={14}/>重新解析</button><button className="primary-button brand-next-button" type="button" onClick={() => navigateToStage('concept')}>下一步：创意方向<ArrowRight size={15}/></button></>}</div>
         </>}
       </section> : null}
 
-      {activeStage === 'concept' ? <section className="brand-film-section" aria-disabled={!brief?.confirmed}><header><div><span className="section-label">PHASE 02A</span><h3>有差异的创意方向</h3></div><ModelBadge alias={conceptSet?.model_alias} version={conceptSet?.model_version}/></header>{!brief?.confirmed ? <p className="brand-locked">确认 Brief 后开放。</p> : !conceptSet ? <div className="brand-film-empty compact"><p>一次生成 3 个叙事机制不同的方向，生成后可逐项人工修改。</p><button className="primary-button" disabled={Boolean(busy)} onClick={() => void generateConcepts()}>生成创意候选</button></div> : <>{conceptEditMode ? <div className="brand-edit-notice">这里只修改方向标题、核心创意句与叙事机制。保存后形成新的待选择修订；镜头执行细节继续在剧本分镜阶段处理。</div> : null}<div className="brand-concepts">{conceptCandidates.map((concept, index) => <ConceptCard key={concept.id} concept={concept} ordinal={index + 1} editing={conceptEditMode} busy={Boolean(busy)} onChange={changes => updateConcept(concept.id, changes)} onSelect={() => void selectConcept(concept.id)}/>)}</div><div className="brand-actions">{conceptEditMode ? <><button className="secondary-button" disabled={Boolean(busy)} onClick={cancelConceptEdit}>取消编辑，返回选择</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void saveConcepts()}>保存创意修改</button></> : <>{draft.selected_concept_id ? <span className="brand-confirmed"><Check size={14}/>已选择，可直接切换其他方向</span> : <span className="brand-pending">请选择一个创意方向</span>}<button className="secondary-button" disabled={Boolean(busy)} onClick={() => setConceptEditMode(true)}>编辑方向文案</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void regenerateConcepts()}>重新生成整组</button></>}</div></>}</section> : null}
+      {activeStage === 'concept' ? <section className="brand-film-section" aria-disabled={!brief?.confirmed}><header><div><span className="section-label">PHASE 02A</span><h3>有差异的创意方向</h3></div><ModelBadge alias={conceptSet?.model_alias} version={conceptSet?.model_version}/></header>{!brief?.confirmed ? <p className="brand-locked">确认 Brief 后开放。</p> : !conceptSet ? <div className="brand-film-empty compact"><p>一次生成 3 个叙事机制不同的方向，生成后可逐项人工修改。</p><button className="primary-button" disabled={Boolean(busy)} onClick={() => void generateConcepts()}>生成创意候选</button></div> : <>{conceptEditMode ? <div className="brand-edit-notice">这里只修改方向标题、核心创意句与叙事机制。保存后形成新的待选择修订；镜头执行细节继续在剧本分镜阶段处理。</div> : null}<div className="brand-concepts">{conceptCandidates.map(concept => <ConceptCard key={concept.id} concept={concept} editing={conceptEditMode} busy={Boolean(busy)} onChange={changes => updateConcept(concept.id, changes)} onSelect={() => void selectConcept(concept.id)}/>)}</div><div className="brand-actions">{conceptEditMode ? <><button className="secondary-button" disabled={Boolean(busy)} onClick={cancelConceptEdit}>取消编辑，返回选择</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void saveConcepts()}>保存创意修改</button></> : <>{draft.selected_concept_id ? <span className="brand-confirmed"><Check size={14}/>创意方向已选择</span> : <span className="brand-pending">请选择一个创意方向</span>}<button className="secondary-button" disabled={Boolean(busy)} onClick={() => setConceptEditMode(true)}>编辑方向文案</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void regenerateConcepts()}>重新生成整组</button>{draft.selected_concept_id ? <button className="primary-button brand-next-button" type="button" onClick={() => navigateToStage('storyboard')}>下一步：剧本分镜<ArrowRight size={15}/></button> : null}</>}</div></>}</section> : null}
 
       {activeStage === 'storyboard' ? (
         <section className="brand-film-section" aria-disabled={!draft.selected_concept_id || conceptEditMode}>
@@ -577,17 +673,19 @@ export function BrandFilmWorkspace({ taskId, onNotice }: Props) {
               <label>口播方向<textarea disabled={lockedPlan} value={plan.voice_direction} onChange={event => setPlan({ ...plan, voice_direction: event.target.value })}/></label>
             </div>
             <StoryboardEditor plan={plan} disabled={lockedPlan} onChange={setPlan}/>
-            <div className="brand-actions">{!lockedPlan ? <><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void generatePlan()}>重新生成整版</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void savePlan()}>保存剧本修改</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void confirmPlan()}>确认剧本与分镜</button></> : <><span className="brand-confirmed"><Check size={14}/>剧本与分镜已确认</span><button className="secondary-button" disabled={Boolean(busy)} onClick={() => setPlanEditMode(true)}>编辑剧本与分镜</button></>}</div>
+            <div className="brand-actions">{!lockedPlan ? <><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void generatePlan()}>重新生成整版</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void savePlan()}>保存剧本修改</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void confirmPlan()}>确认剧本与分镜</button></> : <><span className="brand-confirmed"><Check size={14}/>剧本与分镜已确认</span><button className="secondary-button" disabled={Boolean(busy)} onClick={() => setPlanEditMode(true)}>编辑剧本与分镜</button><button className="primary-button brand-next-button" type="button" onClick={() => navigateToStage('generation')}>下一步：视频生成<ArrowRight size={15}/></button></>}</div>
           </>}
         </section>
       ) : null}
 
-      {activeStage === 'generation' ? <section className="brand-film-section" aria-disabled={!planReady}><header><div><span className="section-label">PHASE 03</span><h3>视频生成、反馈重试与片段锁定</h3></div><span className="brand-model-badge">Seedance 2.0 · 单候选</span></header>{!planReady ? <p className="brand-locked">保存并确认剧本与分镜后开放。</p> : !draft.generation ? <div className="brand-film-empty"><Film size={24}/><p>确认商品参考图后，系统按一镜头一个生成单元冻结 PromptPackage。</p><div className="brand-generation-reference">{generationReferencePreview ? <img src={generationReferencePreview} alt="商品参考图"/> : generationReference ? <span>Asset {generationReference.asset_id} v{generationReference.version}</span> : <span>尚未选择商品参考图</span>}<label className="secondary-button brand-upload"><Upload size={13}/>上传 / 更换<input type="file" accept="image/png,image/jpeg" onChange={event => { void uploadGenerationReference(event.target.files?.[0]) }}/></label></div><button className="primary-button" disabled={Boolean(busy) || !generationReference} onClick={() => void prepareGeneration()}>确认并编排生成单元</button></div> : <><div className="brand-generation-units">{draft.generation.units.map(unit => { const latestAttempt = unit.attempts.at(-1); const locked = Boolean(unit.locked_attempt_id); return <article key={unit.id} className={locked ? 'locked' : ''}><header><div><b>生成单元 {String(unit.order).padStart(2, '0')}</b><span>{unit.start_second}s–{unit.end_second}s · {unit.shot_ids.join(' + ')}</span></div>{locked ? <span className="brand-confirmed"><Lock size={13}/>已锁定</span> : null}</header><small>PromptPackage r{unit.prompt_packages.at(-1)?.revision} · {unit.prompt_packages.at(-1)?.content_hash.slice(0, 18)}…</small>{latestAttempt?.output_asset_ref ? <video controls src={attemptPreviews[latestAttempt.id]}/> : <div className="brand-unit-placeholder"><Film size={20}/><span>{latestAttempt ? `Attempt ${latestAttempt.ordinal} · ${latestAttempt.status}` : '尚未生成候选'}</span></div>}{!locked ? <div className="brand-unit-actions"><GenerationUnitActions attempt={latestAttempt} busy={Boolean(busy)} feedback={feedbackByUnit[unit.id] ?? ''} onFeedback={feedback => setFeedbackByUnit(value => ({ ...value, [unit.id]: feedback }))} onGenerate={feedback => void generateUnit(unit.id, feedback)} onLock={attemptId => void lockUnit(unit.id, attemptId)}/></div> : null}</article>})}</div>{finalPreview ? <div className="brand-final-preview"><div><span className="section-label">{generationDurationSeconds} SECOND PREVIEW</span><h4>已锁定片段合成预览</h4><small>720×1280 · H.264/AAC · 项目素材可追溯</small></div><video controls src={finalPreview}/></div> : null}<div className="brand-actions"><button className="primary-button" disabled={Boolean(busy) || draft.generation.units.some(unit => !unit.locked_attempt_id) || Boolean(draft.generation.preview_asset)} onClick={() => void composePreview()}>裁切并拼接 {generationDurationSeconds} 秒预览</button>{draft.generation.preview_asset ? <span className="brand-confirmed"><Check size={14}/>预览 Asset {draft.generation.preview_asset.asset_id} v{draft.generation.preview_asset.version}</span> : null}</div></>}</section> : null}
+      {activeStage === 'generation' ? <section className="brand-film-section" aria-disabled={!planReady}><header><div><span className="section-label">PHASE 03</span><h3>视频生成、反馈重试与片段锁定</h3></div><span className="brand-model-badge">Seedance 2.0 · 单候选</span></header>{!planReady ? <p className="brand-locked">保存并确认剧本与分镜后开放。</p> : !draft.generation ? <div className="brand-film-empty brand-generation-setup"><Film size={24}/><div><h4>选择本次生成的主商品参考图</h4><p>已从 Brief 确认结果自动带入。系统仍按一镜头一个生成单元冻结 PromptPackage；其他商品素材继续保留在 Brief 中。</p></div>{generationProductReferences.length ? <div className="brand-generation-products">{generationProductReferences.map(asset => { const selected = sameAssetRef(asset.asset_ref, generationReference); return <button type="button" className={selected ? 'selected' : ''} aria-pressed={selected} key={asset.id} onClick={() => { setGenerationReference(asset.asset_ref ?? null); setGenerationReferencePreview('') }}><div>{assetPreviews[asset.id] ? <img src={assetPreviews[asset.id]} alt={asset.label}/> : <Image size={22}/>}</div><span><b>{asset.label}</b><small>Asset {asset.asset_ref?.asset_id} v{asset.asset_ref?.version}</small></span><i>{selected ? <Check size={14}/> : null}</i></button>})}</div> : <div className="brand-generation-missing"><Image size={18}/><div><b>Brief 中还没有已入库的商品图</b><span>返回 Brief，为每个商品上传并确认图片后再继续。</span></div><button className="secondary-button" type="button" onClick={() => navigateToStage('brief')}>返回 Brief 补充</button></div>} {generationReference ? <div className="brand-generation-reference selected">{selectedGenerationPreview ? <img src={selectedGenerationPreview} alt={selectedGenerationProduct?.label ?? '主商品参考图'}/> : null}<span><b>{selectedGenerationProduct?.label ?? '主商品参考图'}</b><small>本次 Seedance 生成使用 Asset {generationReference.asset_id} v{generationReference.version}</small></span></div> : null}<button className="primary-button" disabled={Boolean(busy) || !generationReference} onClick={() => void prepareGeneration()}>确认主商品并编排生成单元</button></div> : <><div className="brand-generation-units">{draft.generation.units.map(unit => { const latestAttempt = unit.attempts.at(-1); const locked = Boolean(unit.locked_attempt_id); return <article key={unit.id} className={locked ? 'locked' : ''}><header><div><b>生成单元 {String(unit.order).padStart(2, '0')}</b><span>{unit.start_second}s–{unit.end_second}s · {unit.shot_ids.join(' + ')}</span></div>{locked ? <span className="brand-confirmed"><Lock size={13}/>已锁定</span> : null}</header><small>PromptPackage r{unit.prompt_packages.at(-1)?.revision} · {unit.prompt_packages.at(-1)?.content_hash.slice(0, 18)}…</small>{latestAttempt?.output_asset_ref ? <video controls src={attemptPreviews[latestAttempt.id]}/> : <div className="brand-unit-placeholder"><Film size={20}/><span>{latestAttempt ? `Attempt ${latestAttempt.ordinal} · ${latestAttempt.status}` : '尚未生成候选'}</span></div>}{!locked ? <div className="brand-unit-actions"><GenerationUnitActions attempt={latestAttempt} busy={Boolean(busy)} feedback={feedbackByUnit[unit.id] ?? ''} onFeedback={feedback => setFeedbackByUnit(value => ({ ...value, [unit.id]: feedback }))} onGenerate={feedback => void generateUnit(unit.id, feedback)} onLock={attemptId => void lockUnit(unit.id, attemptId)}/></div> : null}</article>})}</div>{finalPreview ? <div className="brand-final-preview"><div><span className="section-label">15 SECOND PREVIEW</span><h4>已锁定片段合成预览</h4><small>720×1280 · H.264/AAC · 项目素材可追溯</small></div><video controls src={finalPreview}/></div> : null}<div className="brand-actions"><button className="primary-button" disabled={Boolean(busy) || draft.generation.units.some(unit => !unit.locked_attempt_id) || Boolean(draft.generation.preview_asset)} onClick={() => void composePreview()}>裁切并拼接 15 秒预览</button>{draft.generation.preview_asset ? <span className="brand-confirmed"><Check size={14}/>预览 Asset {draft.generation.preview_asset.asset_id} v{draft.generation.preview_asset.version}</span> : null}</div></>}</section> : null}
 
       {activeStage === 'audio' ? <section className="brand-film-section" aria-disabled={!draft.generation?.preview_asset}><header><div><span className="section-label">AUDIO A0–A4</span><h3>AI 声音导演、真实旁白与完整混音预览</h3></div><span className="brand-model-badge">Audio Director · MiniMax · FFmpeg</span></header>{!draft.generation?.preview_asset ? <p className="brand-locked">完成并合成视觉预览后开放。</p> : !draft.audio ? <div className="brand-film-empty"><Volume2 size={24}/><p>进入后自动获得带发音词典、时长适配、声画检查和 A/B 声音方案的默认音轨，不需要从空白配置开始。</p><button className="primary-button" disabled={Boolean(busy)} onClick={() => void startAudioDirector()}>启动 AI 声音导演</button></div> : <AudioWorkspaceEditor key={`${draft.audio.active_variant_id}-${activeAudioMix(draft.audio)?.content_hash}`} audio={draft.audio} videoURL={finalPreview} mixedVideoURL={mixedAudioPreview} assetURLs={audioClipPreviews} speechCapability={speechCapability} busy={Boolean(busy)} onMaterialize={() => void materializeAudio()} onReplace={(clipId, file) => void replaceAudioClip(clipId, file)} onSave={operations => void saveAudio(operations)} onRender={() => void renderAudioPreview()} onProbeSpeech={() => void probeSpeech()} onGenerateVoice={(clipId, voiceAlias) => void generateVoice(clipId, voiceAlias)} onSelectVariant={variantId => void selectAudioVariant(variantId)} onPlanDirector={() => void prepareAudio()}/>}</section> : null}
 
       {activeStage === 'audio' && draft.audio && planReady && !conceptEditMode ? (() => { const progress = brandAudioProgress(draft.audio); return <footer className="brand-generation-seam"><b>{progress.title}</b><span>{progress.next}</span><small>{progress.detail}</small></footer> })() : null}
   </BrandFilmWorkbenchShell>
+    {pendingDestination !== undefined ? <div className="brand-project-save-layer" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setPendingDestination(undefined) }}><section className="brand-project-save-dialog" role="dialog" aria-modal="true" aria-labelledby="brand-project-save-title"><span className="section-label">SAVE CURRENT WORK</span><h3 id="brand-project-save-title">先保存当前品牌广告，再开始新的创作</h3><p>当前流程尚未完成。系统会保留已确认阶段和最新编辑修订，之后可以从任务下拉框继续。</p><label>品牌广告名称<input autoFocus maxLength={80} value={projectName} onChange={event => setProjectName(event.target.value)} placeholder="例如：娇兰黄金复原蜜 · 15 秒品牌广告"/></label><div><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setPendingDestination(undefined)}>取消</button><button className="primary-button" type="button" disabled={Boolean(busy) || !projectName.trim()} onClick={() => void saveAndChangeTask()}>{busy === 'save-project' ? <LoaderCircle className="spin" size={14}/> : null}保存并继续</button></div></section></div> : null}
+  </>
 }
 
 function EditableList({ title, items, disabled, onChange }: { title: string; items: string[]; disabled: boolean; onChange: (items: string[]) => void }) {

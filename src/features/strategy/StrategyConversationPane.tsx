@@ -14,12 +14,10 @@ import {
   Video,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   buildConversationLens,
   compactDocumentTitle,
-  conversationSearchRunsByMessage,
-  conversationSourceDocuments,
   intakeMissingLabel,
 } from './strategyConversationModel'
 import type {
@@ -32,7 +30,6 @@ import type {
   Message,
   MessageContentBlock,
   MessageRequestedPolicy,
-  ResearchRun,
 } from './types'
 
 type ViralRemakeResult = { intake: CreativeIntakeV4; taskId?: string }
@@ -45,9 +42,7 @@ type Props = {
   documents: KnowledgeDocument[]
   mediaArtifacts: MediaUnderstandingArtifact[]
   messages: Message[]
-  notice: string
   pending: boolean
-  researchRuns: ResearchRun[]
   onConfirmRequirement: () => Promise<boolean>
   onOpenBrief: () => void
   onOpenFullStrategy: () => void
@@ -77,7 +72,6 @@ export function StrategyConversationPane({
   documents,
   mediaArtifacts,
   messages,
-  notice,
   onConfirmRequirement,
   onOpenBrief,
   onOpenFullStrategy,
@@ -87,7 +81,6 @@ export function StrategyConversationPane({
   onUploadDocument,
   onUploadMedia,
   pending,
-  researchRuns = [],
 }: Props) {
   const [content, setContent] = useState('')
   const [feedback, setFeedback] = useState('')
@@ -95,17 +88,10 @@ export function StrategyConversationPane({
   const [webSearch, setWebSearch] = useState(false)
   const [attachedDocumentIds, setAttachedDocumentIds] = useState<string[]>([])
   const [attachedMediaIds, setAttachedMediaIds] = useState<string[]>([])
-  const [streamingAssistantIds, setStreamingAssistantIds] = useState<Set<string>>(() => new Set())
   const listRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const seenMessageIdsRef = useRef<Set<string> | null>(null)
-  const hadPendingTurnRef = useRef(false)
-  const sourceDocuments = conversationSourceDocuments(brief, documents)
-  const lens = buildConversationLens(brief, sourceDocuments)
+  const lens = buildConversationLens(brief, documents)
   const locked = Boolean(briefVersion)
-  const strategyReadiness = briefVersion?.full_strategy_readiness
-  const strategyReady = Boolean(strategyReadiness?.ready)
-  const strategyBlocker = strategyReadiness?.blockers[0]
   const attachedDocuments = attachedDocumentIds.flatMap(id => {
     const document = documents.find(value => value.id === id)
     return document ? [document] : []
@@ -118,41 +104,11 @@ export function StrategyConversationPane({
   const mediaReady = attachedMedia.every(artifact => artifact.status === 'ready' || artifact.status === 'partial')
   const attachmentsReady = documentsReady && mediaReady
   const pendingPolicy = [...messages].reverse().find(message => message.role === 'user')?.requested_policy
-  const conversationSearchByMessage = useMemo(
-    () => conversationSearchRunsByMessage(researchRuns),
-    [researchRuns],
-  )
 
   useEffect(() => {
     const list = listRef.current
     if (list) list.scrollTop = list.scrollHeight
   }, [messages, pending])
-
-  useEffect(() => {
-    if (pending) hadPendingTurnRef.current = true
-  }, [pending])
-
-  useEffect(() => {
-    if (seenMessageIdsRef.current === null) {
-      seenMessageIdsRef.current = new Set(messages.map(message => message.id))
-      return
-    }
-    const seen = seenMessageIdsRef.current
-    const newAssistantIds: string[] = []
-    for (const message of messages) {
-      if (!seen.has(message.id) && message.role === 'assistant' && hadPendingTurnRef.current) {
-        newAssistantIds.push(message.id)
-      }
-      seen.add(message.id)
-    }
-    if (!newAssistantIds.length) return
-    hadPendingTurnRef.current = false
-    setStreamingAssistantIds(current => {
-      const next = new Set(current)
-      newAssistantIds.forEach(id => next.add(id))
-      return next
-    })
-  }, [messages])
 
   useEffect(() => {
     const textarea = textareaRef.current
@@ -197,9 +153,7 @@ export function StrategyConversationPane({
     const document = await onUploadDocument(file)
     if (document) {
       setAttachedDocumentIds(current => current.includes(document.id) ? current : [...current, document.id])
-      setFeedback(document.status === 'ready'
-        ? `${file.name} 已有可用解析结果，本次直接复用 ${document.chunk_count} 个来源片段。`
-        : `${file.name} 已进入解析队列；完成后会随下一条消息一起发送，并保留 chunk 来源。`)
+      setFeedback(`${file.name} 已进入解析队列；完成后会随下一条消息一起发送，并保留 chunk 来源。`)
     }
   }
 
@@ -229,25 +183,15 @@ export function StrategyConversationPane({
 
   return <section className="kanon-conversation-workbench">
     <header className="kanon-conversation-header">
-      <div className="kanon-conversation-heading">
+      <div>
         <span className="section-label">CONVERSATIONAL REQUIREMENT</span>
-        <h2>先说清楚要解决什么。</h2>
+        <h2>先说清楚要解决什么，AI 负责收敛。</h2>
         <p>不要求先填完整表单；产品、目标和核心受众足够后，就能冻结需求并选择创作路径。</p>
       </div>
-      <div className="kanon-conversation-progress" aria-label="当前工作链状态">
-        <div className="kanon-conversation-progress-summary">
-          <span className={`kanon-requirement-state ${locked ? 'locked' : lens.coreReady ? 'ready' : ''}`}>
-            {locked ? <CircleCheck size={14}/> : <Sparkles size={14}/>}
-            {locked ? `Requirement v${briefVersion?.version}` : `${lens.completedCore} / ${lens.totalCore} 项核心事实`}
-          </span>
-          <b>{!locked ? '需求收敛中' : strategyReady ? '需求已确认，可进入策略' : '需求已确认，策略尚未就绪'}</b>
-        </div>
-        <ol>
-          <li className={locked ? 'done' : 'active'}><span>01</span><div><b>需求</b><small>{locked ? '已冻结' : '对话中'}</small></div></li>
-          <li className={locked && strategyReady ? 'active' : ''}><span>02</span><div><b>策略</b><small>{strategyReady ? '可生成' : '待补充'}</small></div></li>
-          <li><span>03</span><div><b>创意</b><small>待交接</small></div></li>
-        </ol>
-      </div>
+      <span className={`kanon-requirement-state ${locked ? 'locked' : lens.coreReady ? 'ready' : ''}`}>
+        {locked ? <CircleCheck size={14}/> : <Sparkles size={14}/>}
+        {locked ? `需求 v${briefVersion?.version} 已确认` : `${lens.completedCore} / ${lens.totalCore} 项核心事实`}
+      </span>
     </header>
 
     <div className="kanon-conversation-grid">
@@ -267,19 +211,12 @@ export function StrategyConversationPane({
               }} type="button">{prompt}<ArrowUpRight size={13}/></button>)}
             </div>
           </div> : null}
-          {messages.map(message => <ConversationMessage
-            animate={streamingAssistantIds.has(message.id)}
-            key={message.id}
-            message={message}
-            searchRun={conversationSearchByMessage.get(message.id)}
-          />)}
+          {messages.map(message => <ConversationMessage key={message.id} message={message}/>)}
           {pending ? <article className="kanon-message assistant thinking" aria-live="polite">
-            <span>AI</span><div><small>Strategy 助手</small><p><LoaderCircle className="spin" size={14}/>{pendingPolicy?.web_search === 'allowed'
-              ? pendingPolicy.reasoning_mode === 'deep'
-                ? '正在联网检索；完成后会基于来源进行本轮深度分析并回答…'
-                : '正在联网检索；完成后会基于返回来源生成本轮回答…'
-              : pendingPolicy?.reasoning_mode === 'deep'
-                ? '正在进行本轮深度分析，内部资料会单独标注…'
+            <span>AI</span><div><small>Strategy 助手</small><p><LoaderCircle className="spin" size={14}/>{pendingPolicy?.reasoning_mode === 'deep'
+              ? '正在进行本轮深度分析，联网证据与内部资料会分别标注…'
+              : pendingPolicy?.web_search === 'allowed'
+                ? '正在联网搜索，搜索完成后再生成本轮回答…'
                 : '正在区分事实、假设和仍需确认的问题…'}</p></div>
           </article> : null}
         </div>
@@ -337,9 +274,9 @@ export function StrategyConversationPane({
                     className={webSearch ? 'active' : ''}
                     disabled={Boolean(busy) || pending}
                     onClick={() => setWebSearch(current => !current)}
-                    title="只向外部服务发送当前问题，不发送附件正文；搜索完成后再生成本轮回答"
+                    title={`只向外部服务发送当前问题，不发送附件正文；预计约 ${conversationCapabilities.web_search.estimated_wait_seconds ?? 45} 秒`}
                     type="button"
-                  ><Globe2 size={13}/><span>联网搜索</span><small>搜索后回答</small></button> : null}
+                  ><Globe2 size={13}/><span>联网查证</span><small>仅外发问题</small></button> : null}
                 </div>
               : null}
             <footer>
@@ -382,7 +319,9 @@ export function StrategyConversationPane({
             </footer>
           </div>
         </form>
-        {feedback || notice ? <div className="kanon-conversation-feedback" role="status">{feedback || notice}</div> : null}
+        {busy === 'web-search'
+          ? <div className="kanon-conversation-feedback searching" role="status"><LoaderCircle className="spin" size={12}/>正在联网查证；只外发当前问题，原消息会在证据固化后发送。</div>
+          : feedback ? <div className="kanon-conversation-feedback" role="status">{feedback}</div> : null}
       </div>
 
       <aside className="kanon-understanding-lens" aria-label="AI 当前理解">
@@ -407,23 +346,20 @@ export function StrategyConversationPane({
 
         <section className="kanon-lens-sources">
           <div><span>来源资料</span><small>{lens.readySourceCount + mediaArtifacts.filter(value => value.status === 'ready' || value.status === 'partial').length} / {lens.sourceCount + mediaArtifacts.length} 可用</small></div>
-          {sourceDocuments.length ? sourceDocuments.slice(0, 3).map(document => <article key={document.id}>
+          {documents.length ? documents.slice(0, 3).map(document => <article key={document.id}>
             <FileText size={14}/><span><b>{compactDocumentTitle(document)}</b><small>{document.status === 'ready' ? `${document.chunk_count} 个可检索片段` : document.status === 'parse_failed' ? '解析失败' : '正在解析'}</small></span>
           </article>) : null}
           {mediaArtifacts.slice(0, 3).map(artifact => <article key={artifact.id}>
             {artifact.asset_kind === 'video' ? <Video size={14}/> : <ImageIcon size={14}/>}
             <span><b>{artifact.asset_kind === 'video' ? '短视频证据' : '图片证据'}</b><small>{mediaArtifactStatus(artifact)}</small></span>
           </article>)}
-          {!sourceDocuments.length && !mediaArtifacts.length ? <p>{conversationCapabilities?.multimodal_input.available
+          {!documents.length && !mediaArtifacts.length ? <p>{conversationCapabilities?.multimodal_input.available
             ? '可直接添加文档、图片或 15–90 秒 MP4；只有可定位的直接证据会影响理解。'
             : '当前灰度未开放附件输入；仍可直接用自然语言说明需求。'}</p> : null}
         </section>
 
         <footer className="kanon-lens-action">
-          {locked && !strategyReady ? <>
-            <div className="kanon-lens-blocked"><CircleCheck size={16}/><span><b>Requirement 已冻结，但完整策略还不能生成</b><small>{strategyBlocker?.reason || 'Project、目标、受众、主张或渠道仍有一项需要修正。'}</small></span></div>
-            <button className="primary-button full" onClick={onOpenFullStrategy} type="button"><ArrowUpRight size={14}/>查看阻断并创建补充修订</button>
-          </> : locked ? conversationCapabilities?.quick_viral_remake.available ? <>
+          {locked ? conversationCapabilities?.quick_viral_remake.available ? <>
             <div><Video size={16}/><span><b>爆款裂变快速路径</b><small>跳过形式化策略文档，直接校验参考视频和创作输入。</small></span></div>
             <button className="primary-button full" disabled={Boolean(busy)} onClick={() => void startViralRemake()} type="button">
               {busy === 'viral-remake' ? <LoaderCircle className="spin" size={14}/> : <Sparkles size={14}/>}
@@ -446,15 +382,7 @@ export function StrategyConversationPane({
   </section>
 }
 
-function ConversationMessage({
-  animate,
-  message,
-  searchRun,
-}: {
-  animate: boolean
-  message: Message
-  searchRun?: ResearchRun
-}) {
+function ConversationMessage({ message }: { message: Message }) {
   return <article className={`kanon-message ${message.role}`}>
     <span>{message.role === 'user' ? '我' : message.role === 'assistant' ? 'AI' : '·'}</span>
     <div>
@@ -462,79 +390,18 @@ function ConversationMessage({
       {message.requested_policy?.reasoning_mode === 'deep' || message.requested_policy?.web_search === 'allowed'
         ? <div className="kanon-message-policy" aria-label="本轮实际请求能力">
             {message.requested_policy.reasoning_mode === 'deep' ? <span><BrainCircuit size={11}/>深度思考</span> : null}
-            {message.requested_policy.web_search === 'allowed' ? <span><Globe2 size={11}/>已请求联网搜索</span> : null}
+            {message.requested_policy.web_search === 'allowed' ? <span><Globe2 size={11}/>已联网查证</span> : null}
           </div>
         : null}
       {message.content_blocks?.length
-        ? <div className="kanon-message-blocks">{message.content_blocks.map((block, index) => <MessageBlock
-            animate={animate && message.role === 'assistant'}
-            block={block}
-            key={`${block.type}-${index}`}
-          />)}</div>
-        : animate && message.role === 'assistant'
-          ? <StreamingAssistantText text={message.content}/>
-          : <p>{message.content}</p>}
-      {searchRun ? <ConversationWebSearch run={searchRun}/> : null}
+        ? <div className="kanon-message-blocks">{message.content_blocks.map((block, index) => <MessageBlock block={block} key={`${block.type}-${index}`}/>)}</div>
+        : <p>{message.content}</p>}
     </div>
   </article>
 }
 
-function StreamingAssistantText({ text }: { text: string }) {
-  const characters = useMemo(() => Array.from(text), [text])
-  const [visibleCount, setVisibleCount] = useState(0)
-
-  useEffect(() => {
-    setVisibleCount(0)
-    if (!characters.length) return
-    const chunkSize = Math.max(1, Math.ceil(characters.length / 90))
-    const timer = window.setInterval(() => {
-      setVisibleCount(current => {
-        const next = Math.min(characters.length, current + chunkSize)
-        if (next >= characters.length) window.clearInterval(timer)
-        return next
-      })
-    }, 18)
-    return () => window.clearInterval(timer)
-  }, [characters])
-
-  const complete = visibleCount >= characters.length
-  return <p
-    aria-label={complete ? undefined : 'Strategy 助手正在流式输出'}
-    aria-live="polite"
-    className={complete ? undefined : 'kanon-streaming-text'}
-  >{characters.slice(0, visibleCount).join('')}</p>
-}
-
-function ConversationWebSearch({ run }: { run: ResearchRun }) {
-  if (run.status === 'running') {
-    return <div className="kanon-conversation-web-search running" role="status">
-      <LoaderCircle className="spin" size={13}/><span><b>正在联网搜索</b><small>搜索完成后，Strategy 助手才会基于这些来源回答。</small></span>
-    </div>
-  }
-  if (run.status !== 'succeeded' || !run.artifacts.length) {
-    return <div className="kanon-conversation-web-search unavailable" role="status">
-      <Globe2 size={13}/><span><b>本轮联网搜索未完成</b><small>没有生成无来源回答；可以重试，或关闭联网搜索后重新发送。</small></span>
-    </div>
-  }
-  const artifact = run.artifacts[0]
-  return <div className="kanon-conversation-web-search ready">
-    <div><Globe2 size={13}/><span><b>本轮回答使用的联网证据</b><small>{artifact.title}</small></span></div>
-    <p>{researchPreview(artifact.content)}</p>
-    {artifact.sources.length ? <footer aria-label="联网搜索来源">
-      {artifact.sources.slice(0, 3).map(source => <a href={source.url} key={source.id} rel="noreferrer" target="_blank">
-        {source.title || source.domain}<ArrowUpRight size={10}/>
-      </a>)}
-    </footer> : null}
-  </div>
-}
-
-function researchPreview(content: string) {
-  const normalized = content.replace(/[#*_>`~-]+/g, ' ').replace(/\s+/g, ' ').trim()
-  return normalized.length > 240 ? `${normalized.slice(0, 240)}…` : normalized
-}
-
-function MessageBlock({ animate = false, block }: { animate?: boolean; block: MessageContentBlock }) {
-  if (block.type === 'text') return animate ? <StreamingAssistantText text={block.text}/> : <p>{block.text}</p>
+function MessageBlock({ block }: { block: MessageContentBlock }) {
+  if (block.type === 'text') return <p>{block.text}</p>
   if (block.type === 'document_ref') {
     return <span className="kanon-message-ref" title={`Document ${block.document_id}`}><FileText size={13}/>资料附件 · 来源已锁定</span>
   }

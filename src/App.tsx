@@ -9,7 +9,7 @@ import { StateBoundary } from './components/StateBoundary'
 import { useAuth } from './context/AuthContext'
 import { useProject } from './context/ProjectContext'
 import { systems } from './data/navigation'
-import { projectHomePath, projectManagePath, projectPath, useAppRoute } from './lib/router'
+import { projectHomePath, projectManagePath, projectPath, useAppRoute, videoEditingPath } from './lib/router'
 import type { SystemKey } from './types'
 import { getLatestDeliveryTourRunId } from './components/DeliveryTourPage'
 
@@ -37,6 +37,11 @@ export default function App() {
   }, [currentProject.id, isLoading, navigate, route])
 
   useEffect(() => {
+    if (!route.isLegacyVideoEditingRoute || !route.projectId) return
+    navigate(videoEditingPath(route.projectId, route.contextId), true)
+  }, [navigate, route.contextId, route.isLegacyVideoEditingRoute, route.projectId])
+
+  useEffect(() => {
     if (!route.projectId || route.isHome || route.isProjectHome || route.isProjectManagement || route.isModelSettings) return
     rememberProjectSystemPath(route.projectId, route.systemKey, projectPath(route.projectId, route.systemKey, route.navId, route.objectId, route.view, route.contextId, route.tourRunId, route.tourCase))
   }, [route])
@@ -49,6 +54,10 @@ export default function App() {
   const changeSystem = (next: SystemKey) => navigate(projectPath(activeProjectId, next, systemLanding[next]))
   const openProject = (projectId: string, next?: SystemKey, navId?: string, objectId?: string, view?: string, contextId?: string, tourRunId?: string, tourCase?: string) => {
     selectProject(projectId)
+    if (next === 'creative' && navId === 'video' && view === '素材剪辑') {
+      navigate(videoEditingPath(projectId, contextId))
+      return
+    }
     const rememberedPath = next && !navId ? getRememberedProjectSystemPath(projectId, next) : undefined
     navigate(next ? rememberedPath ?? projectPath(projectId, next, navId ?? systemLanding[next], objectId, view, contextId, tourRunId, tourCase) : projectHomePath(projectId))
   }

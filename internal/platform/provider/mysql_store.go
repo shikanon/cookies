@@ -58,6 +58,9 @@ func (s MySQLStore) Create(ctx context.Context, record JobRecord) (JobRecord, bo
 		record.ExecutionDeadlineAt, record.SubmittedAt, record.ResponseReceivedAt,
 		job.AttemptCount, job.MaxAttempts, job.Version, job.CreatedAt, job.UpdatedAt)
 	if err == nil {
+		if observabilityErr := s.ensureInitialJobObservability(ctx, record); observabilityErr != nil {
+			return JobRecord{}, false, observabilityErr
+		}
 		return record, false, nil
 	}
 	var mysqlError *mysqlDriver.MySQLError
@@ -70,6 +73,9 @@ func (s MySQLStore) Create(ctx context.Context, record JobRecord) (JobRecord, bo
 	}
 	if existing.RequestHash != record.RequestHash {
 		return JobRecord{}, false, ErrIdempotencyConflict
+	}
+	if observabilityErr := s.ensureInitialJobObservability(ctx, existing); observabilityErr != nil {
+		return JobRecord{}, false, observabilityErr
 	}
 	return existing, true, nil
 }
@@ -98,7 +104,96 @@ func (s MySQLStore) Get(ctx context.Context, organizationID contract.Organizatio
 	}
 	record.Outputs = outputs
 	record.Job.ProjectAssetRefs = projectAssetRefs(outputs)
+	if err = s.loadJobObservability(ctx, &record); err != nil {
+		return JobRecord{}, err
+	}
 	return record, nil
+}
+
+func (s MySQLStore) ListJobs(ctx context.Context, filter JobQueryFilter) ([]JobRecord, bool, error) {
+	if s.DB == nil {
+		return nil, false, fmt.Errorf("MySQL database is required")
+	}
+	query := `SELECT
+		id, organization_id, project_id, principal_kind, principal_id, operation_name,
+		idempotency_key, request_hash, kind, model_alias, route_snapshot, source_system, source_task_id,
+		project_context_version, execution_status, provider_status, progress, provider_code, model_version, external_task_id, input_payload,
+		submission_state, adapter_request_id, actual_provider, actual_model, execution_deadline_at, submitted_at, response_received_at,
+		error_code, error_message, retryable, attempt_count, max_attempts, version, created_at, updated_at
+		FROM provider_jobs WHERE organization_id = ? AND project_id = ?`
+	args := []any{filter.OrganizationID, filter.ProjectID}
+	if filter.CreativeOnly {
+		query += ` AND (source_system = 'creative' OR source_system LIKE 'creative.%')`
+	}
+	if len(filter.Statuses) > 0 {
+		query += ` AND provider_status IN (` + strings.TrimSuffix(strings.Repeat("?,", len(filter.Statuses)), ",") + `)`
+		for _, status := range filter.Statuses {
+			args = append(args, status)
+		}
+	}
+	switch filter.MediaKind {
+	case "image":
+		query += ` AND kind LIKE 'provider.image.%'`
+	case "video":
+		query += ` AND kind LIKE 'provider.video.%'`
+	case "":
+	default:
+		query += ` AND 1=0`
+	}
+	if filter.SourceTaskID != "" {
+		query += ` AND source_task_id = ?`
+		args = append(args, filter.SourceTaskID)
+	}
+	if filter.CreatedAfter != nil {
+		query += ` AND created_at >= ?`
+		args = append(args, filter.CreatedAfter.UTC())
+	}
+	if filter.CreatedBefore != nil {
+		query += ` AND created_at < ?`
+		args = append(args, filter.CreatedBefore.UTC())
+	}
+	if value := strings.TrimSpace(filter.Query); value != "" {
+		query += ` AND (id LIKE ? OR error_code = ?)`
+		args = append(args, "%"+value+"%", value)
+	}
+	if filter.BeforeCreated != nil {
+		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+		args = append(args, filter.BeforeCreated.UTC(), filter.BeforeCreated.UTC(), filter.BeforeID)
+	}
+	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	args = append(args, filter.Limit+1)
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	records := make([]JobRecord, 0, filter.Limit+1)
+	for rows.Next() {
+		record, scanErr := scanRecord(rows)
+		if scanErr != nil {
+			return nil, false, scanErr
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := len(records) > filter.Limit
+	if hasMore {
+		records = records[:filter.Limit]
+	}
+	for index := range records {
+		outputs, loadErr := s.loadOutputs(ctx, records[index].Job.ID, records[index].Job.ProjectID)
+		if loadErr != nil {
+			return nil, false, loadErr
+		}
+		records[index].Outputs = outputs
+		records[index].Job.ProjectAssetRefs = projectAssetRefs(outputs)
+		if loadErr = s.loadJobObservability(ctx, &records[index]); loadErr != nil {
+			return nil, false, loadErr
+		}
+	}
+	return records, hasMore, nil
 }
 
 func (s MySQLStore) Update(ctx context.Context, record JobRecord) (JobRecord, error) {
@@ -163,6 +258,9 @@ func (s MySQLStore) Update(ctx context.Context, record JobRecord) (JobRecord, er
 			return JobRecord{}, err
 		}
 	}
+	if err := appendProviderJobEvent(ctx, tx, record); err != nil {
+		return JobRecord{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return JobRecord{}, err
 	}
@@ -192,7 +290,125 @@ func (s MySQLStore) getByIdempotency(ctx context.Context, record JobRecord) (Job
 	}
 	existing.Outputs = outputs
 	existing.Job.ProjectAssetRefs = projectAssetRefs(outputs)
+	if err = s.loadJobObservability(ctx, &existing); err != nil {
+		return JobRecord{}, err
+	}
 	return existing, nil
+}
+
+func (s MySQLStore) ensureInitialJobObservability(ctx context.Context, record JobRecord) error {
+	usage := requestedJobUsage(record)
+	_, err := s.DB.ExecContext(ctx, `INSERT IGNORE INTO provider_job_usage
+		(provider_job_id,organization_id,project_id,unit_kind,requested_units,billed_units,currency,actual_cost_minor,measured_at)
+		VALUES (?,?,?,?,?,0,'CNY',NULL,?)`, record.Job.ID, record.Job.OrganizationID, record.Job.ProjectID, usage.UnitKind, usage.RequestedUnits, record.Job.CreatedAt)
+	if err != nil {
+		return err
+	}
+	event := sanitizeJobEvent(JobEvent{Ordinal: 1, Stage: "queued", SafeMessage: "Provider job persisted before scheduling.", OccurredAt: record.Job.CreatedAt})
+	_, err = s.DB.ExecContext(ctx, `INSERT IGNORE INTO provider_job_events
+		(provider_job_id,organization_id,project_id,ordinal,stage,safe_message,error_code,occurred_at)
+		VALUES (?,?,?,?,?,?,NULL,?)`, record.Job.ID, record.Job.OrganizationID, record.Job.ProjectID, event.Ordinal, event.Stage, event.SafeMessage, event.OccurredAt)
+	return err
+}
+
+func requestedJobUsage(record JobRecord) JobUsage {
+	usage := JobUsage{UnitKind: UsageUnitImageCount, RequestedUnits: 1, Currency: "CNY", MeasuredAt: record.Job.CreatedAt}
+	if record.Operation == videoGenerateOperation {
+		usage.UnitKind = UsageUnitVideoSeconds
+		usage.RequestedUnits = int64(record.VideoInput.DurationSeconds)
+	}
+	return usage
+}
+
+func appendProviderJobEvent(ctx context.Context, tx *sql.Tx, record JobRecord) error {
+	stage := string(record.Job.ProviderStatus)
+	message := providerStageMessage(record.Job.ProviderStatus)
+	errorCode := sql.NullString{}
+	if record.Job.Error != nil {
+		errorCode = sql.NullString{String: boundedSafeToken(record.Job.Error.Code, 128, "PROVIDER_ERROR"), Valid: true}
+	}
+	event := sanitizeJobEvent(JobEvent{Stage: stage, SafeMessage: message, ErrorCode: errorCode.String, OccurredAt: record.Job.UpdatedAt})
+	_, err := tx.ExecContext(ctx, `INSERT INTO provider_job_events
+		(provider_job_id,organization_id,project_id,ordinal,stage,safe_message,error_code,occurred_at)
+		SELECT ?,?,?,COALESCE(MAX(ordinal),0)+1,?,?,?,? FROM provider_job_events WHERE provider_job_id=?`,
+		record.Job.ID, record.Job.OrganizationID, record.Job.ProjectID, event.Stage, event.SafeMessage,
+		sql.NullString{String: event.ErrorCode, Valid: event.ErrorCode != ""}, event.OccurredAt, record.Job.ID)
+	return err
+}
+
+func providerStageMessage(status contract.ProviderJobStatus) string {
+	switch status {
+	case contract.ProviderJobSubmitted:
+		return "Provider job was submitted."
+	case contract.ProviderJobRunning:
+		return "Provider job is running."
+	case contract.ProviderJobOutputsReady:
+		return "Provider outputs are ready for stable asset intake."
+	case contract.ProviderJobIngesting:
+		return "Provider outputs are being ingested as stable assets."
+	case contract.ProviderJobSucceeded:
+		return "Provider job completed with stable asset outputs."
+	case contract.ProviderJobPartiallySucceeded:
+		return "Provider job completed with some failed outputs."
+	case contract.ProviderJobFailed:
+		return "Provider job failed."
+	case contract.ProviderJobCancelled:
+		return "Provider job was cancelled."
+	case contract.ProviderJobExpired:
+		return "Provider job expired."
+	default:
+		return "Provider state changed."
+	}
+}
+
+func (s MySQLStore) loadJobObservability(ctx context.Context, record *JobRecord) error {
+	var usage JobUsage
+	var cost sql.NullInt64
+	err := s.DB.QueryRowContext(ctx, `SELECT unit_kind,requested_units,billed_units,currency,actual_cost_minor,measured_at
+		FROM provider_job_usage WHERE provider_job_id=? AND organization_id=? AND project_id=?`,
+		record.Job.ID, record.Job.OrganizationID, record.Job.ProjectID).Scan(&usage.UnitKind, &usage.RequestedUnits, &usage.BilledUnits, &usage.Currency, &cost, &usage.MeasuredAt)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		if cost.Valid {
+			usage.ActualCostMinor = &cost.Int64
+		}
+		record.Usage = &usage
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT ordinal,stage,safe_message,COALESCE(error_code,''),occurred_at
+		FROM provider_job_events WHERE provider_job_id=? AND organization_id=? AND project_id=? ORDER BY ordinal`,
+		record.Job.ID, record.Job.OrganizationID, record.Job.ProjectID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	record.Events = []JobEvent{}
+	for rows.Next() {
+		var event JobEvent
+		if err := rows.Scan(&event.Ordinal, &event.Stage, &event.SafeMessage, &event.ErrorCode, &event.OccurredAt); err != nil {
+			return err
+		}
+		record.Events = append(record.Events, sanitizeJobEvent(event))
+	}
+	return rows.Err()
+}
+
+func (s MySQLStore) RecordJobUsage(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, jobID string, usage JobUsage) error {
+	if err := usage.Validate(); err != nil {
+		return err
+	}
+	result, err := s.DB.ExecContext(ctx, `UPDATE provider_job_usage SET unit_kind=?,requested_units=?,billed_units=?,currency=?,actual_cost_minor=?,measured_at=?
+		WHERE provider_job_id=? AND organization_id=? AND project_id=?`, usage.UnitKind, usage.RequestedUnits, usage.BilledUnits, usage.Currency,
+		usage.ActualCostMinor, usage.MeasuredAt, jobID, organizationID, projectID)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return ErrJobNotFound
+	}
+	return nil
 }
 
 func projectAssetRefs(outputs []OutputRecord) []contract.ProjectAssetRef {

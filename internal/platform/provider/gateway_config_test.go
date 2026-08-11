@@ -53,3 +53,36 @@ func TestVideoRouteAllowsLongPollingAndVideoSizedResponses(t *testing.T) {
 		t.Fatal("image/text route policy unexpectedly accepted video-sized limits")
 	}
 }
+
+func TestNormalizeTextRouteTransportLimitsPreservesSharedVideoConnection(t *testing.T) {
+	t.Parallel()
+	route := GatewayRouteSnapshot{TimeoutSeconds: 900, MaxResponseBytes: 200 << 20}
+
+	normalizeTextRouteTransportLimits(&route)
+
+	if route.TimeoutSeconds != 600 || route.MaxResponseBytes != 100<<20 {
+		t.Fatalf("normalized text transport limits = %d, %d", route.TimeoutSeconds, route.MaxResponseBytes)
+	}
+}
+
+func TestChatCompletionsEndpointUsesConnectionContract(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		route GatewayRouteSnapshot
+		want  string
+	}{
+		{"ark", GatewayRouteSnapshot{ConnectionType: "ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3"}, "https://ark.cn-beijing.volces.com/api/v3/chat/completions"},
+		{"adapter root", GatewayRouteSnapshot{ConnectionType: "adapter_gateway", BaseURL: "https://gateway.example"}, "https://gateway.example/v1/chat/completions"},
+		{"adapter v1", GatewayRouteSnapshot{ConnectionType: "adapter_gateway", BaseURL: "https://gateway.example/v1/"}, "https://gateway.example/v1/chat/completions"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := test.route.ChatCompletionsEndpoint(); got != test.want {
+				t.Fatalf("ChatCompletionsEndpoint() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

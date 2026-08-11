@@ -53,6 +53,54 @@ test('legacy strategy brand task initializes its workspace through an explicit i
   assert.equal(calls[0].init.method, 'POST')
 })
 
+test('brand film project naming is revision-bound and persists outside draft content', async () => {
+  const originalFetch = globalThis.fetch
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  globalThis.fetch = async (input, init = {}) => {
+    calls.push({ url: String(input), init })
+    return jsonResponse({ id: 'task_1', display_name: '娇兰黄金复原蜜 15 秒广告', version: 9 })
+  }
+  try {
+    await api.renameCreativeTask('project_demo', 'task_1', 8, '娇兰黄金复原蜜 15 秒广告')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.equal(calls[0].url, '/api/creative/v1/projects/project_demo/creative-tasks/task_1/metadata')
+  assert.equal(calls[0].init.method, 'PATCH')
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+    expected_version: 8,
+    display_name: '娇兰黄金复原蜜 15 秒广告',
+  })
+})
+
+test('brand Brief upload hydrates a deduplicated ready document before creating an intake', async () => {
+  const originalFetch = globalThis.fetch
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  const readyDocument = {
+    id: 'knowledgedoc_ready', organization_id: 'org_1', project_id: 'project_demo',
+    title: 'brand.pdf', filename: 'brand.pdf', source_uri: '', source_type: 'docs', chunk_count: 11,
+    content_sha256: 'b'.repeat(64), extracted_text: '', status: 'ready', created_at: '', updated_at: '',
+  }
+  globalThis.fetch = async (input, init = {}) => {
+    calls.push({ url: String(input), init })
+    return jsonResponse(calls.length === 1 ? readyDocument : { ...readyDocument, extracted_text: '已解析的完整品牌 Brief 正文' })
+  }
+  try {
+    const document = await api.uploadKnowledgeDocument(
+      'project_demo',
+      new File(['%PDF-1.7'], 'brand.pdf', { type: 'application/pdf' }),
+    )
+    assert.equal(document.extracted_text, '已解析的完整品牌 Brief 正文')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].url, '/platform/v1/projects/project_demo/knowledge/documents')
+  assert.equal(calls[0].init.method, 'POST')
+  assert.equal(calls[1].url, '/platform/v1/projects/project_demo/knowledge/documents/knowledgedoc_ready')
+  assert.equal(calls[1].init.method, 'GET')
+})
+
 test('manual PDF Brief creates a duration-aware brand intake and one task', async () => {
   const originalFetch = globalThis.fetch
   const calls: Array<{ url: string; init: RequestInit }> = []
@@ -72,6 +120,10 @@ test('manual PDF Brief creates a duration-aware brand intake and one task', asyn
   assert.equal(intakeBody.manual_brand_film.document_id, 'knowledgedoc_1')
   assert.equal(intakeBody.manual_brand_film.brief_text, '完整品牌目标、受众、核心信息与视觉要求。')
   assert.equal(intakeBody.creative_routes[0].target_duration_seconds, 30)
+  assert.equal(
+    new Headers(calls[0].init.headers).get('Idempotency-Key'),
+    'manual-brand-film-knowledgedoc_1-30',
+  )
   assert.equal(calls[1].url, '/api/creative/v1/projects/project_demo/creative-intakes/intake_pdf:create-video-task')
 })
 

@@ -94,7 +94,7 @@ func (s Service) AnalyzeShortDramaV2Source(
 	workspace.FirstFrameBatch = nil
 	workspace.TrustedMaterials = nil
 	workspace.GenerationSpec = nil
-	workspace.LatestVideoAttemptID = ""
+	workspace.LatestVideoAttemptID, workspace.VideoError = "", nil
 	workspace.RawOutputAsset = nil
 	workspace.OutputAsset = nil
 	workspace.OutputNormalization = nil
@@ -156,7 +156,7 @@ func (s Service) GenerateShortDramaV2Directions(
 	updated.FirstFrameBatch = nil
 	updated.TrustedMaterials = nil
 	updated.GenerationSpec = nil
-	updated.LatestVideoAttemptID = ""
+	updated.LatestVideoAttemptID, updated.VideoError = "", nil
 	updated.RawOutputAsset = nil
 	updated.OutputAsset = nil
 	updated.OutputNormalization = nil
@@ -238,7 +238,7 @@ func (s Service) SelectShortDramaV2Direction(
 	updated.FirstFrameBatch = nil
 	updated.TrustedMaterials = nil
 	updated.GenerationSpec = nil
-	updated.LatestVideoAttemptID = ""
+	updated.LatestVideoAttemptID, updated.VideoError = "", nil
 	updated.RawOutputAsset = nil
 	updated.OutputAsset = nil
 	updated.OutputNormalization = nil
@@ -288,7 +288,7 @@ func (s Service) UpdateShortDramaV2Analysis(
 	updated.FirstFrameBatch = nil
 	updated.TrustedMaterials = nil
 	updated.GenerationSpec = nil
-	updated.LatestVideoAttemptID = ""
+	updated.LatestVideoAttemptID, updated.VideoError = "", nil
 	updated.RawOutputAsset = nil
 	updated.OutputAsset = nil
 	updated.OutputNormalization = nil
@@ -361,7 +361,7 @@ func (s Service) UpdateShortDramaV2Prompts(
 	} else {
 		updated.GenerationSpec = nil
 	}
-	updated.LatestVideoAttemptID = ""
+	updated.LatestVideoAttemptID, updated.VideoError = "", nil
 	updated.RawOutputAsset = nil
 	updated.OutputAsset = nil
 	updated.OutputNormalization = nil

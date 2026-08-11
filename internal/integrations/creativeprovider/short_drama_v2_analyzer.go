@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/shikanon/cookies/internal/platform/contract"
+	"github.com/shikanon/cookies/internal/platform/provider"
 	"github.com/shikanon/cookies/internal/systems/creative"
 )
 
@@ -51,37 +53,37 @@ func NewShortDramaV2Analyzer(config ViralAnalyzerConfig) (*ShortDramaV2Analyzer,
 
 func (a *ShortDramaV2Analyzer) Analyze(ctx context.Context, actor contract.ActorContext, project contract.ProjectContext, source contract.ProjectAssetRef) (creative.ShortDramaV2AnalysisResult, error) {
 	if source.ProjectID != project.ProjectID || source.Validate() != nil {
-		return creative.ShortDramaV2AnalysisResult{}, fmt.Errorf("short drama source video is invalid")
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisSourceUnavailable, "source video reference is invalid")
 	}
 	video, _, err := a.config.Assets.OpenPreview(ctx, actor, project.ProjectID, source.AssetVersion)
 	if err != nil {
-		return creative.ShortDramaV2AnalysisResult{}, fmt.Errorf("open short drama source: %w", err)
+		return creative.ShortDramaV2AnalysisResult{}, fmt.Errorf("%w: source video cannot be opened: %v", creative.ErrShortDramaAnalysisSourceUnavailable, err)
 	}
 	defer video.Close()
 	if err := os.MkdirAll(a.config.WorkRoot, 0o750); err != nil {
-		return creative.ShortDramaV2AnalysisResult{}, err
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisPreparationFailed, "temporary workspace cannot be prepared")
 	}
 	workDir, err := os.MkdirTemp(a.config.WorkRoot, "short-drama-v2-*")
 	if err != nil {
-		return creative.ShortDramaV2AnalysisResult{}, err
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisPreparationFailed, "temporary workspace cannot be created")
 	}
 	defer os.RemoveAll(workDir)
 	videoPath := filepath.Join(workDir, "source.mp4")
 	file, err := os.Create(videoPath)
 	if err != nil {
-		return creative.ShortDramaV2AnalysisResult{}, err
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisPreparationFailed, "source video cannot be staged")
 	}
 	if _, err = io.Copy(file, video); err != nil {
 		_ = file.Close()
-		return creative.ShortDramaV2AnalysisResult{}, err
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisPreparationFailed, "source video cannot be staged")
 	}
 	if err := file.Close(); err != nil {
-		return creative.ShortDramaV2AnalysisResult{}, err
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisPreparationFailed, "source video cannot be staged")
 	}
 	transcript, _ := a.helper.extractTranscript(ctx, videoPath, workDir)
 	frames, err := a.extractWholeVideoFrames(ctx, videoPath, workDir)
 	if err != nil || len(frames) == 0 {
-		return creative.ShortDramaV2AnalysisResult{}, fmt.Errorf("extract short drama frames: %w", err)
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisPreparationFailed, "source video frames cannot be extracted")
 	}
 	result, err := a.callModel(ctx, actor, source, transcript, frames)
 	if err != nil {
@@ -126,14 +128,14 @@ func (a *ShortDramaV2Analyzer) extractWholeVideoFrames(ctx context.Context, vide
 func (a *ShortDramaV2Analyzer) callModel(ctx context.Context, actor contract.ActorContext, source contract.ProjectAssetRef, transcript string, frames [][]byte) (creative.ShortDramaV2AnalysisResult, error) {
 	route, err := a.config.Routes.ResolveTextRoute(ctx, actor.OrganizationID, a.config.ModelAlias)
 	if err != nil {
-		return creative.ShortDramaV2AnalysisResult{}, err
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderUnavailable, "model route is unavailable")
 	}
 	if err := route.ValidateTextWithPolicy(a.config.AllowInsecureHTTP); err != nil {
-		return creative.ShortDramaV2AnalysisResult{}, err
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderUnavailable, "model route is invalid")
 	}
 	token, err := a.config.Credentials.ResolveGatewayCredential(ctx, route.CredentialID, route.CredentialVersion)
 	if err != nil {
-		return creative.ShortDramaV2AnalysisResult{}, err
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderUnavailable, "model credential is unavailable")
 	}
 	content := []any{map[string]any{"type": "text", "text": "evidence id=transcript_1，ASR转写：" + transcript}}
 	for index, frame := range frames {
@@ -145,17 +147,15 @@ func (a *ShortDramaV2Analyzer) callModel(ctx context.Context, actor contract.Act
 	payload := map[string]any{"model": route.UpstreamModel, "messages": []any{
 		map[string]any{"role": "system", "content": shortDramaV2AnalysisPrompt},
 		map[string]any{"role": "user", "content": content},
-	}, "temperature": 0.2, "response_format": map[string]any{"type": "json_object"}}
+	}}
+	if err := applyShortDramaTextRouteConstraints(payload, route); err != nil {
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderUnavailable, "model route constraints are invalid")
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return creative.ShortDramaV2AnalysisResult{}, err
 	}
-	endpoint := strings.TrimRight(route.BaseURL, "/")
-	if strings.HasSuffix(endpoint, "/v1") {
-		endpoint += "/chat/completions"
-	} else {
-		endpoint += "/v1/chat/completions"
-	}
+	endpoint := route.ChatCompletionsEndpoint()
 	timeout, cancel := context.WithTimeout(ctx, time.Duration(route.TimeoutSeconds)*time.Second)
 	defer cancel()
 	request, err := http.NewRequestWithContext(timeout, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -164,14 +164,17 @@ func (a *ShortDramaV2Analyzer) callModel(ctx context.Context, actor contract.Act
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/json")
-	response, err := a.config.Client.Do(request)
+	response, err := a.doModelRequestWithRetry(timeout, request, body)
 	if err != nil {
 		return creative.ShortDramaV2AnalysisResult{}, err
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, route.MaxResponseBytes+1))
-	if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
-		return creative.ShortDramaV2AnalysisResult{}, fmt.Errorf("short drama model request failed with status %d", response.StatusCode)
+	if err != nil || int64(len(responseBody)) > route.MaxResponseBytes {
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisResponseInvalid, "model response exceeded the safety limit")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisHTTPFailure(response.StatusCode)
 	}
 	var envelope struct {
 		Choices []struct {
@@ -181,7 +184,7 @@ func (a *ShortDramaV2Analyzer) callModel(ctx context.Context, actor contract.Act
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(responseBody, &envelope); err != nil || len(envelope.Choices) == 0 {
-		return creative.ShortDramaV2AnalysisResult{}, fmt.Errorf("short drama model response is invalid")
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisResponseInvalid, "model response envelope is invalid")
 	}
 	text := strings.TrimSpace(envelope.Choices[0].Message.Content)
 	text = strings.TrimPrefix(text, "```json")
@@ -189,9 +192,91 @@ func (a *ShortDramaV2Analyzer) callModel(ctx context.Context, actor contract.Act
 	text = strings.TrimSuffix(text, "```")
 	var result creative.ShortDramaV2AnalysisResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(text)), &result.Content); err != nil {
-		return creative.ShortDramaV2AnalysisResult{}, fmt.Errorf("decode short drama analysis: %w", err)
+		return creative.ShortDramaV2AnalysisResult{}, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisResponseInvalid, "model response is not the required JSON object")
 	}
 	return result, nil
+}
+
+func applyShortDramaTextRouteConstraints(payload map[string]any, route provider.GatewayRouteSnapshot) error {
+	switch route.TextResponseMode {
+	case provider.TextResponseJSONSchema:
+		// The analyzer validates the complete domain contract after decoding. A
+		// JSON-object response keeps this multimodal request compatible with
+		// gateways that do not accept an inline strict schema for image input.
+		payload["response_format"] = map[string]any{"type": "json_object"}
+	case provider.TextResponseJSONObject:
+		payload["response_format"] = map[string]any{"type": "json_object"}
+	case provider.TextResponsePromptJSON:
+		// The system prompt already contains the exact JSON contract. Do not add
+		// response_format: several OpenAI-compatible multimodal gateways reject it.
+	case "":
+		return fmt.Errorf("text response mode is required")
+	default:
+		return fmt.Errorf("unsupported text response mode %q", route.TextResponseMode)
+	}
+	if route.MaxOutputTokens > 0 {
+		switch route.OutputTokenParameter {
+		case "", provider.TextOutputTokenParameterMaxTokens:
+			payload["max_tokens"] = route.MaxOutputTokens
+		case provider.TextOutputTokenParameterMaxCompletionTokens:
+			payload["max_completion_tokens"] = route.MaxOutputTokens
+		default:
+			return fmt.Errorf("unsupported output token parameter %q", route.OutputTokenParameter)
+		}
+	}
+	if route.TemperatureSet {
+		payload["temperature"] = route.Temperature
+	}
+	return nil
+}
+
+func (a *ShortDramaV2Analyzer) doModelRequestWithRetry(ctx context.Context, template *http.Request, body []byte) (*http.Response, error) {
+	const maxAttempts = 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		request := template.Clone(ctx)
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		response, err := a.config.Client.Do(request)
+		if err == nil && response.StatusCode != http.StatusTooManyRequests && response.StatusCode < http.StatusInternalServerError {
+			return response, nil
+		}
+		if err == nil && attempt == maxAttempts {
+			return response, nil
+		}
+		if response != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+			_ = response.Body.Close()
+		}
+		if err != nil && attempt == maxAttempts {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderUnavailable, "model request timed out")
+			}
+			return nil, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderUnavailable, "model gateway request failed")
+		}
+		delay := time.Duration(attempt*250) * time.Millisecond
+		select {
+		case <-ctx.Done():
+			return nil, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderUnavailable, "model request timed out")
+		case <-time.After(delay):
+		}
+	}
+	return nil, shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderUnavailable, "model gateway request failed")
+}
+
+func shortDramaAnalysisHTTPFailure(status int) error {
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderRejected, "model gateway rejected the credential")
+	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
+		return shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderRejected, "model gateway rejected the multimodal request")
+	case status == http.StatusTooManyRequests || status >= http.StatusInternalServerError:
+		return shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderUnavailable, "model gateway is temporarily unavailable")
+	default:
+		return shortDramaAnalysisFailure(creative.ErrShortDramaAnalysisProviderRejected, "model gateway rejected the request")
+	}
+}
+
+func shortDramaAnalysisFailure(category error, detail string) error {
+	return fmt.Errorf("%w: %s", category, detail)
 }
 
 var _ creative.ShortDramaV2Analyzer = (*ShortDramaV2Analyzer)(nil)

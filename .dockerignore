@@ -1,5 +1,8 @@
 .git
 .data
+.tmp
+tmp
+test-results
 .env
 .env.*
 !.env.example

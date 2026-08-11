@@ -7,6 +7,7 @@ export interface AppRoute {
   isProjectManagement: boolean
   isModelSettings: boolean
   isLegacyProjectSystemRoute: boolean
+  isLegacyVideoEditingRoute?: boolean
   projectId?: string
   systemKey: SystemKey
   navId: string
@@ -20,7 +21,8 @@ export interface AppRoute {
 const systemKeys = new Set<SystemKey>(['strategy', 'creative', 'insight', 'delivery'])
 
 export function parseRoute(location = `${window.location.pathname}${window.location.search}`): AppRoute {
-  const url = new URL(location, window.location.origin)
+  const origin = typeof window === 'undefined' ? 'http://localhost' : window.location.origin
+  const url = new URL(location, origin)
   const parts = url.pathname.split('/').filter(Boolean)
   if (parts[0] === 'settings') return { isHome: false, isProjectHome: false, isProjectManagement: false, isModelSettings: true, isLegacyProjectSystemRoute: false, systemKey: 'strategy', navId: 'tasks' }
   if (parts[0] !== 'projects' || !parts[1]) return { isHome: true, isProjectHome: false, isProjectManagement: false, isModelSettings: false, isLegacyProjectSystemRoute: false, systemKey: 'strategy', navId: 'tasks' }
@@ -36,8 +38,25 @@ export function parseRoute(location = `${window.location.pathname}${window.locat
   if (parts[2] === 'provider-jobs') {
     return { isHome: false, isProjectHome: false, isProjectManagement: false, isModelSettings: false, isLegacyProjectSystemRoute: false, projectId: parts[1], systemKey: 'creative', navId: 'production', view: url.searchParams.get('view') ?? undefined }
   }
+  if (parts[2] === 'creative' && parts[3] === 'video' && parts[4] === 'editing') {
+    return {
+      isHome: false,
+      isProjectHome: false,
+      isProjectManagement: false,
+      isModelSettings: false,
+      isLegacyProjectSystemRoute: false,
+      isLegacyVideoEditingRoute: false,
+      projectId: decodeURIComponent(parts[1]),
+      systemKey: 'creative',
+      navId: 'video',
+      contextId: parts[5] ? decodeURIComponent(parts[5]) : undefined,
+      view: '素材剪辑',
+    }
+  }
   const normalizedSystem = parts[2] === 'insights' ? 'insight' : parts[2]
   const systemKey = systemKeys.has(normalizedSystem as SystemKey) ? normalizedSystem as SystemKey : 'strategy'
+  const view = url.searchParams.get('view') ?? undefined
+  const contextId = url.searchParams.get('context') ?? undefined
   return {
     isHome: false,
     isProjectHome: false,
@@ -48,11 +67,17 @@ export function parseRoute(location = `${window.location.pathname}${window.locat
     systemKey,
     navId: parts[3] || 'tasks',
     objectId: parts[4],
-    contextId: url.searchParams.get('context') ?? undefined,
-    view: url.searchParams.get('view') ?? undefined,
+    contextId,
+    view,
+    isLegacyVideoEditingRoute: systemKey === 'creative' && (parts[3] || 'tasks') === 'video' && view === '素材剪辑',
     tourRunId: url.searchParams.get('tour_run_id') ?? undefined,
     tourCase: url.searchParams.get('tour_case') ?? undefined,
   }
+}
+
+export function videoEditingPath(projectId: string, editTaskId?: string) {
+  const base = `/projects/${encodeURIComponent(projectId)}/creative/video/editing`
+  return editTaskId ? `${base}/${encodeURIComponent(editTaskId)}` : base
 }
 
 function defaultNavForSystem(systemKey: SystemKey) {

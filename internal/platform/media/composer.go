@@ -21,6 +21,12 @@ type VideoSource interface {
 	OpenVideo(context.Context, contract.OrganizationID, contract.ProjectID, contract.AssetVersionRef) (assets.AssetVersion, io.ReadCloser, error)
 }
 
+// VisualSource opens an immutable video or still-image AssetVersion for the
+// multi-layer timeline renderer. The request's clip kind remains authoritative.
+type VisualSource interface {
+	OpenVisual(context.Context, contract.OrganizationID, contract.ProjectID, contract.AssetVersionRef) (assets.AssetVersion, io.ReadCloser, error)
+}
+
 type PreRollCompositionRequest struct {
 	OrganizationID contract.OrganizationID
 	ProjectID      contract.ProjectID

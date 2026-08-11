@@ -14,6 +14,9 @@ const mysqlCommand = process.env.COOKIES_E2E_SKIP_MYSQL_BOOTSTRAP === 'true'
   : process.platform === 'win32'
     ? mysqlBootstrapWindows
     : mysqlBootstrap
+const editorFixtureBootstrap = process.platform === 'win32'
+  ? 'docker build --target verifier -f deployments/render-worker/Dockerfile -t cookies-render-verifier:c7 . && docker run --rm --volume "%CD%:/workspace" --workdir /workspace cookies-render-verifier:c7 sh scripts/generate-video-editor-c0-fixtures.sh .tmp/video-editor-e2e && node scripts/prepare-video-editor-e2e-blobs.mjs'
+  : 'docker build --target verifier -f deployments/render-worker/Dockerfile -t cookies-render-verifier:c7 . && docker run --rm --volume "$(pwd):/workspace" --workdir /workspace cookies-render-verifier:c7 sh scripts/generate-video-editor-c0-fixtures.sh .tmp/video-editor-e2e && node scripts/prepare-video-editor-e2e-blobs.mjs'
 const localChromiumExecutable = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
 const reuseE2EServers = process.env.COOKIES_E2E_REUSE_SERVERS === 'true'
 const apiExecutable = process.platform === 'win32'
@@ -66,7 +69,7 @@ const localGoEnv = {
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /(platform-go-demo|strategy-brand-video-foundation|delivery-plan-preflight|delivery-approval-content-hash|delivery-execution-scenarios|delivery-monitoring-alerts|delivery-three-tier|delivery-mock-tour)\.spec\.ts/,
+  testMatch: /(platform-go-demo|strategy-brand-video-foundation|delivery-plan-preflight|delivery-approval-content-hash|delivery-execution-scenarios|delivery-monitoring-alerts|delivery-three-tier|delivery-mock-tour|video-editor-phase1)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   use: {
@@ -75,14 +78,14 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `${mysqlCommand} && go run ./cmd/cookies-migrate && go run ./cmd/cookies-seed && node -e "require('fs').mkdirSync('.cache/runtime',{recursive:true})" && go build -o "${apiExecutable}" ./cmd/cookies-api && ${runApiExecutable}`,
+      command: `${mysqlCommand} && ${editorFixtureBootstrap} && go run ./cmd/cookies-migrate && go run ./cmd/cookies-seed && node -e "require('fs').mkdirSync('.cache/runtime',{recursive:true})" && go build -o "${apiExecutable}" ./cmd/cookies-api && ${runApiExecutable}`,
       url: `${apiBaseURL}/healthz`,
       env: {
         ...process.env,
         ...localGoEnv,
       },
       reuseExistingServer: reuseE2EServers,
-      timeout: 120_000,
+      timeout: 300_000,
     },
     {
       command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${webPort}`,

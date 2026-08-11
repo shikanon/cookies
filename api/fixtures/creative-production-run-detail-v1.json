@@ -1,0 +1,97 @@
+{
+  "contract_version": "creative-production-run-detail/v1",
+  "summary": {
+    "ref": {"source": "editing_render", "id": "editing_render_01"},
+    "project_id": "project_01",
+    "media_kind": "render",
+    "operation_kind": "creative.editing.render",
+    "source_task": {
+      "system": "creative",
+      "object_type": "edit_task",
+      "object_id": "edit_task_01",
+      "display_name": "夏季产品视频剪辑"
+    },
+    "normalized_status": "failed",
+    "native_status": {
+      "family": "editing_render",
+      "execution_status": null,
+      "provider_status": null,
+      "render_status": "failed"
+    },
+    "progress_percent": 35,
+    "model": null,
+    "output_count": 0,
+    "cost": {
+      "availability": "unavailable",
+      "currency": "CNY",
+      "amount_minor": null,
+      "unavailable_reason": "Editing render actual cost is not metered."
+    },
+    "error": {
+      "code": "SCHEDULER_ENQUEUE_FAILED",
+      "message": "The render scheduler did not accept the durable job.",
+      "retryable": true
+    },
+    "actions": {"retry": true, "open_source": true},
+    "created_at": "2026-08-11T09:00:00Z",
+    "updated_at": "2026-08-11T09:00:02Z"
+  },
+  "input_assets": [
+    {
+      "asset_ref": {"asset_id": "asset_input_01", "version": 3},
+      "role": "input",
+      "media_kind": "video",
+      "display_name": "主视频",
+      "availability": "ready",
+      "mime_type": "video/mp4",
+      "width_pixels": 1080,
+      "height_pixels": 1920,
+      "duration_ms": 15000,
+      "preview_url": "/platform/v1/projects/project_01/assets/asset_input_01/versions/3/preview",
+      "preview_expires_at": "2026-08-11T09:10:00Z"
+    }
+  ],
+  "output_assets": [],
+  "parameters": {
+    "render_kind": "export",
+    "target_format": "mp4",
+    "target_quality": "final"
+  },
+  "prompt_ref": null,
+  "attempt": {
+    "attempt_count": 1,
+    "max_attempts": 3,
+    "retry_of": null
+  },
+  "retry_chain": [],
+  "run_events": [
+    {
+      "ordinal": 1,
+      "stage": "queued",
+      "safe_message": "Render job persisted before scheduling.",
+      "error_code": null,
+      "occurred_at": "2026-08-11T09:00:00Z"
+    },
+    {
+      "ordinal": 2,
+      "stage": "failed",
+      "safe_message": "Scheduler enqueue failed; the durable job was compensated to failed.",
+      "error_code": "SCHEDULER_ENQUEUE_FAILED",
+      "occurred_at": "2026-08-11T09:00:02Z"
+    }
+  ],
+  "lineage": {
+    "source_task": {
+      "system": "creative",
+      "object_type": "edit_task",
+      "object_id": "edit_task_01",
+      "display_name": "夏季产品视频剪辑"
+    },
+    "input_asset_refs": [{"asset_id": "asset_input_01", "version": 3}],
+    "output_asset_refs": []
+  },
+  "source_health": [
+    {"source": "editing_render", "status": "available", "message": null},
+    {"source": "assets", "status": "available", "message": null}
+  ]
+}

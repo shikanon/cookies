@@ -109,12 +109,7 @@ func (a *AdapterGatewayVisionAdapter) UnderstandVision(ctx context.Context, requ
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, time.Duration(route.TimeoutSeconds)*time.Second)
 	defer cancel()
-	endpoint := strings.TrimRight(route.BaseURL, "/")
-	if strings.HasSuffix(endpoint, "/v1") {
-		endpoint += "/chat/completions"
-	} else {
-		endpoint += "/v1/chat/completions"
-	}
+	endpoint := route.ChatCompletionsEndpoint()
 	httpRequest, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return SynchronousResult{}, err

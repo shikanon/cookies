@@ -58,17 +58,10 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
 
-  const projectContextBlockers = briefVersion?.full_strategy_readiness?.blockers.filter(blocker =>
-    blocker.field.startsWith('project.'),
-  ) ?? []
-
   const activePlan = plans.find(plan => plan.id === activePlanId) ?? null
   const selectedProfile = profiles.find(profile =>
     profile.business_code === (activePlan?.business_code || selectedCode),
   ) ?? activePlan?.profile ?? null
-  const activeCapability = capabilities.find(item => item.business_code === activePlan?.business_code)
-  const isDirectBrandPlan = activePlan?.business_code === 'brand_video' && !activePlan.current_strategy
-  const showPlannerSetup = !activePlan || showSetup || (!activePlan.current_strategy && !isDirectBrandPlan)
   const recommendedCodes = useMemo(
     () => new Set(recommendation?.recommended.map(item => item.business_code) ?? []),
     [recommendation],
@@ -107,10 +100,10 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
   ].map(routeIssueMessage)))
   const routeState = !strategyPackage
     ? {
-        title: '策略还没有提交给创意',
+        title: '当前策略尚未发布交接包',
         detail: draft?.status === 'approved'
-          ? '当前策略版本已确认，但尚未生成创意可读取的策略包。请发布当前版本；如果刚刚发布，可刷新后重试。'
-          : '请先在“评审”中确认并发布当前策略版本，发布后才能创建品牌广告任务。',
+          ? '未找到与当前 Strategy Revision 精确匹配的已发布策略包，请刷新后重试。'
+          : '请先在“评审”中确认当前 Revision，发布后才能创建强绑定任务计划。',
       }
     : !creativeHandoff?.routes.length
       ? {
@@ -129,7 +122,7 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
       ? '等待可用创作路线'
       : '确认此业务并创建任务计划'
   const routeRevision = draft?.revision
-    ? createRouteRevisionChannelStrategy(draft.revision.document.channel_strategy, selectedCode)
+    ? createRouteRevisionChannelStrategy(draft.revision.document.channel_strategy)
     : null
   const hasUnsavedAnswers = Boolean(activePlan && selectedProfile && selectedProfile.questions.some(question => {
     if (question.brief_source_path &&
@@ -205,7 +198,6 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
     setActivePlanId(plan.id)
     setSelectedCode(plan.business_code)
     setAnswers(plan.answers)
-    setShowSetup(false)
     setError('')
   }
 
@@ -335,7 +327,7 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
   }
 
   const handoff = async (plan: CreativeTaskPlan, capability: CreativeBusinessCapability) => {
-    if (capability.status !== 'available' ||
+    if (!plan.current_strategy || capability.status !== 'available' ||
       !capability.destination_area || !capability.destination_view) return
     setBusy('handoff')
     setError('')
@@ -343,7 +335,7 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
       const intake = await strategyApi.handoffCreativeTaskStrategy(
         projectId,
         plan,
-        `strategy-handoff-${plan.id}-${plan.current_strategy?.version ?? `base-${plan.current_revision}`}`,
+        `task-strategy-handoff-${plan.id}-${plan.current_strategy.version}`,
       )
       if (intake.status !== 'ready') {
         const missing = intake.missing_fields?.map(field => {
@@ -360,9 +352,6 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
       }
       let destinationId = intake.id
       if (capability.can_create_task_immediately && capability.format === 'image_text') {
-        if (!plan.current_strategy) {
-          throw new Error('图文任务仍需先生成任务级策略；品牌广告可直接使用已冻结策略包与路线交接。')
-        }
         const angle = plan.current_strategy.document.business_strategy.content_angle
         const task = await strategyApi.createImageTextTaskFromHandoff(
           projectId,
@@ -399,33 +388,12 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
     </section>
   }
 
-  if (projectContextBlockers.length) {
-    return <section className="creative-task-planner creative-context-blocked">
-      <header className="creative-planner-heading">
-        <div>
-          <span className="section-label">PROJECT CONTEXT GATE</span>
-          <h2>这份 Brief 不属于当前 Project，已停止创意交接</h2>
-          <p>系统不会再把娇兰策略带入其他品牌或产品的创意任务。请切换到正确 Project 后重新建立工作链。</p>
-        </div>
-        <ShieldCheck size={22}/>
-      </header>
-      <div className="creative-context-blocker" role="alert">
-        <AlertCircle size={22}/>
-        <div><b>发现 {projectContextBlockers.length} 项业务上下文冲突</b>
-          <ul>{projectContextBlockers.map(blocker => <li key={blocker.field}>{blocker.reason}</li>)}</ul>
-          <small>已发布的历史策略包继续保留用于审计，但不能创建新计划、CreativeIntake 或品牌视频任务。</small>
-        </div>
-        <button className="primary-button" onClick={onOpenStrategy} type="button">返回策略查看修复建议</button>
-      </div>
-    </section>
-  }
-
   return <section className="creative-task-planner">
     <header className="creative-planner-heading">
       <div>
         <span className="section-label">CREATIVE TASK STRATEGY</span>
-        <h2>选择业务，确认路线，再交接创作</h2>
-        <p>推荐是辅助，不是限制。品牌广告可从已审批策略包直接交接；任务级策略仅在确有增量约束时按需生成，不代替 Creative 写脚本或分镜。</p>
+        <h2>选择业务，再生成可执行前的任务策略</h2>
+        <p>推荐是辅助，不是限制。你可以选择任意可用业务；Strategy 只输出方向、变量和约束，不代替 Creative 写脚本或分镜。</p>
       </div>
       <button className="icon-button" aria-label="刷新创意任务策略" disabled={Boolean(busy)} onClick={() => void load()}>
         <RefreshCw size={15}/>
@@ -434,22 +402,10 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
 
     {error ? <div className="kanon-strategy-alert" role="alert"><AlertCircle size={15}/><span>{error}</span></div> : null}
 
-    {isDirectBrandPlan && activePlan && selectedProfile
-      ? <BaseBrandHandoff
-        busy={busy === 'handoff'}
-        capability={activeCapability}
-        handoff={creativeHandoff}
-        onHandoff={handoff}
-        onRepair={onOpenStrategy}
-        plan={activePlan}
-        profile={selectedProfile}
-      />
-      : null}
-
     {activePlan?.current_strategy && selectedProfile
       ? <StrategyResult
         busy={busy === 'handoff'}
-        capability={activeCapability}
+        capability={capabilities.find(item => item.business_code === activePlan.business_code)}
         handoff={creativeHandoff}
         onHandoff={handoff}
         onRepair={onOpenStrategy}
@@ -458,21 +414,17 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
       />
       : null}
 
-    {activePlan?.current_strategy || isDirectBrandPlan ? <button
+    {activePlan?.current_strategy ? <button
       aria-expanded={showSetup}
       className="creative-setup-toggle"
       onClick={() => setShowSetup(value => !value)}
       type="button"
     >
-      <span><b>{showSetup
-        ? isDirectBrandPlan ? '收起高级任务调整' : '收起任务策略设置'
-        : isDirectBrandPlan ? '需要任务级调整？（可选）' : '需要调整业务或任务输入？'}</b><small>{isDirectBrandPlan
-        ? '默认可直接交接；仅在确有任务级差异时补充问题并生成 Overlay。'
-        : '当前结果已冻结；修改会创建新的计划或版本。'}</small></span>
+      <span><b>{showSetup ? '收起任务策略设置' : '需要调整业务或任务输入？'}</b><small>当前结果已冻结；修改会创建新的计划或版本。</small></span>
       <ChevronRight className={showSetup ? 'expanded' : ''} size={15}/>
     </button> : null}
 
-    {showPlannerSetup ? <>
+    {!activePlan?.current_strategy || showSetup ? <>
     <div className="creative-planner-layout">
       <div className="creative-business-picker">
         <div className="creative-planner-section-title">
@@ -552,9 +504,7 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
 
     {activePlan && selectedProfile ? <div className="creative-plan-workbench">
       <div className="creative-planner-section-title">
-        <div><b>{isDirectBrandPlan ? '02 高级任务调整（可选）' : '02 补充业务增量问题'}</b><small>{isDirectBrandPlan
-          ? '只有当前品牌任务确有特殊差异时才需要补充；Brief 已有信息不重复询问'
-          : 'Brief 已有信息只读展示，不重复询问'}</small></div>
+        <div><b>02 补充业务增量问题</b><small>Brief 已有信息只读展示，不重复询问</small></div>
         <span className={activePlan.completeness.ready ? 'ready' : 'blocked'}>
           {activePlan.completeness.ready ? '可以生成' : `${activePlan.completeness.blockers.length} 项待补`}
         </span>
@@ -597,7 +547,7 @@ export function CreativeTaskPlanner({ briefVersion, draft, onCreateRouteRevision
           {busy === 'save' ? '保存中…' : '保存并重新校验'}
         </button>
         <button className="primary-button" disabled={!activePlan.completeness.ready || hasUnsavedAnswers || Boolean(busy) || activePlan.status === 'generated'} onClick={() => void generate()}>
-          {busy === 'generate' ? <><LoaderCircle className="spin" size={15}/>生成中…</> : activePlan.status === 'generated' ? '已生成' : isDirectBrandPlan ? '生成可选任务策略' : '生成任务策略'}
+          {busy === 'generate' ? <><LoaderCircle className="spin" size={15}/>生成中…</> : activePlan.status === 'generated' ? '已生成' : '生成任务策略'}
         </button>
       </div>
     </div> : null}
@@ -766,76 +716,6 @@ function SelectedBusinessPreview({ profile, recommendation }: {
   </section>
 }
 
-function BaseBrandHandoff({ busy, capability, handoff, onHandoff, onRepair, plan, profile }: {
-  busy: boolean
-  capability?: CreativeBusinessCapability
-  handoff: StrategyCreativeHandoff | null
-  onHandoff: (plan: CreativeTaskPlan, capability: CreativeBusinessCapability) => Promise<void>
-  onRepair: () => void
-  plan: CreativeTaskPlan
-  profile: CreativeBusinessProfile
-}) {
-  const hasFrozenLineage = plan.contract_version === 'strategy-creative-task-plan/v2' &&
-    Boolean(plan.package_ref && plan.handoff_ref && plan.selected_route_id)
-  const selectedRoute = handoff?.routes.find(route => route.route_id === plan.selected_route_id)
-  const hardBlockers = handoffHardBlockers(handoff, plan.selected_route_id ?? '')
-  const contextWarnings = handoff?.upstream_readiness.blockers?.filter(handoffIssueIsOptionalContext) ?? []
-  const routeReady = selectedRoute?.route_readiness.status === 'ready'
-  const handoffAvailable = capability?.status === 'available' &&
-    Boolean(capability.destination_area && capability.destination_view) &&
-    hasFrozenLineage && routeReady && !hardBlockers.length
-  const handoffLimitation = !hasFrozenLineage
-    ? '历史 v1 计划没有冻结交接血缘；请新建业务选择并创建 v2 任务计划。'
-    : hardBlockers[0]
-      ? routeIssueMessage(hardBlockers[0])
-      : !routeReady
-        ? '当前品牌路线尚未就绪，请回到策略补齐路线条件。'
-        : capability?.limitation || '品牌广告工作台当前不可用。'
-
-  return <div className="creative-strategy-result creative-base-handoff">
-    <div className="creative-result-heading">
-      <div>
-        <span className="section-label">STRATEGY → BRAND INTAKE</span>
-        <b>{handoffAvailable ? '品牌策略输入已就绪，可直接进入创作' : '品牌策略交接仍有阻断项'}</b>
-        <small>{profile.display_name} · 已审批策略包 · 已冻结创作路线</small>
-      </div>
-      <div>
-        {hasFrozenLineage ? <span className="creative-result-status"><ShieldCheck size={13}/>血缘已冻结</span> : null}
-        <button
-          className="primary-button"
-          disabled={busy || !handoffAvailable}
-          onClick={() => capability && void onHandoff(plan, capability)}
-          title={handoffAvailable ? '创建品牌 CreativeIntake 并进入品牌广告工作台' : handoffLimitation}
-        >
-          {busy ? <LoaderCircle className="spin" size={14}/> : <Rocket size={14}/>}
-          {busy ? '正在交接…' : handoffAvailable ? '交接到品牌广告' : '先修复交接条件'}
-        </button>
-      </div>
-    </div>
-    <div className={`creative-handoff-status ${handoffAvailable ? 'available' : 'unavailable'}`}>
-      <div>
-        <b>{handoffAvailable ? '无需先填增量表或生成任务策略' : '暂时无法创建品牌广告输入'}</b>
-        <span>{handoffAvailable
-          ? '只交接目标、受众、核心信息、约束和 Route；不替 Creative 编造 CTA、创意概念或视觉关键词。'
-          : handoffLimitation}</span>
-      </div>
-      {!handoffAvailable && hasFrozenLineage
-        ? <button className="text-button" onClick={onRepair} type="button">回到策略修复</button>
-        : <small>任务级差异可在下方“高级任务调整”中按需补充</small>}
-    </div>
-    {handoffAvailable && contextWarnings.length ? <div className="creative-context-warning" role="status">
-      <CircleHelp size={14}/><span><b>可继续，不强迫补表</b><small>{contextWarnings
-        .map(issue => routeIssueMessage(issue).replace(/[。；]+$/, ''))
-        .join('；')}。需要时在创作前确认。</small></span>
-    </div> : null}
-    {selectedRoute ? <div className="creative-strategy-summary">
-      <article><span>冻结路线</span><b>{creativeRouteLabel(selectedRoute)}</b></article>
-      <article><span>进入品牌广告后</span><b>先选品牌方向，再确认生产任务</b></article>
-      <article><span>Creative 保留决策</span><b>多渠道取舍、CTA、创意概念、视觉语言</b></article>
-    </div> : null}
-  </div>
-}
-
 function StrategyResult({ busy, capability, handoff, onHandoff, onRepair, plan, profile }: {
   busy: boolean
   capability?: CreativeBusinessCapability
@@ -849,7 +729,7 @@ function StrategyResult({ busy, capability, handoff, onHandoff, onRepair, plan, 
   if (!strategy) return null
   const document = strategy.document
   const hasFrozenLineage = plan.contract_version === 'strategy-creative-task-plan/v2' &&
-    Boolean(plan.package_ref && plan.handoff_ref && plan.selected_route_id)
+    Boolean(plan.package_ref && plan.handoff_ref && plan.selected_route_id && strategy.task_overlay_ref)
   const selectedRoute = handoff?.routes.find(route => route.route_id === plan.selected_route_id)
   const hardBlockers = handoffHardBlockers(handoff, plan.selected_route_id ?? '')
   const contextWarnings = handoff?.upstream_readiness.blockers?.filter(handoffIssueIsOptionalContext) ?? []
@@ -876,9 +756,7 @@ function StrategyResult({ busy, capability, handoff, onHandoff, onRepair, plan, 
             : handoffLimitation}
         >
           {busy ? <LoaderCircle className="spin" size={14}/> : <Rocket size={14}/>}
-          {handoffAvailable
-            ? profile.business_code === 'brand_video' ? '交接到品牌广告' : '进入创意创作'
-            : hasFrozenLineage ? '先修复交接条件' : '需新建 v2 计划'}
+          {handoffAvailable ? '进入创意创作' : hasFrozenLineage ? '先修复交接条件' : '需新建 v2 计划'}
         </button>
         <a className="secondary-button" download href={`/api/strategy/v1/creative-task-plans/${encodeURIComponent(plan.id)}/strategy-versions/${strategy.version}/export.md`}>
           <Download size={14}/>导出 Markdown

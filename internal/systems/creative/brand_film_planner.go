@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +21,118 @@ const (
 
 type BrandFilmTextGenerator interface {
 	GenerateText(context.Context, provider.TextGenerateRequest) (provider.SynchronousResponse, error)
+}
+
+var brandFilmHashtagProductPattern = regexp.MustCompile(`#\s*([^#\r\n]{2,48}?)\s*#`)
+
+func reconcileBriefProductAssets(briefText string, candidates []BrandBriefAssetCandidate) []BrandBriefAssetCandidate {
+	productNames := briefProductNames(briefText)
+	if len(productNames) == 0 {
+		return candidates
+	}
+	products := make([]BrandBriefAssetCandidate, 0, len(productNames))
+	nonProducts := make([]BrandBriefAssetCandidate, 0, len(candidates))
+	available := make([]BrandBriefAssetCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Role == "product_front" {
+			available = append(available, candidate)
+		} else {
+			nonProducts = append(nonProducts, candidate)
+		}
+	}
+	used := make([]bool, len(available))
+	for index, name := range productNames {
+		matched := -1
+		for candidateIndex, candidate := range available {
+			if used[candidateIndex] || isGenericBrandProductLabel(candidate.Label) {
+				continue
+			}
+			label := strings.TrimSpace(candidate.Label)
+			if strings.Contains(label, name) || strings.Contains(name, label) {
+				matched = candidateIndex
+				break
+			}
+		}
+		if matched < 0 {
+			for candidateIndex, candidate := range available {
+				if !used[candidateIndex] && isGenericBrandProductLabel(candidate.Label) {
+					matched = candidateIndex
+					break
+				}
+			}
+		}
+		candidate := BrandBriefAssetCandidate{
+			ID: fmt.Sprintf("asset_product_front_%02d", index+1), Role: "product_front", Label: name,
+			SourceLocator: fmt.Sprintf("brief://products/%02d", index+1), RightsStatus: "needs_confirmation",
+		}
+		if matched >= 0 {
+			candidate = available[matched]
+			used[matched] = true
+			candidate.Label = name
+			if candidate.ID == "" || (isGenericBrandProductLabel(available[matched].Label) && index > 0) {
+				candidate.ID = fmt.Sprintf("asset_product_front_%02d", index+1)
+			}
+			if index > 0 && isGenericBrandProductLabel(available[matched].Label) {
+				candidate.AssetRef, candidate.FixtureURI = nil, ""
+				candidate.UserConfirmed, candidate.RightsStatus = false, "needs_confirmation"
+			}
+		}
+		products = append(products, candidate)
+	}
+	return append(products, nonProducts...)
+}
+
+func briefProductNames(briefText string) []string {
+	names := make([]string, 0, 4)
+	add := func(value string) {
+		value = strings.TrimSpace(strings.Trim(value, "#：:，,。.;；【】[]（）()"))
+		if !looksLikeBrandProductName(value) {
+			return
+		}
+		identity := normalizeBrandProductIdentity(value)
+		for _, current := range names {
+			if normalizeBrandProductIdentity(current) == identity {
+				return
+			}
+		}
+		names = append(names, value)
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(briefText, "\r\n", "\n"), "\n") {
+		matches := brandFilmHashtagProductPattern.FindAllStringSubmatch(line, -1)
+		if len(matches) == 0 {
+			if strings.Contains(line, "娇兰") {
+				add(line)
+			}
+			continue
+		}
+		for _, match := range matches {
+			add(match[1])
+		}
+	}
+	return names
+}
+
+func looksLikeBrandProductName(value string) bool {
+	if value == "" || len([]rune(value)) > 20 || strings.ContainsAny(value, " \t，,。.;；：:、“”'‘’/") {
+		return false
+	}
+	for _, keyword := range []string{"蜜", "水", "精华", "面霜", "乳霜", "粉底", "口红", "唇膏", "香水", "眼霜", "面膜", "套组"} {
+		if strings.Contains(value, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeBrandProductIdentity(value string) string {
+	value = strings.ReplaceAll(strings.ReplaceAll(value, " ", ""), "\t", "")
+	value = strings.TrimPrefix(value, "法国娇兰")
+	return strings.TrimPrefix(value, "娇兰")
+}
+
+func isGenericBrandProductLabel(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "" || value == "商品正面图" || value == "产品正面图" || value == "商品参考图"
 }
 
 type BrandFilmPlanner interface {
@@ -233,8 +346,8 @@ func (p ModelBrandFilmPlanner) AnalyzeBrief(ctx context.Context, actor contract.
 		Actor: brandPlannerActor(actor), Project: project, ModelAlias: p.ModelAlias,
 		InvocationKey: contract.IdempotencyKey(fmt.Sprintf("brand-brief-%s-%d", brandFilmSourceInvocationToken(source), revision)),
 		Messages: []provider.TextMessage{
-			{Role: provider.TextRoleSystem, Content: "你是品牌广告 Brief 分析师。只分析输入中明确出现的品牌与产品，不混入其他项目。只输出 JSON。事实必须保留 locator；不确定功效标记 needs_confirmation。"},
-			{Role: provider.TextRoleUser, Content: "请提炼摘要、受众、核心信息、卖点、必须项、禁用项、图片/视频要求、统一口播方向和不确定项。INPUT=" + string(raw)},
+			{Role: provider.TextRoleSystem, Content: "你是品牌广告 Brief 分析师。只分析输入中明确出现的品牌与产品，不混入其他项目。只输出 JSON。事实必须保留 locator；不确定功效标记 needs_confirmation。每个明确出现的商品必须建立一条独立 product_front 素材候选，label 使用完整商品名；品牌 Logo 单独建立一条 logo 候选。不得把多个商品合并成‘商品正面图’。"},
+			{Role: provider.TextRoleUser, Content: "请提炼摘要、受众、核心信息、卖点、必须项、禁用项、图片/视频要求、统一口播方向和不确定项，并逐个列出 Brief 中出现的商品素材候选与品牌 Logo。INPUT=" + string(raw)},
 		}, OutputJSONSchema: brandBriefAnalysisSchema,
 	})
 	if err != nil {
@@ -247,13 +360,41 @@ func (p ModelBrandFilmPlanner) AnalyzeBrief(ctx context.Context, actor contract.
 	value.Revision, value.Confirmed, value.ConfirmedAt = revision, false, nil
 	value.ModelAlias, value.ModelVersion, value.RouteRevisionID = p.ModelAlias, response.ModelVersion, response.RouteRevisionID
 	value.PromptVersion, value.CreatedAt = brandBriefPromptVersion, now
-	if len(value.AssetCandidates) == 0 && len(source.AssetCandidates) > 0 {
+	if len(value.AssetCandidates) > 0 {
+		value.AssetCandidates = mergeKnownBrandAssets(value.AssetCandidates, source.AssetCandidates)
+	} else if len(source.AssetCandidates) > 0 {
 		value.AssetCandidates = append([]BrandBriefAssetCandidate{}, source.AssetCandidates...)
-	} else if len(value.AssetCandidates) == 0 {
+	} else {
 		fallback, _ := (DeterministicBrandFilmPlanner{}).AnalyzeBrief(ctx, actor, project, source, revision, now)
 		value.AssetCandidates = fallback.AssetCandidates
 	}
 	return value, value.Validate()
+}
+
+func mergeKnownBrandAssets(generated, known []BrandBriefAssetCandidate) []BrandBriefAssetCandidate {
+	merged := append([]BrandBriefAssetCandidate{}, generated...)
+	for _, asset := range known {
+		if asset.AssetRef == nil && strings.TrimSpace(asset.FixtureURI) == "" {
+			continue
+		}
+		matched := -1
+		for index := range merged {
+			if merged[index].Role == asset.Role && merged[index].AssetRef == nil && strings.TrimSpace(merged[index].FixtureURI) == "" {
+				matched = index
+				break
+			}
+		}
+		if matched < 0 {
+			merged = append(merged, asset)
+			continue
+		}
+		label := strings.TrimSpace(merged[matched].Label)
+		merged[matched] = asset
+		if label != "" {
+			merged[matched].Label = label
+		}
+	}
+	return merged
 }
 
 func (p ModelBrandFilmPlanner) GenerateConcepts(ctx context.Context, actor contract.ActorContext, project contract.ProjectContext, source BrandFilmSourceSnapshot, analysis BrandBriefAnalysisVersion, revision int64, now time.Time) (BrandCreativeConceptSet, error) {
@@ -329,12 +470,14 @@ func decodeBrandStructured(response provider.SynchronousResponse, target any) er
 
 var brandBriefAnalysisSchema = json.RawMessage(`{
   "type":"object","additionalProperties":false,
-  "required":["summary","audience","core_message","selling_points","mandatory_elements","prohibited_claims","image_requirements","video_requirements","voice_direction","uncertainties"],
+  "required":["summary","audience","core_message","selling_points","mandatory_elements","prohibited_claims","image_requirements","video_requirements","voice_direction","asset_candidates","uncertainties"],
   "properties":{
     "summary":{"type":"string"},"audience":{"type":"string"},"core_message":{"type":"string"},
     "selling_points":{"type":"array","minItems":3,"items":{"type":"object","additionalProperties":false,"required":["text","locator","confidence","status"],"properties":{"text":{"type":"string"},"locator":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"status":{"enum":["brief_fact","needs_confirmation"]}}}},
     "mandatory_elements":{"type":"array","minItems":1,"items":{"type":"string"}},"prohibited_claims":{"type":"array","minItems":1,"items":{"type":"string"}},
-    "image_requirements":{"type":"array","items":{"type":"string"}},"video_requirements":{"type":"array","items":{"type":"string"}},"voice_direction":{"type":"string"},"uncertainties":{"type":"array","items":{"type":"string"}}
+    "image_requirements":{"type":"array","items":{"type":"string"}},"video_requirements":{"type":"array","items":{"type":"string"}},"voice_direction":{"type":"string"},
+    "asset_candidates":{"type":"array","minItems":2,"items":{"type":"object","additionalProperties":false,"required":["id","role","label","source_locator","rights_status","user_confirmed"],"properties":{"id":{"type":"string"},"role":{"enum":["product_front","logo"]},"label":{"type":"string"},"source_locator":{"type":"string"},"rights_status":{"const":"needs_confirmation"},"user_confirmed":{"const":false}}}},
+    "uncertainties":{"type":"array","items":{"type":"string"}}
   }
 }`)
 

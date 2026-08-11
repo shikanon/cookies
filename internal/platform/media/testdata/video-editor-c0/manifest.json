@@ -1,0 +1,44 @@
+{
+  "schema_version": "cookies/video-editor-c0-fixtures/v1",
+  "generator": {
+    "image": "cookies-render-verifier:c0",
+    "ffmpeg_package": "8.1.2-r0",
+    "font_package": "font-noto-cjk-0_git20220127-r1"
+  },
+  "rights": {
+    "owner": "cookies project",
+    "basis": "deterministically generated test signals and shapes",
+    "allowed_uses": ["development", "automated-testing", "ci"],
+    "third_party_media": false
+  },
+  "output_profile": {
+    "width": 720,
+    "height": 1280,
+    "frame_rate": 30,
+    "sample_rate": 48000,
+    "video_codec": "h264",
+    "audio_codec": "aac"
+  },
+  "assets": [
+    {"id":"video-a","role":"preroll","file":"video-a.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"9cbd8713173a3da8cda0bc8a48ddcc0e8314f0711325accfde4221d998c111f0"},
+    {"id":"video-b","role":"original","file":"video-b.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"a416b9d8a6bd2a94e31e9abbde80cc8e037a3ad1978f4ef13aa96703e66e69d9"},
+    {"id":"video-landscape","role":"landscape-original","file":"video-landscape.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"766ada53077bf6ba20e217b718a8aab6edf9ae79ae42b861df7c92a2b8a61c08"},
+    {"id":"video-original-audio","role":"original-with-audio","file":"video-original-audio.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"2a75bd991d4a6ebaf440c5ed256b43d9902940739dab9a9aee6c910b7260b88c"},
+    {"id":"overlay-opaque","role":"image","file":"overlay-opaque.png","mime_type":"image/png","duration_ms":0,"sha256":"bf8f5364a9e8cace7f280a805ae24d33c8fa4129c7e5032b5b8b3c21999ae9d4"},
+    {"id":"overlay-alpha","role":"transparent-image","file":"overlay-alpha.png","mime_type":"image/png","duration_ms":0,"sha256":"a1812deb43712bc70ad5bd99beacd18a0426a76b7d8768e583386fbb51c8137d"},
+    {"id":"voice","role":"voiceover","file":"voice.wav","mime_type":"audio/wav","duration_ms":3000,"sha256":"98d1729a8d8fc0900df26662a7de1f0ef82bcac59619b1ebd1b05c743ba68f89"},
+    {"id":"music","role":"music","file":"music.wav","mime_type":"audio/wav","duration_ms":3000,"sha256":"079a4dbb0c1437c34adae4087e93e764c6e262839d3890f4698865aed3351d17"},
+    {"id":"sfx","role":"sound-effect","file":"sfx.wav","mime_type":"audio/wav","duration_ms":1000,"sha256":"b30ed73e70f64654be1c5649857a0f5ba8480922e48d6aa259c2541850d0730d"},
+    {"id":"caption","role":"expected-caption","file":"caption.srt","mime_type":"application/x-subrip","duration_ms":0,"sha256":"fdb5cad6ebfeefcea1b4ef847155f1f5de20fdb8cdc2b565de6118f09e1039f6"},
+    {"id":"font","role":"chinese-font","file":"NotoSansCJK-Regular.ttc","mime_type":"font/collection","duration_ms":0,"sha256":"b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a"}
+  ],
+  "golden": {
+    "timeline_duration_ms": 12000,
+    "caption": "固定黄金字幕",
+    "video_framemd5_sha256": "db2f1497de05c516d0157616cf1d32d522072dca70ef342940e9c7200782c1cc",
+    "audio_framemd5_sha256": "59e84dc19eb19bce52ef77aa0813e3ed115de784409a0b81fc620ecf814e4264",
+    "c3_visual_framemd5_sha256": "305376a20f8b0ea0b6d8d35471aff9d514400541865529714df3751c872ac0c8",
+    "c7_video_framemd5_sha256": "922f908504c14c26c84156607b4e37229bcbb0352e5f05a08f4225476c22b24c",
+    "c7_audio_framemd5_sha256": "8848dde4490768da7e150656678f204e3ddc1473b930e72fd7c9e26d31755c38"
+  }
+}

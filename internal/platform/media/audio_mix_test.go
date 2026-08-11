@@ -17,6 +17,9 @@ type audioMixTestSource struct{}
 func (audioMixTestSource) OpenVideo(context.Context, contract.OrganizationID, contract.ProjectID, contract.AssetVersionRef) (assets.AssetVersion, io.ReadCloser, error) {
 	return assets.AssetVersion{}, io.NopCloser(bytes.NewReader([]byte("video"))), nil
 }
+func (audioMixTestSource) OpenVisual(context.Context, contract.OrganizationID, contract.ProjectID, contract.AssetVersionRef) (assets.AssetVersion, io.ReadCloser, error) {
+	return assets.AssetVersion{}, io.NopCloser(bytes.NewReader([]byte("visual"))), nil
+}
 func (audioMixTestSource) OpenAudio(context.Context, contract.OrganizationID, contract.ProjectID, contract.AssetVersionRef) (assets.AssetVersion, io.ReadCloser, error) {
 	return assets.AssetVersion{}, io.NopCloser(bytes.NewReader([]byte("audio"))), nil
 }

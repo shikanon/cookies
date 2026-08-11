@@ -73,17 +73,21 @@ type FFmpegTimelineRenderer struct {
 	FFmpegPath string
 	WorkRoot   string
 	Videos     VideoSource
+	Visuals    VisualSource
 	Audio      AudioSource
 	Probe      assets.VideoMetadataProbe
 	Runner     ProgressCommandRunner
 	TempTTL    time.Duration
+	// Deterministic disables CPU- and core-count-dependent FFmpeg paths for
+	// portable golden tests. Production rendering keeps the optimized default.
+	Deterministic bool
 }
 
 func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRenderRequest, report TimelineProgressFunc) (CompositionOutput, error) {
 	if err := request.Validate(); err != nil {
 		return CompositionOutput{}, err
 	}
-	if strings.TrimSpace(r.FFmpegPath) == "" || r.Videos == nil || r.Audio == nil || r.Probe == nil {
+	if strings.TrimSpace(r.FFmpegPath) == "" || (len(request.Visual) == 0 && r.Videos == nil) || (len(request.Visual) > 0 && r.Visuals == nil) || r.Audio == nil || r.Probe == nil {
 		return CompositionOutput{}, fmt.Errorf("timeline rendering capability is unavailable")
 	}
 	root := strings.TrimSpace(r.WorkRoot)
@@ -105,6 +109,9 @@ func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRend
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	fail := func(err error) (CompositionOutput, error) { cleanup(); return CompositionOutput{}, err }
 	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-progress", "pipe:1", "-nostats"}
+	if r.Deterministic {
+		args = append(args, "-cpuflags", "0", "-filter_threads", "1", "-filter_complex_threads", "1")
+	}
 	video := append([]TimelineVideoClip(nil), request.Video...)
 	sort.Slice(video, func(i, j int) bool { return video[i].StartMS < video[j].StartMS })
 	request.Video = video
@@ -123,6 +130,37 @@ func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRend
 			return fail(closeErr)
 		}
 		args = append(args, "-i", path)
+	}
+	if len(request.Visual) > 0 {
+		request.Visual = SortedTimelineVisuals(request.Visual)
+		audioAvailable := map[string]bool{}
+		for index, clip := range request.Visual {
+			path := filepath.Join(dir, fmt.Sprintf("visual-%02d.bin", index+1))
+			version, reader, openErr := r.Visuals.OpenVisual(ctx, request.OrganizationID, request.ProjectID, clip.Asset)
+			if openErr != nil {
+				return fail(openErr)
+			}
+			copyErr := copyToFile(path, io.LimitReader(reader, assets.MaxVideoBytes+1))
+			closeErr := reader.Close()
+			if copyErr != nil {
+				return fail(copyErr)
+			}
+			if closeErr != nil {
+				return fail(closeErr)
+			}
+			if clip.Kind == "image" {
+				args = append(args, "-loop", "1")
+			}
+			audioAvailable[clip.ID] = clip.Kind == "video" && strings.TrimSpace(version.AudioCodec) != ""
+			args = append(args, "-i", path)
+		}
+		original := request.OriginalAudio[:0]
+		for _, clip := range request.OriginalAudio {
+			if audioAvailable[clip.VisualClipID] {
+				original = append(original, clip)
+			}
+		}
+		request.OriginalAudio = original
 	}
 	for index, clip := range request.Audio {
 		path := filepath.Join(dir, fmt.Sprintf("audio-%02d.bin", index+1))
@@ -144,7 +182,12 @@ func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRend
 		args = append(args, "-i", path)
 	}
 	args = append(args, "-f", "lavfi", "-t", seconds(request.DurationMS), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000")
-	subtitles, err := BuildASSSubtitles(request.Captions, request.Width, request.Height)
+	var subtitles []byte
+	if len(request.CaptionStyles) > 0 {
+		subtitles, _, err = BuildASSSubtitlesWithStyles(request.Captions, request.Width, request.Height, request.CaptionStyles)
+	} else {
+		subtitles, err = BuildASSSubtitles(request.Captions, request.Width, request.Height)
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -154,7 +197,11 @@ func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRend
 	}
 	graph, videoLabel, audioLabel := BuildTimelineFilter(request, subtitlePath)
 	outputPath := filepath.Join(dir, "final.mp4")
-	args = append(args, "-filter_complex", graph, "-map", videoLabel, "-map", audioLabel, "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-r", strconv.Itoa(request.FrameRate), "-c:a", "aac", "-b:a", "192k", "-ar", strconv.Itoa(request.SampleRate), "-ac", "2", "-t", seconds(request.DurationMS), "-movflags", "+faststart", outputPath)
+	args = append(args, "-filter_complex", graph, "-map", videoLabel, "-map", audioLabel, "-c:v", "libx264", "-preset", "medium", "-crf", "20")
+	if r.Deterministic {
+		args = append(args, "-threads", "1", "-x264-params", "asm=0")
+	}
+	args = append(args, "-pix_fmt", "yuv420p", "-r", strconv.Itoa(request.FrameRate), "-c:a", "aac", "-b:a", "192k", "-ar", strconv.Itoa(request.SampleRate), "-ac", "2", "-t", seconds(request.DurationMS), "-movflags", "+faststart", outputPath)
 	runner := r.Runner
 	if runner == nil {
 		runner = ExecProgressCommandRunner{}

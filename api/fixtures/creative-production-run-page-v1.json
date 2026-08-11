@@ -1,0 +1,53 @@
+{
+  "contract_version": "creative-production-run-page/v1",
+  "project_id": "project_01",
+  "items": [
+    {
+      "ref": {"source": "provider", "id": "provider_job_01"},
+      "project_id": "project_01",
+      "media_kind": "video",
+      "operation_kind": "video.generate",
+      "source_task": {
+        "system": "creative",
+        "object_type": "creative_task",
+        "object_id": "creative_task_01",
+        "display_name": "白金眼霜电商前贴"
+      },
+      "normalized_status": "partially_succeeded",
+      "native_status": {
+        "family": "provider",
+        "execution_status": "succeeded",
+        "provider_status": "partially_succeeded",
+        "render_status": null
+      },
+      "progress_percent": 80,
+      "model": {
+        "logical_alias": "cookies.video.standard",
+        "actual_model": "seedance-2.0",
+        "degraded": false
+      },
+      "output_count": 1,
+      "cost": {
+        "availability": "unavailable",
+        "currency": "CNY",
+        "amount_minor": null,
+        "unavailable_reason": "Provider has not reported the final billed cost."
+      },
+      "error": {
+        "code": "MODEL_OUTPUT_INVALID",
+        "message": "One candidate did not satisfy the output contract.",
+        "retryable": true
+      },
+      "actions": {"retry": true, "open_source": true},
+      "created_at": "2026-08-11T08:00:00Z",
+      "updated_at": "2026-08-11T08:01:30Z"
+    }
+  ],
+  "next_cursor": "cursor_v1_opaque",
+  "source_health": [
+    {"source": "provider", "status": "available", "message": null},
+    {"source": "creative_render", "status": "available", "message": null},
+    {"source": "editing_render", "status": "available", "message": null},
+    {"source": "audio_render", "status": "unavailable", "message": "No durable project list adapter is configured."}
+  ]
+}

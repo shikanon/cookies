@@ -40,6 +40,10 @@ const fixtureContracts = [
   ["creative-image-slot-selection-v1.json", "creative-image-slot-selection-v1.schema.json"],
   ["creative-image-render-spec-v1.json", "creative-image-render-spec-v1.schema.json"],
   ["creative-image-text-workspace-v1.json", "creative-image-text-workspace-v1.schema.json"],
+  ["creative-production-run-page-v1.json", "creative-production-center-v1.schema.json"],
+  ["creative-production-run-detail-v1.json", "creative-production-center-v1.schema.json"],
+  ["creative-production-asset-page-v1.json", "creative-production-center-v1.schema.json"],
+  ["creative-production-retry-v1.json", "creative-production-center-v1.schema.json"],
 ] as const;
 
 const ajv = new Ajv2020({
@@ -189,9 +193,68 @@ test("shared intake rejects image-text and brand-video implementation details", 
   }
 });
 
+test("production center freezes a read-only projection and delegated retry contract", () => {
+  const schemaFilename = "creative-production-center-v1.schema.json";
+  const schema = readJSON(join(contractsDirectory, schemaFilename));
+  const validate = validatorFor(schemaFilename);
+  const page = readJSON(join(fixturesDirectory, "creative-production-run-page-v1.json"));
+  const detail = readJSON(join(fixturesDirectory, "creative-production-run-detail-v1.json"));
+  const assets = readJSON(join(fixturesDirectory, "creative-production-asset-page-v1.json"));
+  const retry = readJSON(join(fixturesDirectory, "creative-production-retry-v1.json"));
+
+  for (const [name, value] of Object.entries({ page, detail, assets, retry })) {
+    assert.equal(validate(value), true, `${name}: ${ajv.errorsText(validate.errors)}`);
+  }
+
+  const pageItems = page.items as Array<Record<string, unknown>>;
+  assert.equal(pageItems[0].normalized_status, "partially_succeeded", "partial success was collapsed");
+
+  const leakedReviewState = clone(page);
+  ((leakedReviewState.items as Array<Record<string, unknown>>)[0]).quality_check_status = "passed";
+  assert.equal(validate(leakedReviewState), false, "production projection accepted review-owned state");
+
+  const leakedStorageLocation = clone(assets);
+  const assetItems = leakedStorageLocation.items as Array<Record<string, Record<string, unknown>>>;
+  assetItems[0].asset.bucket = "must-not-cross-the-assets-seam";
+  assert.equal(validate(leakedStorageLocation), false, "production asset view accepted an object-storage key");
+
+  const unsupportedVisibleKind = clone(page);
+  ((unsupportedVisibleKind.items as Array<Record<string, unknown>>)[0]).media_kind = "3d";
+  assert.equal(validate(unsupportedVisibleKind), false, "Phase 0 exposed an unapproved 3D production view");
+
+  const definitions = schema.$defs as Record<string, Record<string, unknown>>;
+  const problemProperties = definitions.ProductionProblem.properties as Record<string, Record<string, unknown>>;
+  assert.deepEqual(problemProperties.code.enum, [
+    "PRODUCTION_RUN_NOT_FOUND",
+    "PRODUCTION_SOURCE_UNAVAILABLE",
+    "PRODUCTION_CURSOR_INVALID",
+    "PRODUCTION_RETRY_NOT_ALLOWED",
+    "PRODUCTION_RETRY_REQUIRES_SOURCE_WORKFLOW",
+    "PRODUCTION_INPUT_ASSET_UNAVAILABLE",
+    "PRODUCTION_IDEMPOTENCY_CONFLICT",
+  ]);
+});
+
+test("Creative OpenAPI exposes only the frozen production query and delegated retry interface", () => {
+  const document = readFileSync(join(openAPIDirectory, "creative-v1.yaml"), "utf8");
+  const requiredOperations = [
+    "operationId: listCreativeProductionRuns",
+    "operationId: getCreativeProductionRun",
+    "operationId: retryCreativeProductionRun",
+    "operationId: listCreativeProductionAssets",
+  ];
+  for (const operation of requiredOperations) assert.match(document, new RegExp(operation));
+
+  assert.match(document, /creative-production-center-v1\.schema\.json#\/\$defs\/ProductionRunPage/);
+  assert.match(document, /PRODUCTION_RETRY_REQUIRES_SOURCE_WORKFLOW/);
+  assert.doesNotMatch(document, /operationId: createCreativeProductionRun/);
+  assert.doesNotMatch(document, /operationId: approveCreativeProductionRun/);
+});
+
 test("every OpenAPI contract reference resolves to a checked-in schema", () => {
   const missing: string[] = [];
   const referencePattern = /\$ref:\s*['"]?([^'"\s}]+)/g;
+  const externalValuePattern = /externalValue:\s*['"]?([^'"\s}]+)/g;
 
   for (const filename of readdirSync(openAPIDirectory).filter((name) => name.endsWith(".yaml"))) {
     const openAPIPath = join(openAPIDirectory, filename);
@@ -201,6 +264,12 @@ test("every OpenAPI contract reference resolves to a checked-in schema", () => {
       if (!reference.startsWith("../contracts/")) continue;
       const schemaPath = resolve(dirname(openAPIPath), reference.split("#", 1)[0]);
       if (!existsSync(schemaPath)) missing.push(`${filename}: ${reference}`);
+    }
+    for (const match of document.matchAll(externalValuePattern)) {
+      const reference = match[1];
+      if (/^[a-z][a-z0-9+.-]*:/i.test(reference)) continue;
+      const examplePath = resolve(dirname(openAPIPath), reference);
+      if (!existsSync(examplePath)) missing.push(`${filename}: ${reference}`);
     }
   }
 

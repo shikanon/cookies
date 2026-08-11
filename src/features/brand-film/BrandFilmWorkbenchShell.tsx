@@ -21,6 +21,7 @@ type Props = {
   activeStage: BrandFilmStageId
   busy: boolean
   assets: BrandFilmContextAsset[]
+  headerActions?: ReactNode
   onStageChange: (stage: BrandFilmStageId) => void
   children: ReactNode
 }
@@ -36,6 +37,7 @@ export function BrandFilmWorkbenchShell({
   activeStage,
   busy,
   assets,
+  headerActions,
   onStageChange,
   children,
 }: Props) {
@@ -64,6 +66,7 @@ export function BrandFilmWorkbenchShell({
         <p>{active.description}</p>
       </div>
       <div className="brand-film-workbench-meta">
+        {headerActions}
         <span className={busy ? 'brand-save-state saving' : 'brand-save-state'}>{busy ? '正在处理…' : `已同步 · r${revision}`}</span>
         <button ref={triggerRef} className="secondary-button" type="button" aria-haspopup="dialog" aria-expanded={drawerOpen} onClick={() => setDrawerOpen(true)}><Info size={14}/>资料与来源</button>
       </div>

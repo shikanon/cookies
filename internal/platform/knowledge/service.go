@@ -418,6 +418,28 @@ func (s Service) GetDocument(ctx context.Context, actor contract.ActorContext, p
 		actor.OrganizationID, projectID, id))
 }
 
+func (s Service) ExtractDocumentMedia(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, id string) ([]ExtractedDocumentMedia, error) {
+	document, err := s.GetDocument(ctx, actor, projectID, id)
+	if err != nil {
+		return nil, err
+	}
+	if document.MIMEType != "application/pdf" || s.Blobs == nil {
+		return nil, ErrInvalidDocument
+	}
+	extractor, ok := s.DocumentParser.(DocumentMediaExtractor)
+	if !ok {
+		return nil, fmt.Errorf("document media extractor is unavailable")
+	}
+	stream, info, err := s.Blobs.Open(ctx, document.Blob)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+	return extractor.ExtractMedia(ctx, DocumentParseRequest{
+		Filename: document.Filename, MIMEType: document.MIMEType, Size: info.SizeBytes, Source: stream,
+	})
+}
+
 func (s Service) GetReference(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, id string) (Reference, error) {
 	if _, err := s.Projects.GetContext(ctx, actor, projectID); err != nil {
 		return Reference{}, err

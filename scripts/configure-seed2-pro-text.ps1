@@ -2,8 +2,11 @@ param(
     [string]$Model = "doubao-seed-2-0-pro-260215"
 )
 
-# Reuses the already encrypted company Adapter credential. No token is read
-# from command-line arguments, written to .env, or embedded in SQL.
+# Reuses the already encrypted company Adapter credential. Seed-2-pro text
+# routes must not silently switch to a direct Ark connection: the two
+# transports have different credential ownership and operational contracts.
+# No token is read from command-line arguments, written to .env, or embedded
+# in SQL.
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -53,30 +56,36 @@ try {
         throw "The local MySQL container is not running."
     }
     $routeRow = (& docker exec -e "MYSQL_PWD=$mysqlPassword" $containerID mysql -N -B -u cookies cookies -e @"
-SELECT r.id, rr.connection_id, rr.connection_revision_id
+SELECT r.id, c.id, c.current_revision_id, c.connection_type
 FROM provider_model_routes r
-JOIN provider_model_route_revisions rr ON rr.id = r.current_revision_id
-JOIN provider_connections c ON c.id = rr.connection_id AND c.current_revision_id = rr.connection_revision_id
+JOIN provider_connections c ON c.status = 'enabled' AND c.current_revision_id IS NOT NULL
+JOIN provider_credentials pc ON pc.connection_id = c.id
+  AND pc.status = 'active'
+  AND pc.active_from <= UTC_TIMESTAMP(6)
+  AND (pc.active_until IS NULL OR pc.active_until > UTC_TIMESTAMP(6))
 WHERE r.organization_id IS NULL
   AND r.capability = 'text.generate'
   AND r.model_alias = 'cookies.text.standard'
   AND r.status = 'enabled'
-  AND c.status = 'enabled'
+  AND c.connection_type = 'adapter_gateway'
+ORDER BY pc.credential_version DESC
 LIMIT 1;
 "@).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($routeRow)) {
-        throw "No enabled cookies.text.standard Adapter route exists. Import the encrypted Provider connection first."
+        throw "No enabled Adapter gateway credential exists for cookies.text.standard. Configure or rotate the company Adapter credential first."
     }
     $routeFields = @($routeRow -split "`t")
-    if ($routeFields.Count -ne 3) {
+    if ($routeFields.Count -ne 4) {
         throw "The current cookies.text.standard route is incomplete."
     }
     $routeID = $routeFields[0]
     $connectionID = $routeFields[1]
     $connectionRevisionID = $routeFields[2]
+    $connectionType = $routeFields[3]
     $routeRevisionID = "${routeID}_seed2_standard_r1"
-    $deepRouteID = (& docker exec -e "MYSQL_PWD=$mysqlPassword" $containerID mysql -N -B -u cookies cookies -e "SELECT id FROM provider_model_routes WHERE organization_id IS NULL AND capability='text.generate' AND model_alias='cookies.text.deep_review' LIMIT 1").Trim()
+    $deepRouteResult = & docker exec -e "MYSQL_PWD=$mysqlPassword" $containerID mysql -N -B -u cookies cookies -e "SELECT id FROM provider_model_routes WHERE organization_id IS NULL AND capability='text.generate' AND model_alias='cookies.text.deep_review' LIMIT 1"
     if ($LASTEXITCODE -ne 0) { throw "Could not inspect the existing deep-reasoning route." }
+    $deepRouteID = if ($null -eq $deepRouteResult) { "" } else { ([string]$deepRouteResult).Trim() }
     if ([string]::IsNullOrWhiteSpace($deepRouteID)) { $deepRouteID = "route_cookies_text_deep_review" }
     $deepRouteRevisionID = "${deepRouteID}_seed2_thinking_r1"
     $sql = @"
@@ -95,7 +104,7 @@ INSERT INTO provider_model_route_revisions (
   '$routeRevisionID', '$routeID', 1, '$connectionID', '$connectionRevisionID', '$Model',
   JSON_OBJECT(
     'endpoint', '/v1/chat/completions',
-    'source_provider', 'ark',
+    'source_provider', '$connectionType',
     'text_response_mode', 'prompt_json',
     'max_output_tokens', 8192,
     'output_token_parameter', 'max_tokens',
@@ -110,7 +119,7 @@ INSERT INTO provider_model_route_revisions (
   '$deepRouteRevisionID', '$deepRouteID', 1, '$connectionID', '$connectionRevisionID', '$Model',
   JSON_OBJECT(
     'endpoint', '/v1/chat/completions',
-    'source_provider', 'ark',
+    'source_provider', '$connectionType',
     'text_response_mode', 'prompt_json',
     'max_output_tokens', 16384,
     'output_token_parameter', 'max_tokens',
@@ -128,7 +137,7 @@ COMMIT;
     Set-DotEnvValue "COOKIES_STRATEGY_REAL_PROVIDER_ENABLED" "true"
     Set-DotEnvValue "COOKIES_STRATEGY_TEXT_MODEL_ALIAS" "cookies.text.standard"
     Set-DotEnvValue "COOKIES_STRATEGY_DEEP_REVIEW_MODEL_ALIAS" "cookies.text.deep_review"
-    Write-Output "Seed-2-pro standard route: cookies.text.standard (thinking disabled)."
+    Write-Output "Seed-2-pro standard route: cookies.text.standard via Adapter gateway (thinking disabled)."
     Write-Output "Seed-2-pro deep route:     cookies.text.deep_review (thinking enabled)."
 }
 finally {

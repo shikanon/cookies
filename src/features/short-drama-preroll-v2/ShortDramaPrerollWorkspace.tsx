@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { Check, ChevronRight, CircleAlert, Clapperboard, Clock3, Film, Image as ImageIcon, LoaderCircle, Play, RefreshCw, Sparkles, Upload, WandSparkles, X, ZoomIn } from 'lucide-react'
+import { Check, ChevronRight, CircleAlert, Clapperboard, Clock3, Film, Image as ImageIcon, LoaderCircle, Play, Plus, RefreshCw, Save, Sparkles, Upload, WandSparkles, X, ZoomIn } from 'lucide-react'
 import { useProject } from '../../context/ProjectContext'
-import { api, CreativeApiError, type ApiProjectMediaAsset, type ApiShortDramaV2TaskDetail } from '../../data/api'
+import { api, CreativeApiError, type ApiCreativeTaskSummary, type ApiProjectMediaAsset, type ApiShortDramaV2TaskDetail } from '../../data/api'
 import { editingApi } from '../video-editing/api'
 import { canOpenShortDramaStep, initialShortDramaPrerollState, shortDramaPrerollReducer } from './reducer'
 import { createAsyncActionGate } from './asyncActionGate'
+import { findAuthoritativeVideo, requireAuthoritativeVideo, sourceUnavailableMessage } from './sourceAuthority'
 import type { FirstFrameCandidate, PrerollDuration, ShortDramaPrerollState, ShortDramaStep } from './types'
 import './short-drama-preroll-v2.css'
 
@@ -14,6 +15,8 @@ const steps: Array<{ id: ShortDramaStep; index: string; label: string; detail: s
   { id: 'first-frame', index: '03', label: '首帧参考', detail: '生成并选择首帧图' },
   { id: 'video', index: '04', label: '视频生成', detail: '确认参数并生成前贴' },
 ]
+
+const prerollDurations: readonly PrerollDuration[] = [10, 12, 15]
 
 const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 
@@ -34,6 +37,7 @@ function formatDuration(seconds?: number) {
 
 // Keep the historical key so in-progress V2 tasks survive the V3 UI migration.
 function storageKey(projectId: string) { return `cookies.short-drama-preroll-v2:${projectId}` }
+function taskStorageKey(projectId: string, taskId: string) { return `${storageKey(projectId)}:task:${taskId}` }
 
 type ShortDramaSession = {
   taskId: string
@@ -54,11 +58,24 @@ function readSession(projectId: string): ShortDramaSession | null {
   } catch { return null }
 }
 
+function readTaskSession(projectId: string, taskId: string): ShortDramaSession | null {
+  try {
+    const raw = window.localStorage.getItem(taskStorageKey(projectId, taskId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as ShortDramaSession & { version?: number }
+    return parsed.taskId === taskId ? parsed : null
+  } catch { return null }
+}
+
+function isShortDramaPrerollTask(task: ApiCreativeTaskSummary) {
+  return task.format === 'video' && task.performance_mode === 'short_drama_preroll' && task.status !== 'archived'
+}
+
 function sameAsset(left?: { asset_version: { asset_id: string; version: number } }, right?: { asset_version: { asset_id: string; version: number } }) {
   return Boolean(left && right && left.asset_version.asset_id === right.asset_version.asset_id && left.asset_version.version === right.asset_version.version)
 }
 
-async function restoreState(projectId: string, detail: ApiShortDramaV2TaskDetail, source: ApiProjectMediaAsset | null, session: ShortDramaSession | null): Promise<ShortDramaPrerollState> {
+async function restoreState(projectId: string, detail: ApiShortDramaV2TaskDetail, source: ApiProjectMediaAsset, session: ShortDramaSession | null): Promise<ShortDramaPrerollState> {
   const workspace = detail.video_draft.short_drama_preroll_v2
   const analysisReady = workspace.analysis.status === 'ready'
   const hooks = hookDirections(detail)
@@ -81,7 +98,7 @@ async function restoreState(projectId: string, detail: ApiShortDramaV2TaskDetail
   const output = workspace.output_asset ? {
     id: workspace.output_asset.asset_version.asset_id,
     videoUrl: await api.getProjectAssetPreview(projectId, workspace.output_asset.asset_version),
-    duration: (prompt?.duration_seconds ?? 6) as PrerollDuration,
+    duration: (prompt?.duration_seconds ?? 10) as PrerollDuration,
     createdAt: new Date().toISOString(),
   } : null
   let activeStep: ShortDramaStep = 'understanding'
@@ -98,16 +115,16 @@ async function restoreState(projectId: string, detail: ApiShortDramaV2TaskDetail
     hooksStatus: hooks.length ? 'ready' : 'idle',
     hooks,
     selectedHookId: selectedDirectionId,
-    duration: (prompt?.duration_seconds ?? 6) as PrerollDuration,
+    duration: (prompt?.duration_seconds ?? 10) as PrerollDuration,
     imagePrompt: prompt?.image_prompt ?? '',
     videoDescription: prompt?.video_description ?? '',
     videoPrompt: prompt?.video_prompt ?? '',
     imagesStatus: images.length ? 'ready' : workspace.first_frame_batch && ['queued', 'running'].includes(workspace.first_frame_batch.status) ? 'loading' : workspace.first_frame_batch?.status === 'failed' ? 'error' : 'idle',
     images,
     selectedImageId: selectedCandidate?.id ?? '',
-    videoStatus: output ? 'ready' : workspace.active_stage === 'video_generating' ? 'loading' : 'idle',
+    videoStatus: output ? 'ready' : workspace.active_stage === 'video_generating' ? 'loading' : workspace.video_error ? 'error' : 'idle',
     output,
-    error: '',
+    error: workspace.video_error?.message ?? '',
   }
   if (session?.taskId === detail.task.id) {
     restored = {
@@ -136,8 +153,8 @@ async function resumeWorkspaceJobs(projectId: string, detail: ApiShortDramaV2Tas
   const workspace = current.video_draft.short_drama_preroll_v2
   if (workspace.active_stage === 'video_generating' && workspace.latest_video_attempt_id) {
     const job = await waitForProviderJob(projectId, workspace.latest_video_attempt_id)
-    if (job.status !== 'succeeded') return { detail: current, error: job.diagnostic || '前贴视频生成失败。' }
     current = await api.reconcileShortDramaV2Video(projectId, current.task.id, current.video_draft.revision, workspace.latest_video_attempt_id)
+    if (job.status !== 'succeeded') return { detail: current, error: job.diagnostic || '前贴视频生成失败。' }
   }
   return { detail: current }
 }
@@ -179,6 +196,11 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
   const [state, dispatch] = useReducer(shortDramaPrerollReducer, initialShortDramaPrerollState)
   const [assets, setAssets] = useState<ApiProjectMediaAsset[]>([])
   const [workspace, setWorkspace] = useState<ApiShortDramaV2TaskDetail | null>(null)
+  const [savedWorks, setSavedWorks] = useState<ApiCreativeTaskSummary[]>([])
+  const [switchingWork, setSwitchingWork] = useState(false)
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [saveName, setSaveName] = useState('')
+  const [savingWork, setSavingWork] = useState(false)
   const [mediaLoading, setMediaLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [localPreviewUrl, setLocalPreviewUrl] = useState('')
@@ -187,6 +209,15 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
   const [firstFrameSelectionGate] = useState(createAsyncActionGate)
   const hydratedProject = useRef('')
   const fileInput = useRef<HTMLInputElement>(null)
+
+  const refreshSavedWorks = async () => {
+    const result = await api.listCreativeTasks(currentProject.id, 100)
+    setSavedWorks(result.items.filter(isShortDramaPrerollTask).sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at)))
+  }
+
+  useEffect(() => {
+    void refreshSavedWorks().catch(() => setSavedWorks([]))
+  }, [currentProject.id])
 
   useEffect(() => {
     let cancelled = false
@@ -201,7 +232,8 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
           const restored = await api.getShortDramaPrerollV2Workspace(currentProject.id, session.taskId)
           if (cancelled) return
           const sourceRef = restored.video_draft.short_drama_preroll_v2.source_video.asset_version
-          const source = videos.find(item => item.id === sourceRef.asset_id && item.version === sourceRef.version) ?? null
+          const source = findAuthoritativeVideo(videos, sourceRef)
+          if (!source) throw new Error(sourceUnavailableMessage)
           const restoredState = await restoreState(currentProject.id, restored, source, session)
           if (cancelled) return
           setWorkspace(restored)
@@ -220,9 +252,18 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
               if (!cancelled) dispatch({ type: 'operation-failed', message: cause instanceof Error ? cause.message : '恢复生成任务失败' })
             })
           }
-        } catch {
+        } catch (cause) {
           window.localStorage.removeItem(storageKey(currentProject.id))
-          if (videos[0]) dispatch({ type: 'source-selected', source: videos[0] })
+          setWorkspace(null)
+          dispatch({
+            type: 'restore',
+            state: {
+              ...initialShortDramaPrerollState,
+              error: cause instanceof Error && cause.message === sourceUnavailableMessage
+                ? sourceUnavailableMessage
+                : '短剧前贴草稿无法恢复，请重新选择源视频。',
+            },
+          })
         }
       } else if (videos[0]) dispatch({ type: 'source-selected', source: videos[0] })
       hydratedProject.current = currentProject.id
@@ -238,7 +279,7 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
 
   useEffect(() => {
     if (hydratedProject.current !== currentProject.id || !workspace) return
-    window.localStorage.setItem(storageKey(currentProject.id), JSON.stringify({
+    const session = JSON.stringify({
       version: 4,
       taskId: workspace.task.id,
       activeStep: state.activeStep,
@@ -247,7 +288,9 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
       videoDescription: state.videoDescription,
       videoPrompt: state.videoPrompt,
       duration: state.duration,
-    }))
+    })
+    window.localStorage.setItem(storageKey(currentProject.id), session)
+    window.localStorage.setItem(taskStorageKey(currentProject.id, workspace.task.id), session)
   }, [currentProject.id, state.activeStep, state.duration, state.imagePrompt, state.summaryDraft, state.videoDescription, state.videoPrompt, workspace])
 
   const selectedHook = useMemo(() => state.hooks.find(item => item.id === state.selectedHookId) ?? null, [state.hooks, state.selectedHookId])
@@ -255,6 +298,73 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
   const sourceUrl = localPreviewUrl || state.source?.contentUrl || ''
   const outputCanvas = workspace?.video_draft.short_drama_preroll_v2.output_canvas
   const outputAspectLabel = outputCanvas ? `${outputCanvas.aspect_num}:${outputCanvas.aspect_den}` : (state.source?.width && state.source?.height ? `${state.source.width}:${state.source.height}` : '跟随源视频')
+
+  const beginFreshWorkspace = () => {
+    if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl)
+    setLocalPreviewUrl('')
+    setWorkspace(null)
+    window.localStorage.removeItem(storageKey(currentProject.id))
+    dispatch({ type: 'restore', state: initialShortDramaPrerollState })
+  }
+
+  const requestNewWorkspace = () => {
+    if (!workspace) {
+      beginFreshWorkspace()
+      return
+    }
+    setSaveName(workspace.task.display_name || state.analysis?.title || '未命名短剧前贴')
+    setShowSaveDialog(true)
+  }
+
+  const saveAndCreateWorkspace = async () => {
+    const name = saveName.trim()
+    if (!workspace || !name || savingWork) return
+    setSavingWork(true)
+    try {
+      await api.renameCreativeTask(currentProject.id, workspace.task.id, workspace.task.version, name)
+      window.localStorage.setItem(taskStorageKey(currentProject.id, workspace.task.id), JSON.stringify({
+        version: 4,
+        taskId: workspace.task.id,
+        activeStep: state.activeStep,
+        summaryDraft: state.summaryDraft,
+        imagePrompt: state.imagePrompt,
+        videoDescription: state.videoDescription,
+        videoPrompt: state.videoPrompt,
+        duration: state.duration,
+      }))
+      await refreshSavedWorks()
+      setShowSaveDialog(false)
+      beginFreshWorkspace()
+      onNotice(`已保存“${name}”，可从作品下拉框继续编辑。`)
+    } catch (cause) {
+      dispatch({ type: 'operation-failed', message: cause instanceof Error ? cause.message : '保存短剧前贴失败' })
+      setShowSaveDialog(false)
+    } finally {
+      setSavingWork(false)
+    }
+  }
+
+  const openSavedWorkspace = async (taskId: string) => {
+    if (!taskId || taskId === workspace?.task.id || switchingWork) return
+    setSwitchingWork(true)
+    try {
+      const [detail, videos] = await Promise.all([
+        api.getShortDramaPrerollV2Workspace(currentProject.id, taskId),
+        api.listProjectMediaAssets(currentProject.id).then(items => items.filter(item => item.kind === 'video')),
+      ])
+      const sourceRef = detail.video_draft.short_drama_preroll_v2.source_video.asset_version
+      const source = requireAuthoritativeVideo(videos, sourceRef)
+      const restored = await restoreState(currentProject.id, detail, source, readTaskSession(currentProject.id, taskId))
+      setAssets(videos)
+      setWorkspace(detail)
+      dispatch({ type: 'restore', state: restored })
+      onNotice(`已恢复“${detail.task.display_name || '未命名短剧前贴'}”。`)
+    } catch (cause) {
+      dispatch({ type: 'operation-failed', message: cause instanceof Error ? cause.message : '恢复短剧前贴失败' })
+    } finally {
+      setSwitchingWork(false)
+    }
+  }
 
   const selectSource = (source: ApiProjectMediaAsset) => {
     if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl)
@@ -271,16 +381,15 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
     setUploading(true)
     try {
       const ref = await api.uploadProjectAsset(currentProject.id, file)
+      await api.getProjectAssetPreview(currentProject.id, ref)
       const videos = (await api.listProjectMediaAssets(currentProject.id)).filter(item => item.kind === 'video')
       setAssets(videos)
-      const uploaded = videos.find(item => item.id === ref.asset_id && item.version === ref.version) ?? {
-        id: ref.asset_id, projectId: currentProject.id, version: ref.version, kind: 'video' as const,
-        sourceType: 'upload' as const, mimeType: file.type || 'video/mp4', sizeBytes: file.size,
-        createdAt: new Date().toISOString(), contentUrl: url,
-      }
+      const uploaded = requireAuthoritativeVideo(videos, ref)
       setWorkspace(null)
       window.localStorage.removeItem(storageKey(currentProject.id))
       dispatch({ type: 'source-selected', source: uploaded })
+      URL.revokeObjectURL(url)
+      setLocalPreviewUrl('')
       onNotice('视频已上传为项目素材，可以开始真实内容理解。')
     } catch (cause) {
       setLocalPreviewUrl('')
@@ -294,16 +403,26 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
     if (!state.source) return
     dispatch({ type: 'analysis-started' })
     try {
+      const videos = (await api.listProjectMediaAssets(currentProject.id)).filter(item => item.kind === 'video')
+      const source = requireAuthoritativeVideo(videos, { asset_id: state.source.id, version: state.source.version })
+      setAssets(videos)
       let current = workspace
       const sourceRef = current?.video_draft.short_drama_preroll_v2.source_video.asset_version
-      if (!current || sourceRef?.asset_id !== state.source.id || sourceRef.version !== state.source.version) {
-        current = await api.createManualShortDramaPrerollV2Workspace(currentProject.id, { asset_id: state.source.id, version: state.source.version })
+      if (!current || sourceRef?.asset_id !== source.id || sourceRef.version !== source.version) {
+        current = await api.createManualShortDramaPrerollV2Workspace(currentProject.id, { asset_id: source.id, version: source.version })
       }
       const analyzed = await api.analyzeShortDramaV2Source(currentProject.id, current.task.id, current.video_draft.revision)
       setWorkspace(analyzed)
+      void refreshSavedWorks()
       dispatch({ type: 'analysis-ready', analysis: storyAnalysis(analyzed) })
       onNotice('已根据当前上传视频完成真实内容理解。')
     } catch (cause) {
+      if (cause instanceof Error && cause.message.includes('后端尚未确认该视频素材')) {
+        setWorkspace(null)
+        window.localStorage.removeItem(storageKey(currentProject.id))
+        dispatch({ type: 'restore', state: { ...initialShortDramaPrerollState, error: sourceUnavailableMessage } })
+        return
+      }
       dispatch({ type: 'operation-failed', message: cause instanceof Error ? cause.message : '视频理解失败' })
     }
   }
@@ -342,6 +461,7 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
           try {
             const latest = await api.getShortDramaPrerollV2Workspace(currentProject.id, workspace.task.id)
             const latestWorkspace = latest.video_draft.short_drama_preroll_v2
+            if (!state.source) throw new Error(sourceUnavailableMessage)
             const restored = await restoreState(currentProject.id, latest, state.source, readSession(currentProject.id))
             setWorkspace(latest)
             dispatch({ type: 'restore', state: restored })
@@ -361,10 +481,9 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
   }
   const changeDuration = (duration: PrerollDuration) => {
     dispatch({ type: 'duration-changed', duration })
-    if (state.selectedHookId) void selectHook(state.selectedHookId, duration)
   }
   const synchronizeWorkspace = async () => {
-    if (!workspace) throw new Error('当前创作任务不存在，请重新选择视频。')
+    if (!workspace || !state.source) throw new Error(sourceUnavailableMessage)
     const latest = await api.getShortDramaPrerollV2Workspace(currentProject.id, workspace.task.id)
     const resumed = await resumeWorkspaceJobs(currentProject.id, latest)
     const restored = await restoreState(currentProject.id, resumed.detail, state.source, readSession(currentProject.id))
@@ -468,8 +587,9 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
       const jobId = current.video_draft.short_drama_preroll_v2.latest_video_attempt_id
       if (!jobId) throw new Error('服务端没有返回视频生成任务。')
       const job = await waitForProviderJob(currentProject.id, jobId)
-      if (job.status !== 'succeeded') throw new Error(job.diagnostic || '前贴视频生成失败。')
       current = await api.reconcileShortDramaV2Video(currentProject.id, current.task.id, current.video_draft.revision, jobId)
+      setWorkspace(current)
+      if (job.status !== 'succeeded') throw new Error(job.diagnostic || '前贴视频生成失败。')
       const output = current.video_draft.short_drama_preroll_v2.output_asset
       if (!output) throw new Error('视频任务成功，但没有生成可预览的项目资产。')
       const videoUrl = await api.getProjectAssetPreview(currentProject.id, output.asset_version)
@@ -526,13 +646,32 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
     </main>
 
     <aside className="short-drama-v2-inspector">
+      <section className="short-drama-v2-work-switcher">
+        <span className="short-drama-v2-kicker">PREROLL WORKS</span>
+        <label htmlFor="short-drama-v2-work">当前短剧前贴</label>
+        <select id="short-drama-v2-work" value={workspace?.task.id || ''} disabled={switchingWork} onChange={event => { void openSavedWorkspace(event.target.value) }}>
+          <option value="">{switchingWork ? '正在恢复…' : '新短剧前贴（未保存）'}</option>
+          {savedWorks.map(item => <option key={item.id} value={item.id}>{item.display_name || `短剧前贴 ${item.id.slice(0, 8)}`}</option>)}
+        </select>
+        <button type="button" onClick={requestNewWorkspace}><Plus size={14}/>新建短剧前贴</button>
+      </section>
       <div className="short-drama-v2-inspector-head"><span>生成配置</span><b>{state.activeStep === 'understanding' ? '视频理解' : state.activeStep === 'direction' ? '方向选择' : state.activeStep === 'first-frame' ? '首帧生成' : '视频生成'}</b></div>
       {state.activeStep === 'understanding' ? <><InspectorBlock label="输入状态"><b>{state.source ? '素材已就绪' : '等待视频'}</b><small>{state.source ? `${state.source.mimeType} · ${(state.source.sizeBytes / 1024 / 1024).toFixed(1)} MB` : '请选择项目视频或本地文件'}</small></InspectorBlock><button className="short-drama-v2-primary" disabled={!state.source || state.analysisStatus === 'loading'} onClick={() => void analyze()}>{state.analysisStatus === 'loading' ? <LoaderCircle className="spin" size={16}/> : <Sparkles size={16}/>}理解视频内容</button></> : null}
-      {state.activeStep === 'direction' ? <><InspectorBlock label="方向构成"><b>猎奇吸睛 × 2</b><b>剧情总结 × 2</b><small>必须人工选定一个方向，才会进入首帧生成。</small></InspectorBlock><button className="short-drama-v2-primary" disabled={!state.summaryDraft.trim() || state.hooksStatus === 'loading'} onClick={() => void generateHooks()}>{state.hooksStatus === 'loading' ? <LoaderCircle className="spin" size={16}/> : <WandSparkles size={16}/>}生成 4 个前贴方向</button></> : null}
-      {state.activeStep === 'first-frame' ? <><InspectorBlock label="已选方向"><b>{selectedHook?.title || '尚未选择'}</b><small>{selectedHook?.hookCopy}</small></InspectorBlock><InspectorBlock label="视频时长"><div className="short-drama-v2-duration">{([5, 6, 10, 12, 15] as PrerollDuration[]).map(duration => <button type="button" disabled={Boolean(state.selectingHookId)} className={state.duration === duration ? 'active' : ''} key={duration} onClick={() => changeDuration(duration)}>{duration}s</button>)}</div><small>时长会写入视频提示词，并在生成首帧前锁定。</small></InspectorBlock><InspectorBlock label="输出画幅"><b>{outputAspectLabel}</b><small>参考图预览与最终视频都按源视频画幅呈现。</small></InspectorBlock><button className="short-drama-v2-primary" disabled={Boolean(state.selectingHookId) || !state.imagePrompt.trim() || state.imagesStatus === 'loading'} onClick={() => void generateImages()}>{state.selectingHookId || state.imagesStatus === 'loading' ? <LoaderCircle className="spin" size={16}/> : <ImageIcon size={16}/>} {state.selectingHookId ? '正在生成提示词' : '生成 3 张首帧图'}</button></> : null}
+      {state.activeStep === 'direction' ? <><InspectorBlock label="前贴时长"><div className="short-drama-v2-duration">{prerollDurations.map(duration => <button type="button" disabled={Boolean(state.selectingHookId)} className={state.duration === duration ? 'active' : ''} key={duration} onClick={() => changeDuration(duration)}>{duration}s</button>)}</div><small>先确定时长，再选择一个前贴方向；系统会自动生成匹配该时长的首帧与视频提示词。</small></InspectorBlock><InspectorBlock label="方向构成"><b>猎奇吸睛 × 2</b><b>剧情总结 × 2</b><small>点击方向后将锁定当前时长，并进入首帧生成。</small></InspectorBlock><button className="short-drama-v2-primary" disabled={!state.summaryDraft.trim() || state.hooksStatus === 'loading'} onClick={() => void generateHooks()}>{state.hooksStatus === 'loading' ? <LoaderCircle className="spin" size={16}/> : <WandSparkles size={16}/>}生成 4 个前贴方向</button></> : null}
+      {state.activeStep === 'first-frame' ? <><InspectorBlock label="已选方向"><b>{selectedHook?.title || '尚未选择'}</b><small>{selectedHook?.hookCopy}</small><small>已锁定时长：{state.duration}s</small></InspectorBlock><InspectorBlock label="输出画幅"><b>{outputAspectLabel}</b><small>参考图预览与最终视频都按源视频画幅呈现。</small></InspectorBlock><button className="short-drama-v2-primary" disabled={Boolean(state.selectingHookId) || !state.imagePrompt.trim() || state.imagesStatus === 'loading'} onClick={() => void generateImages()}>{state.selectingHookId || state.imagesStatus === 'loading' ? <LoaderCircle className="spin" size={16}/> : <ImageIcon size={16}/>} {state.selectingHookId ? '正在生成提示词' : '生成 3 张首帧图'}</button></> : null}
       {state.activeStep === 'video' ? <><InspectorBlock label="参考链路"><small>模型输入：选中的一张 AI 首帧</small><small>生成方式：Prompt + 单张 reference_image</small><small>输出：独立前贴 · {outputAspectLabel}</small></InspectorBlock><button className="short-drama-v2-primary" disabled={!state.selectedImageId || !state.videoPrompt.trim() || state.videoStatus === 'loading'} onClick={() => void generateVideo()}>{state.videoStatus === 'loading' ? <LoaderCircle className="spin" size={16}/> : <Clapperboard size={16}/>}生成前贴视频</button></> : null}
       <div className="short-drama-v2-contract"><span>WORKSPACE V3</span><small>任务、草稿、首帧选择、生成进度和源画幅视频结果均由服务端持久化。</small></div>
     </aside>
+    {showSaveDialog ? <div className="short-drama-v2-save-dialog" role="dialog" aria-modal="true" aria-labelledby="short-drama-v2-save-title">
+      <form onSubmit={event => { event.preventDefault(); void saveAndCreateWorkspace() }}>
+        <span className="short-drama-v2-kicker">SAVE CURRENT WORK</span>
+        <h3 id="short-drama-v2-save-title">先保存当前短剧前贴</h3>
+        <p>当前流程已有内容。命名保存后，它会出现在左侧作品下拉框中，之后可以继续恢复编辑。</p>
+        <label htmlFor="short-drama-v2-save-name">作品名称</label>
+        <input id="short-drama-v2-save-name" autoFocus maxLength={80} value={saveName} onChange={event => setSaveName(event.target.value)} placeholder="例如：武则天·无字碑悬念前贴"/>
+        <div><button type="button" onClick={() => setShowSaveDialog(false)}>取消</button><button type="submit" disabled={!saveName.trim() || savingWork}>{savingWork ? <LoaderCircle className="spin" size={15}/> : <Save size={15}/>}保存并新建</button></div>
+      </form>
+    </div> : null}
   </section>
 }
 

@@ -99,7 +99,7 @@ func (s Service) PrepareShortDramaV2OpeningFrame(ctx context.Context, requestCon
 		TimestampMS: 0, DerivationID: derivationID, ExtractionVersion: extracted.Version,
 	}
 	updated.GenerationSpec = nil
-	updated.LatestVideoAttemptID = ""
+	updated.LatestVideoAttemptID, updated.VideoError = "", nil
 	updated.RawOutputAsset = nil
 	updated.OutputAsset = nil
 	updated.OutputNormalization = nil
@@ -188,7 +188,7 @@ func (s Service) GenerateShortDramaV2FirstFrames(ctx context.Context, actor cont
 	updated.ActiveStage = ShortDramaV2StageFramesGenerating
 	updated.TrustedMaterials = nil
 	updated.GenerationSpec = nil
-	updated.LatestVideoAttemptID = ""
+	updated.LatestVideoAttemptID, updated.VideoError = "", nil
 	updated.RawOutputAsset = nil
 	updated.OutputAsset = nil
 	updated.OutputNormalization = nil
@@ -373,7 +373,7 @@ func (s Service) SelectShortDramaV2FirstFrame(ctx context.Context, actor contrac
 		return TaskDetail{}, err
 	}
 	updated.GenerationSpec = spec
-	updated.LatestVideoAttemptID = ""
+	updated.LatestVideoAttemptID, updated.VideoError = "", nil
 	updated.RawOutputAsset = nil
 	updated.OutputAsset = nil
 	updated.OutputNormalization = nil
@@ -414,7 +414,7 @@ func (s Service) BindShortDramaV2TrustedMaterials(ctx context.Context, actor con
 	updated.Revision = next.Revision
 	updated.ActiveStage = ShortDramaV2StageFrameSelected
 	updated.TrustedMaterials = &binding
-	updated.LatestVideoAttemptID = ""
+	updated.LatestVideoAttemptID, updated.VideoError = "", nil
 	updated.RawOutputAsset = nil
 	updated.OutputAsset = nil
 	updated.OutputNormalization = nil
@@ -506,7 +506,7 @@ func (s Service) RegisterShortDramaV2VideoJob(ctx context.Context, actor contrac
 	next.CreatedAt = now
 	updated := *detail.VideoDraft.ShortDramaPrerollV2
 	updated.Revision, updated.ActiveStage, updated.LatestVideoAttemptID = next.Revision, ShortDramaV2StageVideoGenerating, providerJobID
-	updated.OutputAsset, updated.UpdatedAt = nil, now
+	updated.VideoError, updated.OutputAsset, updated.UpdatedAt = nil, nil, now
 	next.ShortDramaPrerollV2 = &updated
 	if _, err := s.ViralRemakes.ReviseVideoDraft(ctx, actor.OrganizationID, projectID, taskID, detail.VideoDraft.Revision, next, TaskGenerating); err != nil {
 		return TaskDetail{}, err
@@ -530,6 +530,23 @@ func (s Service) ReconcileShortDramaV2Video(ctx context.Context, actor contract.
 	}
 	if request.Job.ID != workspace.LatestVideoAttemptID || request.Job.ProjectID != projectID {
 		return TaskDetail{}, ErrInvalidState
+	}
+	if request.Job.ProviderStatus == contract.ProviderJobFailed || request.Job.ProviderStatus == contract.ProviderJobCancelled || request.Job.ProviderStatus == contract.ProviderJobExpired {
+		jobError := request.Job.Error
+		if jobError == nil {
+			jobError = &contract.JobError{Code: "VIDEO_GENERATION_FAILED", Message: "视频生成任务未完成，请重试。", Retryable: request.Job.ProviderStatus != contract.ProviderJobCancelled}
+		}
+		now := s.now()
+		next := *detail.VideoDraft
+		next.Revision++
+		next.CreatedAt = now
+		updated := *workspace
+		updated.Revision, updated.ActiveStage, updated.VideoError, updated.UpdatedAt = next.Revision, ShortDramaV2StageFrameSelected, jobError, now
+		next.ShortDramaPrerollV2 = &updated
+		if _, err := s.ViralRemakes.ReviseVideoDraft(ctx, actor.OrganizationID, projectID, taskID, detail.VideoDraft.Revision, next, TaskInProgress); err != nil {
+			return TaskDetail{}, err
+		}
+		return s.Repository.GetTaskDetail(ctx, actor.OrganizationID, projectID, taskID)
 	}
 	if request.Job.ProviderStatus != contract.ProviderJobSucceeded && request.Job.ProviderStatus != contract.ProviderJobPartiallySucceeded {
 		return detail, nil
@@ -573,7 +590,7 @@ func (s Service) ReconcileShortDramaV2Video(ctx context.Context, actor contract.
 	next.Revision++
 	next.CreatedAt = now
 	updated := *workspace
-	updated.Revision, updated.ActiveStage, updated.OutputAsset, updated.UpdatedAt = next.Revision, ShortDramaV2StageCompleted, &asset, now
+	updated.Revision, updated.ActiveStage, updated.VideoError, updated.OutputAsset, updated.UpdatedAt = next.Revision, ShortDramaV2StageCompleted, nil, &asset, now
 	updated.RawOutputAsset, updated.OutputNormalization = &rawAsset, normalization
 	next.ShortDramaPrerollV2 = &updated
 	if _, err := s.ViralRemakes.ReviseVideoDraft(ctx, actor.OrganizationID, projectID, taskID, detail.VideoDraft.Revision, next, TaskGenerated); err != nil {

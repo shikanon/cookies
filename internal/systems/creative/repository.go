@@ -20,11 +20,16 @@ var (
 	// Viral analysis failures are intentionally classified at the domain seam so
 	// HTTP clients can distinguish a retryable model-gateway issue from an
 	// invalid or unreadable source video without receiving provider internals.
-	ErrViralAnalysisSourceUnavailable   = errors.New("viral analysis source video is unavailable")
-	ErrViralAnalysisPreparationFailed   = errors.New("viral analysis video preparation failed")
-	ErrViralAnalysisProviderUnavailable = errors.New("viral analysis provider is unavailable")
-	ErrViralAnalysisProviderRejected    = errors.New("viral analysis provider rejected the request")
-	ErrViralAnalysisResponseInvalid     = errors.New("viral analysis provider returned an invalid response")
+	ErrViralAnalysisSourceUnavailable        = errors.New("viral analysis source video is unavailable")
+	ErrViralAnalysisPreparationFailed        = errors.New("viral analysis video preparation failed")
+	ErrViralAnalysisProviderUnavailable      = errors.New("viral analysis provider is unavailable")
+	ErrViralAnalysisProviderRejected         = errors.New("viral analysis provider rejected the request")
+	ErrViralAnalysisResponseInvalid          = errors.New("viral analysis provider returned an invalid response")
+	ErrShortDramaAnalysisSourceUnavailable   = errors.New("short drama analysis source video is unavailable")
+	ErrShortDramaAnalysisPreparationFailed   = errors.New("short drama analysis video preparation failed")
+	ErrShortDramaAnalysisProviderUnavailable = errors.New("short drama analysis provider is unavailable")
+	ErrShortDramaAnalysisProviderRejected    = errors.New("short drama analysis provider rejected the request")
+	ErrShortDramaAnalysisResponseInvalid     = errors.New("short drama analysis provider returned an invalid response")
 )
 
 type Repository interface {
@@ -53,6 +58,12 @@ type Repository interface {
 	ApproveVersion(context.Context, contract.OrganizationID, contract.ProjectID, string, CreativeApproval) (CreativeVersion, error)
 	CreatePackage(context.Context, CreativePackage) (CreativePackage, error)
 	ListPackages(context.Context, contract.OrganizationID, contract.ProjectID, int) ([]CreativePackage, error)
+}
+
+// TaskMetadataRepository is the persistence seam for user-facing task identity.
+// Draft revisions remain append-only and separate from renaming the containing task.
+type TaskMetadataRepository interface {
+	RenameTask(context.Context, contract.OrganizationID, contract.ProjectID, string, int64, string, time.Time) (CreativeTask, error)
 }
 
 // ViralRemakeRepository is a narrow seam for append-only video-draft

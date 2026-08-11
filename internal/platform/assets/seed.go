@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,14 +92,18 @@ func (r MySQLRepository) EnsureSeedAsset(ctx context.Context, asset SeedAsset, n
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO asset_versions
 		(organization_id, asset_id, version, blob_id, status, source_type, mime_type, size_bytes, sha256,
-		 width_pixels, height_pixels, duration_seconds, fps, codec, bitrate_bps, audio_codec,
+		 width_pixels, height_pixels, duration_ms, frame_rate, video_codec, duration_seconds, fps, codec, bitrate_bps, audio_codec,
 		 audio_channels, audio_sample_rate, poster_frame_ref, probe_status, probe_error,
 		 provider_job_id, provider_output_id, project_context_version, created_at)
-		VALUES (?, ?, 1, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, 1, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE status='ready', source_type=VALUES(source_type), mime_type=VALUES(mime_type),
-		 size_bytes=VALUES(size_bytes), sha256=VALUES(sha256), project_context_version=VALUES(project_context_version)`,
+		 size_bytes=VALUES(size_bytes), sha256=VALUES(sha256), width_pixels=VALUES(width_pixels), height_pixels=VALUES(height_pixels),
+		 duration_ms=VALUES(duration_ms), frame_rate=VALUES(frame_rate), video_codec=VALUES(video_codec),
+		 duration_seconds=VALUES(duration_seconds), fps=VALUES(fps), codec=VALUES(codec), bitrate_bps=VALUES(bitrate_bps),
+		 audio_codec=VALUES(audio_codec), audio_channels=VALUES(audio_channels), audio_sample_rate=VALUES(audio_sample_rate),
+		 probe_status=VALUES(probe_status), probe_error=VALUES(probe_error), project_context_version=VALUES(project_context_version)`,
 		asset.OrganizationID, asset.AssetID, asset.BlobID, asset.SourceType, asset.MIMEType, asset.SizeBytes, asset.SHA256,
-		nullableInt(asset.WidthPixels), nullableInt(asset.HeightPixels), nullableFloat(asset.Media.DurationSeconds),
+		nullableInt(asset.WidthPixels), nullableInt(asset.HeightPixels), nullableInt64(seedDurationMS(asset.Media)), nullable(seedFrameRate(asset.Media)), nullable(asset.Media.Codec), nullableFloat(asset.Media.DurationSeconds),
 		nullableFloat(asset.Media.FPS), nullable(asset.Media.Codec), nullableInt64(asset.Media.BitrateBPS),
 		nullable(asset.Media.AudioCodec), nullableInt(asset.Media.AudioChannels), nullableInt(asset.Media.AudioSampleRate),
 		nullable(asset.Media.PosterFrameRef), probeStatusValue(asset.Media.ProbeStatus), nullable(asset.Media.ProbeError),
@@ -118,6 +124,20 @@ func (r MySQLRepository) EnsureSeedAsset(ctx context.Context, asset SeedAsset, n
 		ProjectID:    asset.ProjectID,
 		AssetVersion: contract.AssetVersionRef{AssetID: asset.AssetID, Version: 1},
 	}, nil
+}
+
+func seedDurationMS(media MediaMetadata) int64 {
+	if media.DurationSeconds <= 0 {
+		return 0
+	}
+	return int64(math.Round(media.DurationSeconds * 1000))
+}
+
+func seedFrameRate(media MediaMetadata) string {
+	if media.FPS <= 0 {
+		return ""
+	}
+	return strconv.FormatFloat(media.FPS, 'f', -1, 64) + "/1"
 }
 
 func validSeedAssetKindForMIME(kind contract.AssetKind, mimeType string) bool {

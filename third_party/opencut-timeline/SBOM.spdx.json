@@ -1,0 +1,38 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "cookies-opencut-timeline-adaptation",
+  "documentNamespace": "https://github.com/shikanon/cookies/sbom/opencut-timeline/cf5e79e919144200294fb9fed22a222592a0aeea",
+  "creationInfo": {
+    "created": "2026-08-10T00:00:00Z",
+    "creators": ["Tool: cookies-manual-sbom-v1"]
+  },
+  "packages": [
+    {
+      "name": "OpenCut Classic timeline algorithms",
+      "SPDXID": "SPDXRef-Package-OpenCut-Classic",
+      "versionInfo": "cf5e79e919144200294fb9fed22a222592a0aeea",
+      "downloadLocation": "git+https://github.com/OpenCut-app/opencut-classic.git@cf5e79e919144200294fb9fed22a222592a0aeea",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2025-2026 OpenCut"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-OpenCut-Classic"
+    }
+  ],
+  "annotations": [
+    {
+      "annotationDate": "2026-08-10T00:00:00Z",
+      "annotationType": "OTHER",
+      "annotator": "Tool: cookies-manual-sbom-v1",
+      "comment": "No OpenCut npm/runtime package is installed. Adapted command, resize, zoom and snapping semantics are maintained in src/features/video-editing and documented in NOTICE.md."
+    }
+  ]
+}

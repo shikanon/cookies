@@ -24,12 +24,9 @@ import { useProject } from '../../context/ProjectContext'
 import type { SystemKey } from '../../types'
 import { CreativeTaskPlanner } from './CreativeTaskPlanner'
 import { StrategyConversationPane } from './StrategyConversationPane'
-import { fullStrategyFieldLabels, getFullStrategyDraftReadiness, getFullStrategyReadiness } from './strategyBriefReadiness'
 import { useStrategyWorkspace } from './useStrategyWorkspace'
 import type {
   BriefDraft,
-  BriefProductCandidate,
-  BriefVersion,
   DraftRevision,
   KnowledgeDocument,
   Review,
@@ -136,8 +133,6 @@ export function KanonStrategyWorkspace({
           documents={state.documents}
           mediaArtifacts={state.mediaArtifacts}
           messages={state.messages}
-          notice={state.conversationNotice}
-          researchRuns={state.researchRuns}
           onConfirmRequirement={actions.confirmRequirement}
           onOpenBrief={() => onOpenProject(
             currentProject.id,
@@ -166,21 +161,13 @@ export function KanonStrategyWorkspace({
           onConfirm={actions.confirmBrief}
           onConfirmFields={actions.confirmBriefFields}
           onField={actions.patchBriefField}
-          onSelectProduct={actions.selectBriefProductCandidate}
         /> : null}
         {activeView === '策略' ? <StrategyPane
-          briefVersion={state.briefVersion}
           busy={state.busy}
           draft={state.draft}
           readiness={state.readiness}
           probe={state.probe}
-          onCreateBriefRevision={async () => {
-            const created = await actions.createBriefRevision()
-            if (created) {
-              onOpenProject(currentProject.id, 'strategy', 'workspaces', state.detail?.workspace.id, 'Brief')
-            }
-            return created
-          }}
+          briefReady={Boolean(state.briefVersion)}
           onGenerate={actions.generateStrategy}
           onPatch={actions.patchStrategySection}
           onProbe={actions.probeGeneration}
@@ -454,9 +441,6 @@ const briefFields: Array<{
 }> = [
   { path: 'brand.name', label: '品牌', value: brief => brief.document.brand?.name ?? '' },
   { path: 'product.name', label: '产品', value: brief => brief.document.product?.name ?? '' },
-  { path: 'product.category', label: '产品品类', value: brief => brief.document.product?.category ?? '' },
-  { path: 'product.selling_points', label: '产品卖点', value: brief => brief.document.product?.selling_points?.join('\n') ?? '', parse: splitValues, multiline: true },
-  { path: 'product.evidence', label: '产品证据', value: brief => brief.document.product?.evidence?.join('\n') ?? '', parse: splitValues, multiline: true },
   { path: 'industry', label: '行业', value: brief => brief.document.industry ?? '' },
   { path: 'region', label: '地区', value: brief => brief.document.region ?? '' },
   { path: 'language', label: '语言', value: brief => brief.document.language ?? '' },
@@ -468,26 +452,20 @@ const briefFields: Array<{
   { path: 'schedule.window', label: '周期', value: brief => brief.document.schedule.window },
   { path: 'measurement.primary_kpi', label: '核心 KPI', value: brief => brief.document.measurement.primary_kpi },
   { path: 'constraints', label: '约束条件', value: brief => brief.document.constraints.join('\n'), parse: splitValues, multiline: true },
-  { path: 'creative.tone', label: '表达调性', value: brief => brief.document.creative?.tone?.join('\n') ?? '', parse: splitValues, multiline: true },
-  { path: 'creative.mandatory_elements', label: '必提内容', value: brief => brief.document.creative?.mandatory_elements?.join('\n') ?? '', parse: splitValues, multiline: true },
-  { path: 'creative.prohibited_claims', label: '禁用表达', value: brief => brief.document.creative?.prohibited_claims?.join('\n') ?? '', parse: splitValues, multiline: true },
 ]
 
-function BriefPane({ brief, busy, onConfirm, onConfirmFields, onField, onSelectProduct }: {
+function BriefPane({ brief, busy, onConfirm, onConfirmFields, onField }: {
   brief: BriefDraft | null
   busy: string
   onConfirm: () => Promise<boolean>
   onConfirmFields: (operations: Array<{ fieldPath: string; value: unknown }>) => Promise<boolean>
   onField: (path: string, value: unknown) => Promise<boolean>
-  onSelectProduct: (candidate: BriefProductCandidate) => Promise<boolean>
 }) {
   if (!brief) return <UnavailablePane title="Brief 尚未创建" detail="请先进入对话并发送第一条需求信息。"/>
   const frozen = brief.status === 'confirmed'
-  const productCandidates = brief.document.product?.candidates ?? []
   const populatedCount = briefFields.filter(field => field.value(brief).trim()).length
   const confirmedCount = briefFields.filter(field => field.value(brief).trim() && brief.field_states[field.path]?.confirmation === 'confirmed').length
   const optionalCreativeContext = briefFields.filter(field => ['brand.name', 'industry', 'region', 'language'].includes(field.path) && !field.value(brief).trim())
-  const confirmationReadiness = brief.base_brief_version ? getFullStrategyDraftReadiness(brief) : brief.completeness
   const unconfirmedFields = briefFields.flatMap(field => {
     const value = field.value(brief)
     if (!value.trim() || brief.field_states[field.path]?.confirmation === 'confirmed') return []
@@ -495,8 +473,8 @@ function BriefPane({ brief, busy, onConfirm, onConfirmFields, onField, onSelectP
   })
   return <section className="kanon-brief-pane">
     <div className="kanon-strategy-heading">
-      <div><span className="section-label">{brief.base_brief_version ? `BRIEF REVISION · 基于 v${brief.base_brief_version}` : `BRIEF DRAFT v${brief.version}`}</span><h2>{brief.base_brief_version ? '补充完整策略输入' : '确认策略输入'}</h2><p>{brief.base_brief_version ? '原冻结版本保持不变；这里只补充完整策略缺少的信息，确认后将冻结为新的 BriefVersion。' : '字段修改使用服务端版本校验，确认后冻结为不可变 BriefVersion。'}</p></div>
-      <span className={`source-chip ${confirmationReadiness.ready ? '' : 'alert'}`}>{frozen ? '已冻结' : confirmationReadiness.ready ? '可以确认' : `${confirmationReadiness.blockers.length} 个阻断项`}</span>
+      <div><span className="section-label">BRIEF DRAFT v{brief.version}</span><h2>确认策略输入</h2><p>字段修改使用服务端版本校验，确认后冻结为不可变 BriefVersion。</p></div>
+      <span className={`source-chip ${brief.completeness.ready ? '' : 'alert'}`}>{frozen ? '已冻结' : brief.completeness.ready ? '可以确认' : `${brief.completeness.blockers.length} 个阻断项`}</span>
     </div>
     <div className="kanon-brief-health" role="status">
       <div><b>{populatedCount}<small> / {briefFields.length}</small></b><span>已填写</span></div>
@@ -505,13 +483,6 @@ function BriefPane({ brief, busy, onConfirm, onConfirmFields, onField, onSelectP
         ? `${optionalCreativeContext.map(field => field.label).join('、')}未提供；这些信息会在需要时于创作前补充，不再阻断当前交接。`
         : '品牌、市场与语言上下文完整，可直接用于创意交接。'}</p>
     </div>
-    {productCandidates.length ? <ProductCandidatePanel
-      busy={busy === 'brief:select-product'}
-      candidates={productCandidates}
-      disabled={frozen || Boolean(busy)}
-      onSelect={onSelectProduct}
-      selectedName={brief.document.product?.name ?? ''}
-    /> : null}
     <div className="kanon-field-grid">
       {briefFields.map(field => <EditableField
         busy={busy === `brief:${field.path}`}
@@ -527,45 +498,17 @@ function BriefPane({ brief, busy, onConfirm, onConfirmFields, onField, onSelectP
     </div>
     <div className="kanon-brief-footer">
       <div>
-        {confirmationReadiness.blockers.map(blocker => <span key={`${blocker.field}-${blocker.reason}`}><AlertCircle size={13}/>{fieldLabel(blocker.field)}：{blocker.reason}</span>)}
-        {!confirmationReadiness.blockers.length ? <span><CircleCheck size={13}/>必填信息与确认状态满足冻结条件</span> : null}
+        {brief.completeness.blockers.map(blocker => <span key={`${blocker.field}-${blocker.reason}`}><AlertCircle size={13}/>{fieldLabel(blocker.field)}：{blocker.reason}</span>)}
+        {!brief.completeness.blockers.length ? <span><CircleCheck size={13}/>必填信息与确认状态满足冻结条件</span> : null}
       </div>
       <div className="kanon-brief-actions">
         {!frozen && unconfirmedFields.length ? <button className="secondary-button" disabled={Boolean(busy)} onClick={() => void onConfirmFields(unconfirmedFields)}>
           <Check size={15}/>{busy === 'confirm-brief-fields' ? '确认中…' : `确认全部已填写字段（${unconfirmedFields.length}）`}
         </button> : null}
-        <button className="primary-button" disabled={frozen || !confirmationReadiness.ready || Boolean(busy)} onClick={() => void onConfirm()}>
+        <button className="primary-button" disabled={frozen || !brief.completeness.ready || Boolean(busy)} onClick={() => void onConfirm()}>
           <BadgeCheck size={16}/>{busy === 'confirm-brief' ? '确认中…' : frozen ? 'Brief 已冻结' : '确认并冻结 Brief'}
         </button>
       </div>
-    </div>
-  </section>
-}
-
-function ProductCandidatePanel({ busy, candidates, disabled, onSelect, selectedName }: {
-  busy: boolean
-  candidates: BriefProductCandidate[]
-  disabled: boolean
-  onSelect: (candidate: BriefProductCandidate) => Promise<boolean>
-  selectedName: string
-}) {
-  return <section className="kanon-product-candidates" aria-labelledby="brief-product-candidates-title">
-    <header>
-      <div><span className="section-label">PRODUCT CANDIDATES</span><h3 id="brief-product-candidates-title">资料中识别到 {candidates.length} 个候选产品</h3></div>
-      <p>选择主推后，会把该产品的名称、品类、卖点、证据、必提和禁用内容一次写入下方固定 Brief；不同产品不会混写。</p>
-    </header>
-    <div>
-      {candidates.map(candidate => {
-        const selected = selectedName.trim() === candidate.name.trim()
-        return <article className={selected ? 'selected' : undefined} key={candidate.name}>
-          <header><div><b>{candidate.name}</b><small>{candidate.category || '品类待确认'}</small></div><span>{candidate.source_refs?.length ?? 0} 处来源</span></header>
-          {candidate.selling_points?.length ? <dl><dt>卖点</dt><dd>{candidate.selling_points.slice(0, 4).join(' · ')}</dd></dl> : null}
-          {candidate.evidence?.length ? <dl><dt>证据</dt><dd>{candidate.evidence.slice(0, 3).join(' · ')}</dd></dl> : null}
-          {candidate.mandatory_elements?.length ? <details><summary>必提内容（{candidate.mandatory_elements.length}）</summary><ul>{candidate.mandatory_elements.map(item => <li key={item}>{item}</li>)}</ul></details> : null}
-          {candidate.prohibited_claims?.length ? <details><summary>禁用表达（{candidate.prohibited_claims.length}）</summary><ul>{candidate.prohibited_claims.map(item => <li key={item}>{item}</li>)}</ul></details> : null}
-          <button disabled={disabled || selected} onClick={() => void onSelect(candidate)} type="button">{selected ? '已选为主推' : busy ? '正在选择…' : '选为主推产品'}</button>
-        </article>
-      })}
     </div>
   </section>
 }
@@ -596,11 +539,10 @@ function EditableField({ busy, disabled, frozen, label, multiline, onSave, state
   </label>
 }
 
-function StrategyPane({ briefVersion, busy, draft, onCreateBriefRevision, onGenerate, onPatch, onProbe, onRetry, onRevise, onSubmit, pending, probe, readiness }: {
-  briefVersion: BriefVersion | null
+function StrategyPane({ briefReady, busy, draft, onGenerate, onPatch, onProbe, onRetry, onRevise, onSubmit, pending, probe, readiness }: {
+  briefReady: boolean
   busy: string
   draft: StrategyDraft | null
-  onCreateBriefRevision: () => Promise<boolean>
   onGenerate: () => Promise<boolean>
   onPatch: (section: string, value: unknown) => Promise<boolean>
   onProbe: () => Promise<boolean>
@@ -615,8 +557,6 @@ function StrategyPane({ briefVersion, busy, draft, onCreateBriefRevision, onGene
   const [sectionValue, setSectionValue] = useState<unknown>('')
   const [instruction, setInstruction] = useState('')
   const document = draft?.revision?.document
-  const strategyReadiness = briefVersion ? getFullStrategyReadiness(briefVersion) : null
-  const briefReady = Boolean(strategyReadiness?.ready)
   useEffect(() => {
     if (!document) {
       setSectionValue('')
@@ -630,12 +570,7 @@ function StrategyPane({ briefVersion, busy, draft, onCreateBriefRevision, onGene
     return <section className="kanon-strategy-generate">
       <Sparkles size={28}/>
       <h2>生成第一版策略</h2>
-      <p>{briefReady ? '已确认 Brief 将作为不可变输入，生成结果会保存为 Strategy revision。' : briefVersion ? `Brief v${briefVersion.version} 已冻结，但还不满足完整策略生成条件。` : '请先完成并确认 Brief。'}</p>
-      {briefVersion && strategyReadiness && !strategyReadiness.ready ? <div className="kanon-strategy-brief-blocker" role="alert">
-        <div><AlertCircle size={18}/><span><b>还需补充 {strategyReadiness.blockers.length} 项策略输入</b><small>冻结版本不会被修改，系统会基于 Brief v{briefVersion.version} 创建补充修订。</small></span></div>
-        <ul>{strategyReadiness.blockers.map(blocker => <li key={`${blocker.field}-${blocker.reason}`}><b>{fullStrategyFieldLabels[blocker.field] ?? blocker.field}</b><span>{blocker.reason}</span></li>)}</ul>
-        <button className="secondary-button" disabled={Boolean(busy)} onClick={() => void onCreateBriefRevision()}><RotateCcw size={15}/>{busy === 'create-brief-revision' ? '正在创建修订…' : '创建 Brief 补充修订'}</button>
-      </div> : null}
+      <p>{briefReady ? '已确认 Brief 将作为不可变输入，生成结果会保存为 Strategy revision。' : '请先完成并确认 Brief。'}</p>
       <div className="kanon-generation-mode">
         <span>生成模式</span>
         <b>{probe?.ready ? probe.model_version : readiness?.generation_mode ?? '不可用'}</b>

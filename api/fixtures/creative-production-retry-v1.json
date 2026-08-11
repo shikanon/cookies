@@ -1,0 +1,12 @@
+{
+  "contract_version": "creative-production-retry/v1",
+  "status": "accepted",
+  "previous_run": {"source": "editing_render", "id": "editing_render_01"},
+  "new_run": {"source": "editing_render", "id": "editing_render_02"},
+  "source_task": {
+    "system": "creative",
+    "object_type": "edit_task",
+    "object_id": "edit_task_01",
+    "display_name": "夏季产品视频剪辑"
+  }
+}

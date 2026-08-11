@@ -1465,6 +1465,140 @@ paths:
       summary: Create the stable CreativePackage for Delivery and Insights from an approved version.
       parameters: [{$ref: '#/components/parameters/ProjectID'}, {$ref: '#/components/parameters/VersionID'}]
       responses: {'200': {description: Stable CreativePackage created or replayed.}, '409': {$ref: '#/components/responses/Conflict'}}
+  /api/creative/v1/projects/{project_id}/production-runs:
+    get:
+      operationId: listCreativeProductionRuns
+      summary: List the current Project's Creative-owned generation and render run projections.
+      description: >-
+        Returns a read-only projection over Provider and Creative render owners.
+        The projection never becomes the authority for job, asset, review,
+        delivery, or Insights state. Results are ordered by created_at and run
+        identity descending; next_cursor is opaque to callers.
+      parameters:
+        - {$ref: '#/components/parameters/ProjectID'}
+        - name: media_kind
+          in: query
+          schema: {enum: [image, video, audio, render]}
+        - name: status
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            uniqueItems: true
+            items: {enum: [queued, running, ingesting, succeeded, partially_succeeded, failed, expired, cancelled]}
+        - name: source_task_id
+          in: query
+          schema: {type: string, minLength: 1, maxLength: 96}
+        - name: created_after
+          in: query
+          schema: {type: string, format: date-time}
+        - name: created_before
+          in: query
+          schema: {type: string, format: date-time}
+        - name: q
+          in: query
+          description: Matches allowed run IDs, source task display names, and error codes; full prompts are never indexed here.
+          schema: {type: string, minLength: 1, maxLength: 200}
+        - {$ref: '#/components/parameters/ProductionCursor'}
+        - {$ref: '#/components/parameters/ProductionLimit'}
+      responses:
+        '200':
+          description: Project-scoped production runs plus per-source health.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProductionRunPage'}
+              examples:
+                partialSuccess:
+                  externalValue: ../fixtures/creative-production-run-page-v1.json
+        '400': {$ref: '#/components/responses/ProductionInvalidCursor'}
+        '403': {$ref: '#/components/responses/ProjectAccessDenied'}
+        '503': {$ref: '#/components/responses/ProductionSourceUnavailable'}
+  /api/creative/v1/projects/{project_id}/production-runs/{production_source}/{production_run_id}:
+    get:
+      operationId: getCreativeProductionRun
+      summary: Get one production run projection with safe inputs, outputs, lineage, cost, error, and run events.
+      description: >-
+        The response preserves native owner status and exposes only stable
+        AssetVersion references and sanitized diagnostics. It never returns
+        Provider credentials, external task identifiers, temporary output URLs,
+        object-storage keys, or full prompts as ordinary diagnostics.
+      parameters:
+        - {$ref: '#/components/parameters/ProjectID'}
+        - {$ref: '#/components/parameters/ProductionSource'}
+        - {$ref: '#/components/parameters/ProductionRunID'}
+      responses:
+        '200':
+          description: Safe detail for the scoped production run.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProductionRunDetail'}
+              examples:
+                failedEditingRender:
+                  externalValue: ../fixtures/creative-production-run-detail-v1.json
+        '403': {$ref: '#/components/responses/ProjectAccessDenied'}
+        '404': {$ref: '#/components/responses/ProductionRunNotFound'}
+        '503': {$ref: '#/components/responses/ProductionSourceUnavailable'}
+  /api/creative/v1/projects/{project_id}/production-runs/{production_source}/{production_run_id}:retry:
+    post:
+      operationId: retryCreativeProductionRun
+      summary: Delegate a retry to the Creative workflow that owns the failed production run.
+      description: >-
+        A retry always creates a new owner Attempt or RenderJob and preserves
+        the previous run. The command must not create a bare Provider Job when
+        the source workflow cannot prove immutable inputs and retry eligibility.
+      parameters:
+        - {$ref: '#/components/parameters/ProjectID'}
+        - {$ref: '#/components/parameters/ProductionSource'}
+        - {$ref: '#/components/parameters/ProductionRunID'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '202':
+          description: Retry delegated and a new owner run accepted.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProductionRetryResult'}
+              examples:
+                editingRenderRetry:
+                  externalValue: ../fixtures/creative-production-retry-v1.json
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '403': {$ref: '#/components/responses/ProjectAccessDenied'}
+        '404': {$ref: '#/components/responses/ProductionRunNotFound'}
+        '409': {$ref: '#/components/responses/ProductionRetryConflict'}
+        '503': {$ref: '#/components/responses/ProductionSourceUnavailable'}
+  /api/creative/v1/projects/{project_id}/production-assets:
+    get:
+      operationId: listCreativeProductionAssets
+      summary: List stable AssetVersions referenced by the current Project's production runs.
+      description: >-
+        This is a production-lineage view, not a general asset library. It
+        returns stable AssetVersion references and short-lived Assets previews,
+        never copied binaries, Provider temporary URLs, or object-storage keys.
+      parameters:
+        - {$ref: '#/components/parameters/ProjectID'}
+        - name: role
+          in: query
+          schema: {enum: [input, output]}
+        - name: media_kind
+          in: query
+          schema: {enum: [image, video, audio]}
+        - name: run_source
+          in: query
+          schema: {enum: [provider, creative_render, editing_render, audio_render]}
+        - {$ref: '#/components/parameters/ProductionCursor'}
+        - {$ref: '#/components/parameters/ProductionLimit'}
+      responses:
+        '200':
+          description: Deduplicated production AssetVersions with run lineage.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProductionAssetPage'}
+              examples:
+                stableOutput:
+                  externalValue: ../fixtures/creative-production-asset-page-v1.json
+        '400': {$ref: '#/components/responses/ProductionInvalidCursor'}
+        '403': {$ref: '#/components/responses/ProjectAccessDenied'}
+        '503': {$ref: '#/components/responses/ProductionSourceUnavailable'}
 components:
   requestBodies:
     BrandFilmRevision:
@@ -1491,7 +1625,36 @@ components:
     VersionID: {name: version_id, in: path, required: true, schema: {type: string, minLength: 1}}
     RenderJobID: {name: render_job_id, in: path, required: true, schema: {type: string, minLength: 1}}
     IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 255}}
+    ProductionSource:
+      name: production_source
+      in: path
+      required: true
+      schema: {enum: [provider, creative_render, editing_render, audio_render]}
+    ProductionRunID:
+      name: production_run_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 128}
+    ProductionCursor:
+      name: cursor
+      in: query
+      description: Opaque, versioned cursor returned by the previous page.
+      schema: {type: string, minLength: 1, maxLength: 8192}
+    ProductionLimit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 50}
   schemas:
+    ProductionRunPage:
+      $ref: '../contracts/creative-production-center-v1.schema.json#/$defs/ProductionRunPage'
+    ProductionRunDetail:
+      $ref: '../contracts/creative-production-center-v1.schema.json#/$defs/ProductionRunDetail'
+    ProductionAssetPage:
+      $ref: '../contracts/creative-production-center-v1.schema.json#/$defs/ProductionAssetPage'
+    ProductionRetryResult:
+      $ref: '../contracts/creative-production-center-v1.schema.json#/$defs/ProductionRetryResult'
+    ProductionProblem:
+      $ref: '../contracts/creative-production-center-v1.schema.json#/$defs/ProductionProblem'
     BrandAudioWorkspace:
       type: object
       additionalProperties: false
@@ -2146,3 +2309,74 @@ components:
     Conflict: {description: "The resource state, scope, or idempotency key conflicts with the request."}
     NotFound: {description: The scoped resource does not exist.}
     ProjectAccessDenied: {description: The caller cannot access this Project.}
+    ProductionInvalidCursor:
+      description: The production cursor is malformed, unsupported, or does not match the current query.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ProductionProblem'}
+          example:
+            contract_version: creative-production-problem/v1
+            code: PRODUCTION_CURSOR_INVALID
+            message: The production cursor cannot be used for this query.
+            retryable: false
+            source_task: null
+    ProductionRunNotFound:
+      description: The production run does not exist in the authorized Project and source.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ProductionProblem'}
+          example:
+            contract_version: creative-production-problem/v1
+            code: PRODUCTION_RUN_NOT_FOUND
+            message: The production run does not exist in this Project.
+            retryable: false
+            source_task: null
+    ProductionSourceUnavailable:
+      description: A required production owner adapter is temporarily unavailable.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ProductionProblem'}
+          example:
+            contract_version: creative-production-problem/v1
+            code: PRODUCTION_SOURCE_UNAVAILABLE
+            message: A production source is temporarily unavailable.
+            retryable: true
+            source_task: null
+    ProductionRetryConflict:
+      description: The owner workflow rejected retry because state, immutable inputs, or idempotency did not permit it.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ProductionProblem'}
+          examples:
+            notAllowed:
+              value:
+                contract_version: creative-production-problem/v1
+                code: PRODUCTION_RETRY_NOT_ALLOWED
+                message: The current owner state does not allow retry.
+                retryable: false
+                source_task: null
+            sourceWorkflowRequired:
+              value:
+                contract_version: creative-production-problem/v1
+                code: PRODUCTION_RETRY_REQUIRES_SOURCE_WORKFLOW
+                message: Return to the source task to restore required inputs before retrying.
+                retryable: false
+                source_task:
+                  system: creative
+                  object_type: creative_task
+                  object_id: creative_task_01
+                  display_name: 白金眼霜电商前贴
+            inputUnavailable:
+              value:
+                contract_version: creative-production-problem/v1
+                code: PRODUCTION_INPUT_ASSET_UNAVAILABLE
+                message: An immutable input AssetVersion is no longer available for this use.
+                retryable: false
+                source_task: null
+            idempotencyConflict:
+              value:
+                contract_version: creative-production-problem/v1
+                code: PRODUCTION_IDEMPOTENCY_CONFLICT
+                message: The Idempotency-Key was already used for a different retry request.
+                retryable: false
+                source_task: null
