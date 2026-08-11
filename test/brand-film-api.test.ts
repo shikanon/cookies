@@ -53,6 +53,26 @@ test('legacy strategy brand task initializes its workspace through an explicit i
   assert.equal(calls[0].init.method, 'POST')
 })
 
+test('brand film project naming is revision-bound and persists outside draft content', async () => {
+  const originalFetch = globalThis.fetch
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  globalThis.fetch = async (input, init = {}) => {
+    calls.push({ url: String(input), init })
+    return jsonResponse({ id: 'task_1', display_name: '娇兰黄金复原蜜 15 秒广告', version: 9 })
+  }
+  try {
+    await api.renameCreativeTask('project_demo', 'task_1', 8, '娇兰黄金复原蜜 15 秒广告')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.equal(calls[0].url, '/api/creative/v1/projects/project_demo/creative-tasks/task_1/metadata')
+  assert.equal(calls[0].init.method, 'PATCH')
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+    expected_version: 8,
+    display_name: '娇兰黄金复原蜜 15 秒广告',
+  })
+})
+
 test('brand Brief upload hydrates a deduplicated ready document before creating an intake', async () => {
   const originalFetch = globalThis.fetch
   const calls: Array<{ url: string; init: RequestInit }> = []

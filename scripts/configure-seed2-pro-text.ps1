@@ -2,9 +2,11 @@ param(
     [string]$Model = "doubao-seed-2-0-pro-260215"
 )
 
-# Reuses an already encrypted Ark credential when available, otherwise the
-# existing Adapter credential. No token is read from command-line arguments,
-# written to .env, or embedded in SQL.
+# Reuses the already encrypted company Adapter credential. Seed-2-pro text
+# routes must not silently switch to a direct Ark connection: the two
+# transports have different credential ownership and operational contracts.
+# No token is read from command-line arguments, written to .env, or embedded
+# in SQL.
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -57,17 +59,20 @@ try {
 SELECT r.id, c.id, c.current_revision_id, c.connection_type
 FROM provider_model_routes r
 JOIN provider_connections c ON c.status = 'enabled' AND c.current_revision_id IS NOT NULL
-JOIN provider_credentials pc ON pc.connection_id = c.id AND pc.status = 'active'
+JOIN provider_credentials pc ON pc.connection_id = c.id
+  AND pc.status = 'active'
+  AND pc.active_from <= UTC_TIMESTAMP(6)
+  AND (pc.active_until IS NULL OR pc.active_until > UTC_TIMESTAMP(6))
 WHERE r.organization_id IS NULL
   AND r.capability = 'text.generate'
   AND r.model_alias = 'cookies.text.standard'
   AND r.status = 'enabled'
-  AND c.connection_type IN ('ark', 'adapter_gateway')
-ORDER BY (c.connection_type = 'ark') DESC, pc.credential_version DESC
+  AND c.connection_type = 'adapter_gateway'
+ORDER BY pc.credential_version DESC
 LIMIT 1;
 "@).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($routeRow)) {
-        throw "No enabled cookies.text.standard Adapter route exists. Import the encrypted Provider connection first."
+        throw "No enabled Adapter gateway credential exists for cookies.text.standard. Configure or rotate the company Adapter credential first."
     }
     $routeFields = @($routeRow -split "`t")
     if ($routeFields.Count -ne 4) {
@@ -132,7 +137,7 @@ COMMIT;
     Set-DotEnvValue "COOKIES_STRATEGY_REAL_PROVIDER_ENABLED" "true"
     Set-DotEnvValue "COOKIES_STRATEGY_TEXT_MODEL_ALIAS" "cookies.text.standard"
     Set-DotEnvValue "COOKIES_STRATEGY_DEEP_REVIEW_MODEL_ALIAS" "cookies.text.deep_review"
-    Write-Output "Seed-2-pro standard route: cookies.text.standard via $connectionType (thinking disabled)."
+    Write-Output "Seed-2-pro standard route: cookies.text.standard via Adapter gateway (thinking disabled)."
     Write-Output "Seed-2-pro deep route:     cookies.text.deep_review (thinking enabled)."
 }
 finally {

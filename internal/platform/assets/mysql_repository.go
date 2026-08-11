@@ -14,6 +14,46 @@ import (
 
 type MySQLRepository struct{ DB *sql.DB }
 
+func (r MySQLRepository) GetCurrentAssetRights(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, ref contract.AssetVersionRef) (AssetRightsVersion, error) {
+	if _, err := r.db(); err != nil {
+		return AssetRightsVersion{}, err
+	}
+	var value AssetRightsVersion
+	var channels, territories, purposes, evidence []byte
+	var verifiedBy sql.NullString
+	err := r.DB.QueryRowContext(ctx, `SELECT id, version, organization_id, project_id, asset_id, asset_version,
+		source, rights_holder, status, derivative_work_allowed, generative_ai_allowed, allowed_channels,
+		territories, purposes, valid_from, valid_until, revoked_at, asserted_by, verified_by, evidence, created_at
+		FROM asset_rights_versions WHERE organization_id=? AND project_id=? AND asset_id=? AND asset_version=?
+		ORDER BY version DESC LIMIT 1`, org, project, ref.AssetID, ref.Version).Scan(
+		&value.ID, &value.Version, &value.OrganizationID, &value.ProjectID, &value.AssetRef.AssetID, &value.AssetRef.Version,
+		&value.Source, &value.RightsHolder, &value.Status, &value.DerivativeWorkAllowed, &value.GenerativeAIAllowed,
+		&channels, &territories, &purposes, &value.ValidFrom, &value.ValidUntil, &value.RevokedAt, &value.AssertedBy,
+		&verifiedBy, &evidence, &value.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AssetRightsVersion{}, ErrNotFound
+	}
+	if err != nil {
+		return AssetRightsVersion{}, err
+	}
+	if verifiedBy.Valid {
+		value.VerifiedBy = verifiedBy.String
+	}
+	if err := json.Unmarshal(channels, &value.AllowedChannels); err != nil {
+		return AssetRightsVersion{}, err
+	}
+	if err := json.Unmarshal(territories, &value.Territories); err != nil {
+		return AssetRightsVersion{}, err
+	}
+	if err := json.Unmarshal(purposes, &value.Purposes); err != nil {
+		return AssetRightsVersion{}, err
+	}
+	if err := json.Unmarshal(evidence, &value.Evidence); err != nil {
+		return AssetRightsVersion{}, err
+	}
+	return value, nil
+}
+
 func (r MySQLRepository) db() (*sql.DB, error) {
 	if r.DB == nil {
 		return nil, fmt.Errorf("assets database is required")

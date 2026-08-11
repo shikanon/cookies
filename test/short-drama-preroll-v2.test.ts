@@ -43,13 +43,15 @@ test('editing story summary invalidates hooks, prompts, frames and output', () =
   assert.equal(changed.output, null)
 })
 
-test('changing duration keeps the selected first frame but invalidates video output', () => {
+test('changing duration clears the stale direction, first frame, and video output', () => {
   const generated = shortDramaPrerollReducer(readyState(), { type: 'video-ready', output: { id: 'output-1', videoUrl: '/output.mp4', duration: 6, createdAt: '2026-08-05T00:00:00Z' } })
   const changed = shortDramaPrerollReducer(generated, { type: 'duration-changed', duration: 10 })
   assert.equal(changed.duration, 10)
-  assert.equal(changed.selectedImageId, images[0].id)
+  assert.equal(changed.selectedHookId, '')
+  assert.equal(changed.selectedImageId, '')
   assert.equal(changed.output, null)
-  assert.equal(changed.videoPrompt, '6 秒宫廷钩子')
+  assert.equal(changed.videoPrompt, '')
+  assert.equal(changed.activeStep, 'direction')
 })
 
 test('selecting a hook stores editable prompts returned by the server', () => {

@@ -27,21 +27,23 @@ const (
 )
 
 type RenderJob struct {
-	ID             string                    `json:"id"`
-	OrganizationID contract.OrganizationID   `json:"organization_id"`
-	ProjectID      contract.ProjectID        `json:"project_id"`
-	TaskID         string                    `json:"creative_task_id"`
-	Status         RenderStatus              `json:"status"`
-	PreRollVideo   contract.AssetVersionRef  `json:"pre_roll_video"`
-	MainVideo      contract.AssetVersionRef  `json:"main_video"`
-	OutputAsset    *contract.ProjectAssetRef `json:"output_asset,omitempty"`
-	ErrorCode      string                    `json:"error_code,omitempty"`
-	ErrorMessage   string                    `json:"error_message,omitempty"`
-	CreatedBy      contract.Principal        `json:"created_by"`
-	IdempotencyKey contract.IdempotencyKey   `json:"-"`
-	RequestHash    string                    `json:"-"`
-	CreatedAt      time.Time                 `json:"created_at"`
-	UpdatedAt      time.Time                 `json:"updated_at"`
+	ID               string                    `json:"id"`
+	OrganizationID   contract.OrganizationID   `json:"organization_id"`
+	ProjectID        contract.ProjectID        `json:"project_id"`
+	TaskID           string                    `json:"creative_task_id"`
+	Status           RenderStatus              `json:"status"`
+	PreRollVideo     contract.AssetVersionRef  `json:"pre_roll_video"`
+	MainVideo        contract.AssetVersionRef  `json:"main_video"`
+	OutputAsset      *contract.ProjectAssetRef `json:"output_asset,omitempty"`
+	ErrorCode        string                    `json:"error_code,omitempty"`
+	ErrorMessage     string                    `json:"error_message,omitempty"`
+	CreatedBy        contract.Principal        `json:"created_by"`
+	IdempotencyKey   contract.IdempotencyKey   `json:"-"`
+	RequestHash      string                    `json:"-"`
+	CreatedAt        time.Time                 `json:"created_at"`
+	UpdatedAt        time.Time                 `json:"updated_at"`
+	ProductionUsage  *RenderUsage              `json:"-"`
+	ProductionEvents []RenderEvent             `json:"-"`
 }
 
 type CreateRenderJobRequest struct {

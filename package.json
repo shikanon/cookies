@@ -17,7 +17,8 @@
     "check:server": "tsc --noEmit -p server/tsconfig.json",
     "test:e2e": "playwright test --config=playwright.platform.config.ts",
     "test:e2e:platform": "playwright test --config=playwright.platform.config.ts",
-    "test:e2e:legacy": "playwright test"
+    "test:e2e:legacy": "playwright test",
+    "test:video-editor-governance": "node scripts/verify-opencut-exit.mjs && tsx scripts/benchmark-video-timeline.ts"
   },
   "dependencies": {
     "@vitejs/plugin-react": "4.7.0",

@@ -1137,6 +1137,25 @@ func (s *Server) getCreativeTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, value)
 }
 
+func (s *Server) renameCreativeTask(w http.ResponseWriter, r *http.Request) {
+	if s.creative == nil {
+		s.notImplemented(w, r)
+		return
+	}
+	var body creative.RenameTaskRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.badRequest(w, r, err)
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	value, err := s.creative.RenameTask(r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("task_id"), body)
+	if err != nil {
+		s.writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
 func (s *Server) getViralRemakeWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.creative == nil {
 		s.notImplemented(w, r)

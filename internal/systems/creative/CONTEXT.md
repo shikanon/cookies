@@ -5,8 +5,10 @@
 - **CreativeIntake**: Creative owns the normalized, user-confirmed source for a
   planned creative output. It can be incomplete, but it is never a Strategy
   object.
-- **CreativeTask**: A production unit created from a ready Intake. It owns the
-  selected channel, production state, content drafts and production lineage.
+- **CreativeTask**: A named production work created from a ready Intake. It owns
+  the selected channel, production state, content drafts and production
+  lineage. `display_name` is its user-facing identity in work selectors;
+  Draft revisions are editing history inside the task, not separate works.
 - **ImageTextDraft**: The editable working revision for one image-and-text
   task. It contains the post copy and planned image sequence; it is not a
   media asset or a cross-system hand-off.

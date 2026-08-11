@@ -1,0 +1,1 @@
+DROP INDEX idx_provider_jobs_production_query ON provider_jobs;

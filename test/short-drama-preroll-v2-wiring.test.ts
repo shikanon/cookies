@@ -18,6 +18,7 @@ test('short drama preroll V3 uses one selected frame reference and persistent wo
   assert.doesNotMatch(workspace, /sourceType: 'upload' as const/)
   assert.match(workspace, /sourceUnavailableMessage/)
   assert.match(workspace, /api\.analyzeShortDramaV2Source/)
+  assert.match(workspace, /current = await api\.reconcileShortDramaV2Video[\s\S]*job\.status !== 'succeeded'/)
   assert.match(workspace, /api\.generateShortDramaV2Directions/)
   assert.match(workspace, /direction_batch\?\.selected_direction_id/)
   assert.match(workspace, /output_canvas_asset/)

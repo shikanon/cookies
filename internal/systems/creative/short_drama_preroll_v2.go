@@ -212,6 +212,7 @@ type ShortDramaPrerollV2Workspace struct {
 	TrustedMaterials     *ShortDramaV2TrustedMaterialBinding `json:"trusted_materials,omitempty"`
 	GenerationSpec       *ShortDramaV2GenerationSpec         `json:"generation_spec,omitempty"`
 	LatestVideoAttemptID string                              `json:"latest_video_attempt_id,omitempty"`
+	VideoError           *contract.JobError                  `json:"video_error,omitempty"`
 	RawOutputAsset       *contract.ProjectAssetRef           `json:"raw_output_asset,omitempty"`
 	OutputNormalization  *ShortDramaV2AsyncResource          `json:"output_normalization,omitempty"`
 	OutputAsset          *contract.ProjectAssetRef           `json:"output_asset,omitempty"`

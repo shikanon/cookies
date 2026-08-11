@@ -9,8 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shikanon/cookies/internal/platform/assets"
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
+
+type squareTimelineProbe struct{}
+
+func (squareTimelineProbe) Probe(context.Context, []byte) (assets.VideoMetadata, error) {
+	return assets.VideoMetadata{DurationMS: 3000, WidthPixels: 1080, HeightPixels: 1080, FrameRate: "30/1", VideoCodec: "h264", AudioCodec: "aac"}, nil
+}
 
 type timelineProgressRunnerStub struct {
 	args []string
@@ -86,5 +93,25 @@ func TestFFmpegTimelineRendererProducesValidatedOutputAndCleansWorkDirectory(t *
 	}
 	if len(progress) != 1 || progress[0] != 50 {
 		t.Fatalf("progress not forwarded: %v", progress)
+	}
+}
+
+func TestFFmpegTimelineRendererOpensC3ImagesAndVideosAsVisualInputs(t *testing.T) {
+	runner := &timelineProgressRunnerStub{}
+	request := TimelineRenderRequest{OrganizationID: "org_1", ProjectID: "project_1", DurationMS: 3000, Width: 1080, Height: 1080, FrameRate: 30, SampleRate: 48000,
+		Visual: []TimelineVisualClip{
+			{ID: "image", Kind: "image", Asset: contract.AssetVersionRef{AssetID: "image", Version: 1}, EndMS: 3000, Fit: "contain", PositionX: 0.5, PositionY: 0.5, Scale: 1, Opacity: 1, ZIndex: 1},
+			{ID: "video", Kind: "video", Asset: contract.AssetVersionRef{AssetID: "video", Version: 1}, EndMS: 3000, Fit: "cover", PositionX: 0.5, PositionY: 0.5, Scale: 1, Opacity: 1, ZIndex: 0},
+		},
+	}
+	renderer := FFmpegTimelineRenderer{FFmpegPath: "ffmpeg", WorkRoot: t.TempDir(), Visuals: audioMixTestSource{}, Audio: audioMixTestSource{}, Probe: squareTimelineProbe{}, Runner: runner}
+	output, err := renderer.Render(context.Background(), request, func(TimelineProgress) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Content.Close()
+	joined := strings.Join(runner.args, " ")
+	if !strings.Contains(joined, "-i "+filepath.Join(filepath.Dir(runner.args[len(runner.args)-1]), "visual-01.bin")) || !strings.Contains(joined, "-loop 1 -i "+filepath.Join(filepath.Dir(runner.args[len(runner.args)-1]), "visual-02.bin")) {
+		t.Fatalf("visual inputs were not opened in z order with still-image looping: %s", joined)
 	}
 }

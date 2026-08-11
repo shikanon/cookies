@@ -2,18 +2,30 @@ package creative
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	platformassets "github.com/shikanon/cookies/internal/platform/assets"
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
 
 const EditTaskContractVersion = "creative-edit-task/v1"
 
+var ErrEditTimelineVersionConflict = errors.New("editing timeline version conflicts with the current timeline")
+
 type EditTaskStatus string
 
-const EditTaskDraft EditTaskStatus = "draft"
+const (
+	EditTaskDraft       EditTaskStatus = "draft"
+	EditTaskRendering   EditTaskStatus = "rendering"
+	EditTaskReviewReady EditTaskStatus = "review_ready"
+	EditTaskCompleted   EditTaskStatus = "completed"
+	EditTaskFailed      EditTaskStatus = "failed"
+	EditTaskArchived    EditTaskStatus = "archived"
+)
 
 type EditTaskEntrySource string
 
@@ -35,30 +47,73 @@ type EditTask struct {
 	Status               EditTaskStatus          `json:"status"`
 	EntrySource          EditTaskEntrySource     `json:"entry_source"`
 	SourceCreativeTaskID string                  `json:"source_creative_task_id,omitempty"`
-	CurrentTimeline      TimelineVersion         `json:"current_timeline"`
+	CurrentTimeline      *TimelineVersion        `json:"current_timeline"`
 	CreatedBy            string                  `json:"created_by"`
 	CreatedAt            time.Time               `json:"created_at"`
 	UpdatedAt            time.Time               `json:"updated_at"`
 }
 
 type TimelineVersion struct {
-	Version     int64             `json:"version"`
-	Timeline    EditingTimelineV1 `json:"timeline"`
-	ContentHash string            `json:"content_hash"`
-	CreatedBy   string            `json:"created_by"`
-	CreatedAt   time.Time         `json:"created_at"`
+	Version               int64              `json:"version"`
+	SchemaVersion         string             `json:"schema_version"`
+	Timeline              EditingTimelineV1  `json:"-"`
+	TimelineV2            *EditingTimelineV2 `json:"-"`
+	ParentVersion         int64              `json:"parent_version,omitempty"`
+	ChangeSummary         string             `json:"change_summary,omitempty"`
+	OperationBatchID      string             `json:"operation_batch_id,omitempty"`
+	CompilerCompatibility string             `json:"compiler_compatibility"`
+	ContentHash           string             `json:"content_hash"`
+	CreatedBy             string             `json:"created_by"`
+	CreatedAt             time.Time          `json:"created_at"`
+}
+
+func (v TimelineVersion) MarshalJSON() ([]byte, error) {
+	timeline := any(v.Timeline)
+	if v.TimelineV2 != nil {
+		timeline = v.TimelineV2
+	}
+	return json.Marshal(struct {
+		Version               int64     `json:"version"`
+		SchemaVersion         string    `json:"schema_version"`
+		Timeline              any       `json:"timeline"`
+		ParentVersion         int64     `json:"parent_version,omitempty"`
+		ChangeSummary         string    `json:"change_summary,omitempty"`
+		OperationBatchID      string    `json:"operation_batch_id,omitempty"`
+		CompilerCompatibility string    `json:"compiler_compatibility"`
+		ContentHash           string    `json:"content_hash"`
+		CreatedBy             string    `json:"created_by"`
+		CreatedAt             time.Time `json:"created_at"`
+	}{v.Version, v.Schema(), timeline, v.ParentVersion, v.ChangeSummary, v.OperationBatchID, v.CompilerCompatibility, v.ContentHash, v.CreatedBy, v.CreatedAt})
+}
+
+func (v TimelineVersion) Schema() string {
+	if v.SchemaVersion != "" {
+		return v.SchemaVersion
+	}
+	if v.TimelineV2 != nil {
+		return EditingTimelineSchemaV2
+	}
+	return EditingTimelineSchemaV1
 }
 
 type EditTaskRepository interface {
-	CreateEditTask(context.Context, EditTask, TimelineVersion) (EditTask, error)
+	CreateEditTask(context.Context, EditTask, *TimelineVersion) (EditTask, error)
 	GetEditTask(context.Context, contract.OrganizationID, contract.ProjectID, string) (EditTask, error)
 	FindEditTaskBySource(context.Context, contract.OrganizationID, contract.ProjectID, EditTaskEntrySource, string) (EditTask, error)
+	ListEditTasks(context.Context, contract.OrganizationID, contract.ProjectID, EditTaskStatus, int) ([]EditTask, error)
 	AppendEditTimeline(context.Context, EditTask, int64, TimelineVersion) (EditTask, error)
+	ListEditTimelineVersions(context.Context, contract.OrganizationID, contract.ProjectID, string, int) ([]TimelineVersion, error)
+	UpdateEditTaskStatus(context.Context, contract.OrganizationID, contract.ProjectID, string, EditTaskStatus, time.Time) error
+}
+
+type ListEditTasksRequest struct {
+	Status EditTaskStatus `json:"status,omitempty"`
+	Limit  int            `json:"limit,omitempty"`
 }
 
 type CreateEditTaskRequest struct {
-	DisplayName string            `json:"display_name"`
-	Timeline    EditingTimelineV1 `json:"timeline"`
+	DisplayName string             `json:"display_name"`
+	Timeline    *EditingTimelineV1 `json:"timeline,omitempty"`
 }
 
 type CreateShortDramaV2EditTaskRequest struct {
@@ -74,8 +129,28 @@ type CreateCreativeVersionEditTaskRequest struct {
 }
 
 type SaveEditTimelineRequest struct {
-	ExpectedVersion int64             `json:"expected_version"`
-	Timeline        EditingTimelineV1 `json:"timeline"`
+	ExpectedVersion int64              `json:"expected_version"`
+	Timeline        EditingTimelineV1  `json:"-"`
+	TimelineV2      *EditingTimelineV2 `json:"-"`
+}
+
+func (r *SaveEditTimelineRequest) UnmarshalJSON(data []byte) error {
+	var envelope struct {
+		ExpectedVersion int64           `json:"expected_version"`
+		Timeline        json.RawMessage `json:"timeline"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	document, err := DefaultEditingCodecRegistry().Decode(envelope.Timeline)
+	if err != nil {
+		return err
+	}
+	r.ExpectedVersion, r.TimelineV2 = envelope.ExpectedVersion, document.V2
+	if document.V1 != nil {
+		r.Timeline = *document.V1
+	}
+	return nil
 }
 
 func (s Service) CreateEditTask(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, request CreateEditTaskRequest) (EditTask, error) {
@@ -106,7 +181,7 @@ func (s Service) CreateShortDramaV2EditTask(ctx context.Context, actor contract.
 			{ID: "clip-source", AssetRef: &request.SourceAsset, TimelineStartMS: int(preroll.DurationMS), TimelineEndMS: int(preroll.DurationMS + source.DurationMS), SourceOutMS: int(source.DurationMS)},
 		}}},
 	}
-	return s.createEditTask(ctx, actor, projectID, "短剧前贴混剪", EditTaskEntryShortDramaV2, request.SourceCreativeTaskID, timeline)
+	return s.createEditTask(ctx, actor, projectID, "短剧前贴混剪", EditTaskEntryShortDramaV2, request.SourceCreativeTaskID, &timeline)
 }
 
 func (s Service) CreateCreativeVersionEditTask(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, request CreateCreativeVersionEditTaskRequest) (EditTask, error) {
@@ -131,7 +206,7 @@ func (s Service) CreateCreativeVersionEditTask(ctx context.Context, actor contra
 	if name == "" {
 		name = "广告成片剪辑"
 	}
-	return s.createEditTask(ctx, actor, projectID, name, EditTaskEntryCreativeVersion, request.SourceCreativeTaskID, timeline)
+	return s.createEditTask(ctx, actor, projectID, name, EditTaskEntryCreativeVersion, request.SourceCreativeTaskID, &timeline)
 }
 
 func (s Service) GetEditTask(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string) (EditTask, error) {
@@ -147,9 +222,38 @@ func (s Service) GetEditTask(ctx context.Context, actor contract.ActorContext, p
 	return s.EditTasks.GetEditTask(ctx, actor.OrganizationID, projectID, taskID)
 }
 
+func (s Service) ListEditTasks(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, request ListEditTasksRequest) ([]EditTask, error) {
+	if s.EditTasks == nil || s.Projects == nil {
+		return nil, fmt.Errorf("editing task dependencies are incomplete")
+	}
+	if !actor.HasScope(ScopeRead) {
+		return nil, fmt.Errorf("%s scope is required", ScopeRead)
+	}
+	if _, err := s.Projects.RequireActiveContext(ctx, actor, projectID); err != nil {
+		return nil, err
+	}
+	if request.Status != "" && !validEditTaskStatus(request.Status) {
+		return nil, fmt.Errorf("edit task status filter is invalid")
+	}
+	if request.Limit <= 0 || request.Limit > 100 {
+		request.Limit = 50
+	}
+	return s.EditTasks.ListEditTasks(ctx, actor.OrganizationID, projectID, request.Status, request.Limit)
+}
+
+func (s Service) ListEditTimelineVersions(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string, limit int) ([]TimelineVersion, error) {
+	if err := s.validateEditingDependencies(ctx, actor, projectID, false); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	return s.EditTasks.ListEditTimelineVersions(ctx, actor.OrganizationID, projectID, taskID, limit)
+}
+
 func (s Service) SaveEditTimeline(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string, request SaveEditTimelineRequest) (EditTask, error) {
-	if request.ExpectedVersion < 1 {
-		return EditTask{}, ErrVersionConflict
+	if request.ExpectedVersion < 0 {
+		return EditTask{}, ErrEditTimelineVersionConflict
 	}
 	if err := s.validateEditingDependencies(ctx, actor, projectID, true); err != nil {
 		return EditTask{}, err
@@ -158,20 +262,36 @@ func (s Service) SaveEditTimeline(ctx context.Context, actor contract.ActorConte
 	if err != nil {
 		return EditTask{}, err
 	}
-	if task.CurrentTimeline.Version != request.ExpectedVersion {
-		return EditTask{}, ErrVersionConflict
+	currentVersion := int64(0)
+	if task.CurrentTimeline != nil {
+		currentVersion = task.CurrentTimeline.Version
 	}
-	if err := s.validateTimelineAssets(ctx, actor, projectID, request.Timeline); err != nil {
-		return EditTask{}, err
+	if currentVersion != request.ExpectedVersion {
+		return EditTask{}, ErrEditTimelineVersionConflict
 	}
-	version, err := newTimelineVersion(request.Timeline, request.ExpectedVersion+1, actor.Principal.ID, s.now())
+	var version TimelineVersion
+	if request.TimelineV2 != nil {
+		if err := s.validateTimelineV2Assets(ctx, actor, projectID, *request.TimelineV2, platformassets.AssetUseTimelineSave); err != nil {
+			return EditTask{}, err
+		}
+		version, err = newTimelineVersionV2(*request.TimelineV2, request.ExpectedVersion+1, actor.Principal.ID, s.now())
+	} else {
+		if err := s.validateTimelineAssetsForPurpose(ctx, actor, projectID, request.Timeline, platformassets.AssetUseTimelineSave); err != nil {
+			return EditTask{}, err
+		}
+		version, err = newTimelineVersion(request.Timeline, request.ExpectedVersion+1, actor.Principal.ID, s.now())
+	}
 	if err != nil {
 		return EditTask{}, err
 	}
-	return s.EditTasks.AppendEditTimeline(ctx, task, request.ExpectedVersion, version)
+	updated, err := s.EditTasks.AppendEditTimeline(ctx, task, request.ExpectedVersion, version)
+	if errors.Is(err, ErrVersionConflict) {
+		return EditTask{}, ErrEditTimelineVersionConflict
+	}
+	return updated, err
 }
 
-func (s Service) createEditTask(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, displayName string, source EditTaskEntrySource, sourceCreativeTaskID string, timeline EditingTimelineV1) (EditTask, error) {
+func (s Service) createEditTask(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, displayName string, source EditTaskEntrySource, sourceCreativeTaskID string, timeline *EditingTimelineV1) (EditTask, error) {
 	if err := s.validateEditingDependencies(ctx, actor, projectID, true); err != nil {
 		return EditTask{}, err
 	}
@@ -184,17 +304,26 @@ func (s Service) createEditTask(ctx context.Context, actor contract.ActorContext
 	if source == EditTaskEntryManual && sourceCreativeTaskID != "" {
 		return EditTask{}, fmt.Errorf("manual edit task cannot have source_creative_task_id")
 	}
-	if err := s.validateTimelineAssets(ctx, actor, projectID, timeline); err != nil {
-		return EditTask{}, err
+	if timeline == nil && source != EditTaskEntryManual {
+		return EditTask{}, fmt.Errorf("source edit task requires an initial timeline")
+	}
+	if timeline != nil {
+		if err := s.validateTimelineAssets(ctx, actor, projectID, *timeline); err != nil {
+			return EditTask{}, err
+		}
 	}
 	now := s.now()
 	id, err := s.idGenerator()("edit")
 	if err != nil {
 		return EditTask{}, err
 	}
-	version, err := newTimelineVersion(timeline, 1, actor.Principal.ID, now)
-	if err != nil {
-		return EditTask{}, err
+	var version *TimelineVersion
+	if timeline != nil {
+		value, versionErr := newTimelineVersion(*timeline, 1, actor.Principal.ID, now)
+		if versionErr != nil {
+			return EditTask{}, versionErr
+		}
+		version = &value
 	}
 	task := EditTask{ContractVersion: EditTaskContractVersion, ID: id, OrganizationID: actor.OrganizationID, ProjectID: projectID,
 		DisplayName: displayName, Status: EditTaskDraft, EntrySource: source, SourceCreativeTaskID: sourceCreativeTaskID,
@@ -245,6 +374,10 @@ func (s Service) readEditableVideos(ctx context.Context, actor contract.ActorCon
 }
 
 func (s Service) validateTimelineAssets(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, timeline EditingTimelineV1) error {
+	return s.validateTimelineAssetsForPurpose(ctx, actor, projectID, timeline, platformassets.AssetUseTimelineSave)
+}
+
+func (s Service) validateTimelineAssetsForPurpose(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, timeline EditingTimelineV1, purpose platformassets.AssetUsePurpose) error {
 	if err := timeline.Validate(); err != nil {
 		return err
 	}
@@ -260,6 +393,14 @@ func (s Service) validateTimelineAssets(ctx context.Context, actor contract.Acto
 			if asset.Ref != *clip.AssetRef || !asset.Ready || (track.Role == EditingTrackPrimaryVideo && asset.Kind != contract.AssetVideo) {
 				return fmt.Errorf("editing timeline clip %s references an unavailable asset", clip.ID)
 			}
+			if int64(clip.SourceOutMS) > asset.DurationMS {
+				return fmt.Errorf("editing timeline clip %s source range exceeds asset duration", clip.ID)
+			}
+			if s.AssetUses != nil {
+				if _, err := s.AssetUses.Authorize(ctx, platformassets.AssetUseRequest{OrganizationID: actor.OrganizationID, ProjectID: projectID, AssetRef: *clip.AssetRef, Purpose: purpose}); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -273,7 +414,23 @@ func newTimelineVersion(timeline EditingTimelineV1, version int64, actorID strin
 	if err != nil {
 		return TimelineVersion{}, err
 	}
-	value := TimelineVersion{Version: version, Timeline: timeline, ContentHash: "sha256:" + hash, CreatedBy: actorID, CreatedAt: now}
+	value := TimelineVersion{Version: version, SchemaVersion: EditingTimelineSchemaV1, Timeline: timeline, CompilerCompatibility: "editing-v1", ContentHash: "sha256:" + hash, CreatedBy: actorID, CreatedAt: now}
+	if err := value.Validate(); err != nil {
+		return TimelineVersion{}, err
+	}
+	return value, nil
+}
+
+func newTimelineVersionV2(timeline EditingTimelineV2, version int64, actorID string, now time.Time) (TimelineVersion, error) {
+	document := EditingDocument{V2: &timeline}
+	if err := document.Validate(); err != nil {
+		return TimelineVersion{}, err
+	}
+	hash, err := editingDocumentHash(document)
+	if err != nil {
+		return TimelineVersion{}, err
+	}
+	value := TimelineVersion{Version: version, SchemaVersion: EditingTimelineSchemaV2, TimelineV2: &timeline, CompilerCompatibility: "editing-v2-audio-c5", ContentHash: hash, CreatedBy: actorID, CreatedAt: now}
 	if err := value.Validate(); err != nil {
 		return TimelineVersion{}, err
 	}
@@ -282,7 +439,7 @@ func newTimelineVersion(timeline EditingTimelineV1, version int64, actorID strin
 
 func (t EditTask) Validate() error {
 	if t.ContractVersion != EditTaskContractVersion || strings.TrimSpace(t.ID) == "" || t.OrganizationID == "" || t.ProjectID == "" ||
-		len([]rune(strings.TrimSpace(t.DisplayName))) == 0 || len([]rune(t.DisplayName)) > 120 || t.Status != EditTaskDraft ||
+		len([]rune(strings.TrimSpace(t.DisplayName))) == 0 || len([]rune(t.DisplayName)) > 120 || !validEditTaskStatus(t.Status) ||
 		(t.EntrySource != EditTaskEntryManual && t.EntrySource != EditTaskEntryShortDramaV2 && t.EntrySource != EditTaskEntryCreativeVersion) || strings.TrimSpace(t.CreatedBy) == "" ||
 		t.CreatedAt.IsZero() || t.UpdatedAt.IsZero() {
 		return fmt.Errorf("edit task is incomplete")
@@ -290,12 +447,33 @@ func (t EditTask) Validate() error {
 	if (t.EntrySource == EditTaskEntryManual) != (t.SourceCreativeTaskID == "") {
 		return fmt.Errorf("edit task source linkage is invalid")
 	}
+	if t.CurrentTimeline == nil {
+		if t.EntrySource != EditTaskEntryManual {
+			return fmt.Errorf("source edit task requires a timeline")
+		}
+		return nil
+	}
 	return t.CurrentTimeline.Validate()
+}
+
+func validEditTaskStatus(status EditTaskStatus) bool {
+	switch status {
+	case EditTaskDraft, EditTaskRendering, EditTaskReviewReady, EditTaskCompleted, EditTaskFailed, EditTaskArchived:
+		return true
+	default:
+		return false
+	}
 }
 
 func (v TimelineVersion) Validate() error {
 	if v.Version < 1 || strings.TrimSpace(v.ContentHash) == "" || strings.TrimSpace(v.CreatedBy) == "" || v.CreatedAt.IsZero() {
 		return fmt.Errorf("timeline version is incomplete")
+	}
+	if v.Schema() == EditingTimelineSchemaV2 {
+		if v.TimelineV2 == nil {
+			return fmt.Errorf("timeline v2 payload is required")
+		}
+		return v.TimelineV2.Validate()
 	}
 	return v.Timeline.Validate()
 }

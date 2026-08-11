@@ -330,6 +330,17 @@ func (r MySQLRepository) GetImageGenerationAttempt(
 	return value, err
 }
 
+func (r MySQLRepository) FindImageGenerationAttemptByProviderJob(
+	ctx context.Context,
+	organizationID contract.OrganizationID,
+	projectID contract.ProjectID,
+	providerJobID string,
+) (ImageGenerationAttempt, error) {
+	return scanImageGenerationAttempt(r.DB.QueryRowContext(ctx, imageAttemptSelect+`
+		WHERE organization_id=? AND project_id=? AND provider_job_id=?`,
+		organizationID, projectID, providerJobID))
+}
+
 func (r MySQLRepository) MarkImageAttemptBaseReady(
 	ctx context.Context,
 	organizationID contract.OrganizationID,

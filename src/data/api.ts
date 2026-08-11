@@ -267,7 +267,7 @@ export type ApiAssetVersionPointer = {
   organizationId: string
   projectId: string
   assetId: string
-  mediaKind?: 'image' | 'video'
+  mediaKind?: 'image' | 'video' | 'audio'
   contentUrl?: string
   sourceJobId?: string
   workingVersion: number
@@ -316,7 +316,7 @@ export type ApiProjectMediaAsset = {
   id: string
   projectId: string
   version: number
-  kind: 'video' | 'image' | 'document'
+  kind: 'video' | 'image' | 'audio' | 'document'
   sourceType?: 'upload' | 'provider_generated' | 'imported' | 'captured' | 'rendered'
   mimeType: string
   sizeBytes: number
@@ -325,6 +325,9 @@ export type ApiProjectMediaAsset = {
   height?: number
   createdAt: string
   contentUrl: string
+  rightsStatus?: 'unverified' | 'active' | 'revoked'
+  useAllowed?: boolean
+  useDenialCode?: string
 }
 
 export type ApiAssetFeature = {
@@ -666,6 +669,7 @@ export type ApiCreativeIntakeBootstrap = {
 
 export type ApiCreativeTaskSummary = {
   id: string
+  display_name: string
   organization_id: string
   project_id: string
   intake_id: string
@@ -1149,8 +1153,10 @@ export type ApiBrandFilmQualityRun = {
 export type ApiBrandFilmWorkspace = {
   task: {
     id: string
+    display_name: string
     status: string
     performance_mode: 'brand_video'
+    version: number
     updated_at: string
   }
   intake: {
@@ -1523,12 +1529,21 @@ export type ApiShortDramaV2Workspace = {
     last_frame_asset_id: string
   }
   latest_video_attempt_id?: string
+  video_error?: { code: string; message: string; retryable: boolean }
   raw_output_asset?: ApiShortDramaV2ProjectAssetRef
   output_asset?: ApiShortDramaV2ProjectAssetRef
 }
 
 export type ApiShortDramaV2TaskDetail = {
-  task: { id: string; performance_mode: 'short_drama_preroll'; status: string }
+  task: {
+    id: string
+    display_name: string
+    performance_mode: 'short_drama_preroll'
+    status: string
+    version: number
+    created_at: string
+    updated_at: string
+  }
   video_draft: { revision: number; short_drama_preroll_v2: ApiShortDramaV2Workspace }
 }
 
@@ -3787,6 +3802,26 @@ function listCreativeTasks(projectId: string, limit = 100) {
   )
 }
 
+export type ApiExtractedDocumentMedia = {
+  filename: string
+  mime_type: 'image/png' | 'image/jpeg'
+  page_number: number
+  page_text?: string
+  width: number
+  height: number
+  size_bytes: number
+  sha256: string
+  content: string
+}
+
+function renameCreativeTask(projectId: string, taskId: string, expectedVersion: number, displayName: string) {
+  return creativeRequest<ApiCreativeTaskSummary>(
+    `/projects/${encodeURIComponent(projectId)}/creative-tasks/${encodeURIComponent(taskId)}/metadata`,
+    'PATCH',
+    { expected_version: expectedVersion, display_name: displayName },
+  )
+}
+
 function listCreativeIntakes(projectId: string, limit = 100) {
   return creativeRequest<{ items: ApiCreativeIntakeBootstrap[] }>(
     `/projects/${encodeURIComponent(projectId)}/creative-intakes?limit=${limit}`,
@@ -3816,7 +3851,14 @@ function getKnowledgeDocument(projectId: string, documentId: string) {
   )
 }
 
-function createManualBrandFilmIntake(projectId: string, document: ApiKnowledgeDocument, durationSeconds = 15) {
+function extractKnowledgeDocumentMedia(projectId: string, documentId: string) {
+  return platformRequest<{ items: ApiExtractedDocumentMedia[] }>(
+    `/projects/${encodeURIComponent(projectId)}/knowledge/documents/${encodeURIComponent(documentId)}/media:extract`,
+    'POST',
+  )
+}
+
+function createManualBrandFilmIntake(projectId: string, document: ApiKnowledgeDocument, durationSeconds = 15, assetCandidates: ApiBrandBriefAssetCandidate[] = []) {
   const filename = document.filename || document.title || '品牌 Brief.pdf'
   const productName = filename.replace(/\.(pdf|docx|md)$/i, '').trim() || '未命名品牌项目'
   const briefText = document.extracted_text?.trim() || ''
@@ -3847,7 +3889,7 @@ function createManualBrandFilmIntake(projectId: string, document: ApiKnowledgeDo
         reason: '用户上传 PDF Brief 后创建的品牌广告制作路线',
         target_duration_seconds: durationSeconds,
         aspect_ratio: '9:16',
-        source_asset_refs: [],
+        source_asset_refs: assetCandidates.flatMap(candidate => candidate.asset_ref ? [candidate.asset_ref] : []),
         evidence_refs: [`knowledge://documents/${document.id}`],
         requires_human_confirmation: true,
       }],
@@ -3859,6 +3901,7 @@ function createManualBrandFilmIntake(projectId: string, document: ApiKnowledgeDo
         brief_name: filename,
         brief_text: briefText,
         product_name: productName,
+        asset_candidates: assetCandidates,
       },
     },
     { 'Idempotency-Key': `manual-brand-film-${document.id}-${durationSeconds}` },
@@ -4155,7 +4198,7 @@ async function createManualShortDramaPrerollV2Workspace(
         video_purpose: 'performance',
         channels: ['douyin'],
         reason: '用户在短剧前贴工作区选择项目视频并确认生成',
-        target_duration_seconds: 6,
+        target_duration_seconds: 10,
         aspect_ratio: '9:16',
         resolution: '720p',
         source_asset_refs: [sourceVideo],
@@ -5614,12 +5657,14 @@ export const api = {
   getTaskStrategyCreativeIntake,
   getCreativeTaskHandoffDetail,
   listCreativeTasks,
+  renameCreativeTask,
   getBrandFilmWorkspace,
   initializeStrategyBrandFilmWorkspace,
   restoreBrandFilmWorkspace,
   listCreativeIntakes,
   uploadKnowledgeDocument,
   getKnowledgeDocument,
+  extractKnowledgeDocumentMedia,
   createManualBrandFilmIntake,
   ensureBrandFilmFixtureWorkspace,
   analyzeBrandFilmBrief,

@@ -205,10 +205,30 @@ func TestShortDramaPrerollV3BuildsThreeFirstFramesAndSingleReferenceVideoInput(t
 	if err != nil {
 		t.Fatalf("register video job: %v", err)
 	}
+	failed, err := service.ReconcileShortDramaV2Video(context.Background(), rc.Actor, "project_1", taskID, ReconcileShortDramaV2VideoRequest{
+		ExpectedRevision: generating.VideoDraft.Revision,
+		Job: contract.ProviderJob{ID: "video_job_1", ProjectID: "project_1", ProviderStatus: contract.ProviderJobFailed,
+			Error: &contract.JobError{Code: "INPUT_IMAGE_REJECTED", Message: "reference image rejected", Retryable: false}},
+	})
+	if err != nil {
+		t.Fatalf("reconcile failed video: %v", err)
+	}
+	failedWorkspace := failed.VideoDraft.ShortDramaPrerollV2
+	if failedWorkspace.ActiveStage != ShortDramaV2StageFrameSelected || failedWorkspace.VideoError == nil ||
+		failedWorkspace.VideoError.Code != "INPUT_IMAGE_REJECTED" || failed.Task.Status != TaskInProgress {
+		t.Fatalf("failed video workspace = %#v task status=%q", failedWorkspace, failed.Task.Status)
+	}
+	generating, err = service.RegisterShortDramaV2VideoJob(context.Background(), rc.Actor, "project_1", taskID, "video_job_2")
+	if err != nil {
+		t.Fatalf("register retry video job: %v", err)
+	}
+	if generating.VideoDraft.ShortDramaPrerollV2.VideoError != nil {
+		t.Fatalf("video retry retained stale failure: %#v", generating.VideoDraft.ShortDramaPrerollV2.VideoError)
+	}
 	videoAsset := contract.ProjectAssetRef{ProjectID: "project_1", AssetVersion: contract.AssetVersionRef{AssetID: "generated_preroll", Version: 1}}
 	completed, err := service.ReconcileShortDramaV2Video(context.Background(), rc.Actor, "project_1", taskID, ReconcileShortDramaV2VideoRequest{
 		ExpectedRevision: generating.VideoDraft.Revision,
-		Job:              contract.ProviderJob{ID: "video_job_1", ProjectID: "project_1", ProviderStatus: contract.ProviderJobSucceeded, ProjectAssetRefs: []contract.ProjectAssetRef{videoAsset}},
+		Job:              contract.ProviderJob{ID: "video_job_2", ProjectID: "project_1", ProviderStatus: contract.ProviderJobSucceeded, ProjectAssetRefs: []contract.ProjectAssetRef{videoAsset}},
 	})
 	if err != nil {
 		t.Fatalf("reconcile video: %v", err)

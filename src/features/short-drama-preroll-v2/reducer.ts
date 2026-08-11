@@ -4,7 +4,7 @@ import type { ApiProjectMediaAsset } from '../../data/api'
 export const initialShortDramaPrerollState: ShortDramaPrerollState = {
   activeStep: 'understanding', source: null,
   analysisStatus: 'idle', analysis: null, summaryDraft: '',
-  hooksStatus: 'idle', hooks: [], selectedHookId: '', selectingHookId: '', duration: 6,
+  hooksStatus: 'idle', hooks: [], selectedHookId: '', selectingHookId: '', duration: 10,
   imagePrompt: '', videoDescription: '', videoPrompt: '',
   imagesStatus: 'idle', images: [], selectedImageId: '', selectingImageId: '',
   videoStatus: 'idle', output: null, error: '',
@@ -58,7 +58,18 @@ export function shortDramaPrerollReducer(state: ShortDramaPrerollState, action: 
       if (!hook) return state
       return { ...state, selectedHookId: action.id, selectingHookId: '', imagePrompt: action.imagePrompt, videoDescription: action.videoDescription, videoPrompt: action.videoPrompt, duration: action.duration, activeStep: 'first-frame', ...clearImagesAndVideo }
     }
-    case 'duration-changed': return { ...state, duration: action.duration, ...clearVideo }
+    case 'duration-changed': return {
+      ...state,
+      duration: action.duration,
+      selectedHookId: '',
+      selectingHookId: '',
+      imagePrompt: '',
+      videoDescription: '',
+      videoPrompt: '',
+      activeStep: 'direction',
+      ...clearImagesAndVideo,
+      error: '',
+    }
     case 'image-prompt-changed': return { ...state, imagePrompt: action.value, ...clearImagesAndVideo }
     case 'video-description-changed': return { ...state, videoDescription: action.value, ...clearVideo }
     case 'video-prompt-changed': return { ...state, videoPrompt: action.value, ...clearVideo }

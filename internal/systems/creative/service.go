@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	platformassets "github.com/shikanon/cookies/internal/platform/assets"
 	"github.com/shikanon/cookies/internal/platform/contract"
 	"github.com/shikanon/cookies/internal/platform/ids"
 	"github.com/shikanon/cookies/internal/platform/media"
@@ -103,6 +104,7 @@ type Service struct {
 	Requirements                        RequirementSnapshotReader
 	Sources                             CreativeSourceReader
 	Assets                              AssetReader
+	AssetUses                           platformassets.AssetUseAuthorizer
 	GameEvidenceFrames                  media.FrameExtractor
 	DerivedAssets                       DerivedImageWriter
 	AudioAssets                         AudioAssetWriter
@@ -115,9 +117,12 @@ type Service struct {
 	RenderScheduler                     RenderScheduler
 	ShortDramaPrerollPlanner            ShortDramaPrerollPlanner
 	ShortDramaV2Analyzer                ShortDramaV2Analyzer
+	CommercePrerollV2Analyzer           CommercePrerollV2Analyzer
+	CommercePrerollV2Images             CommercePrerollV2ImageJobCreator
 	ShortDramaV2Planner                 ShortDramaV2Planner
 	ShortDramaV2Images                  ShortDramaV2ImageJobCreator
 	ShortDramaV2OutputNormalizer        media.VideoNormalizer
+	CommercePrerollV2OutputNormalizer   media.VideoNormalizer
 	GamePrerollPlanner                  GamePrerollPlanner
 	CommerceWorkspaces                  CommerceWorkspaceRepository
 	BrandFilmPlanner                    BrandFilmPlanner
@@ -261,6 +266,7 @@ func (s Service) CreateVideoTask(ctx context.Context, actor contract.ActorContex
 	}
 	hasSourceVideo := strings.TrimSpace(string(request.SourceVideo.AssetID)) != "" || request.SourceVideo.Version != 0
 	isShortDramaV2 := intake.Source == IntakeSourceManual && route.RouteID == ManualShortDramaPrerollV2RouteID
+	isCommerceV2 := intake.Source == IntakeSourceManual && route.RouteID == ManualCommercePrerollV2RouteID
 	needsSourceVideo := (route.RouteType != PerformanceModeShortDramaPreroll || isShortDramaV2) &&
 		!isManualBrandFilm &&
 		(route.RouteType != CreativeRouteBrandVideo || hasSourceVideo)
@@ -310,6 +316,12 @@ func (s Service) CreateVideoTask(ctx context.Context, actor contract.ActorContex
 			return CreativeTask{}, fmt.Errorf("source_video must match the immutable short drama V2 intake snapshot")
 		}
 	}
+	if isCommerceV2 {
+		if intake.Request.ManualCommercePrerollV2 == nil ||
+			intake.Request.ManualCommercePrerollV2.SourceVideo != request.SourceVideo {
+			return CreativeTask{}, fmt.Errorf("source_video must match the immutable commerce preroll V2 intake snapshot")
+		}
+	}
 	lineageKey := ""
 	if confirmedDirection != nil {
 		lineageKey, err = creativeTaskLineageKey(intake, route, request.Channel, *confirmedDirection)
@@ -331,8 +343,15 @@ func (s Service) CreateVideoTask(ctx context.Context, actor contract.ActorContex
 		return CreativeTask{}, err
 	}
 	now := s.now()
+	displayName := strings.TrimSpace(request.Concept)
+	if intake.Request.ManualBrandFilm != nil && strings.TrimSpace(intake.Request.ManualBrandFilm.ProductName) != "" {
+		displayName = strings.TrimSpace(intake.Request.ManualBrandFilm.ProductName)
+	}
+	if displayName == "" {
+		displayName = "未命名视频创作"
+	}
 	task := CreativeTask{
-		ID: id, OrganizationID: actor.OrganizationID, ProjectID: projectID, IntakeID: intake.ID,
+		ID: id, DisplayName: displayName, OrganizationID: actor.OrganizationID, ProjectID: projectID, IntakeID: intake.ID,
 		Format: FormatVideo, Channel: request.Channel, VideoPurpose: route.VideoPurpose, PerformanceMode: route.RouteType,
 		LineageKey: lineageKey,
 		Status:     TaskDraft, Direction: CreativeDirection{
@@ -479,6 +498,31 @@ func (s Service) CreateVideoTask(ctx context.Context, actor contract.ActorContex
 		}
 		draft.ShortDramaPrerollV2 = shortDramaDraftV2
 		draft.Prompt = "等待视频理解"
+	}
+	if isCommerceV2 {
+		source, readErr := s.Assets.ReadForCreative(ctx, actor, projectID, request.SourceVideo)
+		if readErr != nil {
+			return CreativeTask{}, readErr
+		}
+		draft.CommercePrerollV2 = &CommercePrerollV2Workspace{
+			ContractVersion: CommercePrerollV2ContractVersion,
+			TaskID:          task.ID,
+			Revision:        1,
+			ActiveStage:     CommercePrerollV2StageSourceReady,
+			SourceVideo: contract.ProjectAssetRef{
+				ProjectID: projectID, AssetVersion: request.SourceVideo,
+			},
+			SourceMetadata: source,
+			SourceVideoRights: RightsConfirmation{
+				Status: RightsConfirmed, ConfirmedBy: actor.Principal.ID, ConfirmedAt: now,
+			},
+			Analysis: CommercePrerollV2Analysis{
+				CommercePrerollV2AsyncResource: CommercePrerollV2AsyncResource{Status: CommercePrerollV2ResourceIdle},
+			},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		draft.Prompt = "等待原视频理解"
 	}
 	if intake.Source == IntakeSourceManual && route.RouteType == PerformanceModeGamePreroll {
 		manual := intake.Request.ManualGamePreroll
@@ -637,7 +681,7 @@ func (s Service) CreateIntake(ctx context.Context, requestContext contract.Reque
 	if request.Source == IntakeSourceManual && request.ContractVersion == CreativeIntakeCreateV3ContractVersion &&
 		request.ManualViralRemake == nil && request.ManualShortDramaPreroll == nil &&
 		request.ManualShortDramaPrerollV2 == nil && request.ManualGamePreroll == nil &&
-		request.ManualCommercePreroll == nil && request.ManualBrandFilm == nil {
+		request.ManualCommercePreroll == nil && request.ManualCommercePrerollV2 == nil && request.ManualBrandFilm == nil {
 		request.Format = FormatImageText
 		request.SelectedRouteID = ManualImageTextRouteID
 		request.CreativeRoutes = []CreativeRouteSnapshot{{
@@ -1093,6 +1137,23 @@ func (s Service) ListTasks(ctx context.Context, actor contract.ActorContext, pro
 	return s.Repository.ListTasks(ctx, actor.OrganizationID, projectID, normalizedLimit(limit))
 }
 
+func (s Service) RenameTask(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string, request RenameTaskRequest) (CreativeTask, error) {
+	metadata, ok := s.Repository.(TaskMetadataRepository)
+	if !ok || s.Projects == nil {
+		return CreativeTask{}, fmt.Errorf("creative task metadata dependencies are incomplete")
+	}
+	if !actor.HasScope(ScopeWrite) {
+		return CreativeTask{}, fmt.Errorf("%s scope is required", ScopeWrite)
+	}
+	if err := request.Validate(); err != nil {
+		return CreativeTask{}, err
+	}
+	if _, err := s.Projects.RequireActiveContext(ctx, actor, projectID); err != nil {
+		return CreativeTask{}, err
+	}
+	return metadata.RenameTask(ctx, actor.OrganizationID, projectID, taskID, request.ExpectedVersion, strings.TrimSpace(request.DisplayName), s.now())
+}
+
 func (s Service) GetTaskDetail(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string) (TaskDetail, error) {
 	if s.Repository == nil || s.Projects == nil {
 		return TaskDetail{}, fmt.Errorf("creative dependencies are incomplete")
@@ -1394,11 +1455,16 @@ func (s Service) CheckVersion(ctx context.Context, actor contract.ActorContext, 
 	if !CanTransitionCreativeVersionStatus(version.Status, CreativeVersionChecked) {
 		return CreativeVersion{}, ErrInvalidState
 	}
-	detail, err := s.Repository.GetTaskDetail(ctx, actor.OrganizationID, projectID, version.TaskID)
-	if err != nil {
-		return CreativeVersion{}, err
+	var check CreativeCheck
+	if version.EditTaskID != "" {
+		check = evaluateEditingVersion(version, actor.Principal.ID, s.now())
+	} else {
+		detail, detailErr := s.Repository.GetTaskDetail(ctx, actor.OrganizationID, projectID, version.TaskID)
+		if detailErr != nil {
+			return CreativeVersion{}, detailErr
+		}
+		check = evaluateVersion(version, detail.Intake, actor.Principal.ID, s.now())
 	}
-	check := evaluateVersion(version, detail.Intake, actor.Principal.ID, s.now())
 	return s.Repository.RecordVersionCheck(ctx, actor.OrganizationID, projectID, versionID, check)
 }
 
@@ -1456,7 +1522,16 @@ func (s Service) ApproveVersion(ctx context.Context, actor contract.ActorContext
 		version.Check == nil || !version.Check.Passed {
 		return CreativeVersion{}, ErrInvalidState
 	}
-	return s.Repository.ApproveVersion(ctx, actor.OrganizationID, projectID, versionID, CreativeApproval{ApprovedBy: actor.Principal.ID, ApprovedAt: s.now()})
+	approved, err := s.Repository.ApproveVersion(ctx, actor.OrganizationID, projectID, versionID, CreativeApproval{ApprovedBy: actor.Principal.ID, ApprovedAt: s.now()})
+	if err != nil {
+		return CreativeVersion{}, err
+	}
+	if approved.EditTaskID != "" && s.EditTasks != nil {
+		if err = s.EditTasks.UpdateEditTaskStatus(ctx, actor.OrganizationID, projectID, approved.EditTaskID, EditTaskCompleted, s.now()); err != nil {
+			return CreativeVersion{}, err
+		}
+	}
+	return approved, nil
 }
 
 func (s Service) DeliverVersion(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, versionID string) (CreativePackage, error) {
@@ -1480,7 +1555,7 @@ func (s Service) DeliverVersion(ctx context.Context, actor contract.ActorContext
 	if err != nil {
 		return CreativePackage{}, err
 	}
-	value := CreativePackage{ID: id, OrganizationID: actor.OrganizationID, ProjectID: projectID, CreativeVersionID: version.ID, Format: version.Format, ContentHash: version.ContentHash, Snapshot: version.Snapshot, VideoSnapshot: version.VideoSnapshot, CreatedBy: actor.Principal.ID, CreatedAt: s.now()}
+	value := CreativePackage{ID: id, OrganizationID: actor.OrganizationID, ProjectID: projectID, CreativeVersionID: version.ID, EditTaskID: version.EditTaskID, Format: version.Format, ContentHash: version.ContentHash, Snapshot: version.Snapshot, VideoSnapshot: version.VideoSnapshot, CreatedBy: actor.Principal.ID, CreatedAt: s.now()}
 	return s.Repository.CreatePackage(ctx, value)
 }
 

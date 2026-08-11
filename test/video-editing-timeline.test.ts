@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { addClip, commitTimeline, createEmptyEditorTimeline, createTimelineHistory, deleteClip, moveClip, redoTimeline, restoreEditorTimeline, splitClip, toEditingTimeline, trimClip, undoTimeline } from '../src/features/video-editing/timeline.ts'
+import { addClip, commitTimeline, createEmptyEditorTimeline, createTimelineHistory, deleteClip, findSnapTarget, insertClip, moveClip, redoTimeline, restoreEditorTimeline, splitClip, toEditingTimeline, trimClip, undoTimeline } from '../src/features/video-editing/timeline.ts'
 
 test('user can add a project video to the end of the primary timeline', () => {
   const timeline = addClip(createEmptyEditorTimeline(), {
@@ -25,6 +25,22 @@ test('user can add a project video to the end of the primary timeline', () => {
     sourceDurationMs: 5_000,
   }])
   assert.equal(timeline.durationMs, 5_000)
+})
+
+test('dragging a project asset inserts it at the requested primary-track position', () => {
+  const first = addClip(createEmptyEditorTimeline(), {
+    assetId: 'asset-source', assetVersion: 1, durationMs: 20_000,
+    name: '原视频', previewUrl: '/source',
+  })
+  const inserted = insertClip(first, {
+    assetId: 'asset-preroll', assetVersion: 1, durationMs: 5_000,
+    name: '前贴', previewUrl: '/preroll',
+  }, 0)
+
+  assert.deepEqual(inserted.clips.map(clip => ({ assetId: clip.assetId, start: clip.timelineStartMs, end: clip.timelineEndMs })), [
+    { assetId: 'asset-preroll', start: 0, end: 5_000 },
+    { assetId: 'asset-source', start: 5_000, end: 25_000 },
+  ])
 })
 
 test('saved timeline restores clip metadata from project assets', () => {
@@ -121,6 +137,35 @@ test('user can split a clip at the playhead and preserve adjacent source ranges'
     { id: 'clip-asset-source-v2-1-a', start: 0, end: 8_000, sourceIn: 0, sourceOut: 8_000 },
     { id: 'clip-asset-source-v2-1-b', start: 8_000, end: 20_000, sourceIn: 8_000, sourceOut: 20_000 },
   ])
+})
+
+test('split aligns the playhead to the fixed 30fps master frame', () => {
+  const timeline = addClip(createEmptyEditorTimeline(), {
+    assetId: 'asset-source', assetVersion: 2, durationMs: 20_000,
+    name: '原视频', previewUrl: '/source',
+  })
+
+  const split = splitClip(timeline, timeline.clips[0].id, 8_016)
+
+  assert.equal(split.clips[0].timelineEndMs, 8_000)
+  assert.equal(split.clips[1].sourceInMs, 8_000)
+})
+
+test('repeated split creates stable unique clip identities', () => {
+  const timeline = addClip(createEmptyEditorTimeline(), {
+    assetId: 'asset-source', assetVersion: 2, durationMs: 20_000,
+    name: '原视频', previewUrl: '/source',
+  })
+  const first = splitClip(timeline, timeline.clips[0].id, 10_000)
+  const second = splitClip(first, first.clips[0].id, 5_000)
+  const third = splitClip(second, second.clips[1].id, 7_500)
+
+  assert.equal(new Set(third.clips.map(clip => clip.id)).size, third.clips.length)
+})
+
+test('snap finds the nearest clip edge or playhead inside the pixel threshold', () => {
+  assert.deepEqual(findSnapTarget(4_948, [0, 5_000, 12_000], 6, 100), { timeMs: 5_000, distancePx: 5.2 })
+  assert.equal(findSnapTarget(4_900, [0, 5_000, 12_000], 6, 100), null)
 })
 
 test('user can trim a clip without changing its source asset', () => {

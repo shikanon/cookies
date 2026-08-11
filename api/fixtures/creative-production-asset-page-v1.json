@@ -1,0 +1,29 @@
+{
+  "contract_version": "creative-production-asset-page/v1",
+  "project_id": "project_01",
+  "items": [
+    {
+      "asset": {
+        "asset_ref": {"asset_id": "asset_output_01", "version": 1},
+        "role": "output",
+        "media_kind": "video",
+        "display_name": "电商前贴候选 1",
+        "availability": "ready",
+        "mime_type": "video/mp4",
+        "width_pixels": 720,
+        "height_pixels": 1280,
+        "duration_ms": 6000,
+        "preview_url": "/platform/v1/projects/project_01/assets/asset_output_01/versions/1/preview",
+        "preview_expires_at": "2026-08-11T10:10:00Z"
+      },
+      "used_by_runs": [
+        {"source": "provider", "id": "provider_job_01"},
+        {"source": "creative_render", "id": "creative_render_01"}
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "source_health": [
+    {"source": "assets", "status": "available", "message": null}
+  ]
+}

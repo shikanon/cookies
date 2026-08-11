@@ -73,6 +73,7 @@ type FFmpegTimelineRenderer struct {
 	FFmpegPath string
 	WorkRoot   string
 	Videos     VideoSource
+	Visuals    VisualSource
 	Audio      AudioSource
 	Probe      assets.VideoMetadataProbe
 	Runner     ProgressCommandRunner
@@ -83,7 +84,7 @@ func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRend
 	if err := request.Validate(); err != nil {
 		return CompositionOutput{}, err
 	}
-	if strings.TrimSpace(r.FFmpegPath) == "" || r.Videos == nil || r.Audio == nil || r.Probe == nil {
+	if strings.TrimSpace(r.FFmpegPath) == "" || (len(request.Visual) == 0 && r.Videos == nil) || (len(request.Visual) > 0 && r.Visuals == nil) || r.Audio == nil || r.Probe == nil {
 		return CompositionOutput{}, fmt.Errorf("timeline rendering capability is unavailable")
 	}
 	root := strings.TrimSpace(r.WorkRoot)
@@ -124,6 +125,37 @@ func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRend
 		}
 		args = append(args, "-i", path)
 	}
+	if len(request.Visual) > 0 {
+		request.Visual = SortedTimelineVisuals(request.Visual)
+		audioAvailable := map[string]bool{}
+		for index, clip := range request.Visual {
+			path := filepath.Join(dir, fmt.Sprintf("visual-%02d.bin", index+1))
+			version, reader, openErr := r.Visuals.OpenVisual(ctx, request.OrganizationID, request.ProjectID, clip.Asset)
+			if openErr != nil {
+				return fail(openErr)
+			}
+			copyErr := copyToFile(path, io.LimitReader(reader, assets.MaxVideoBytes+1))
+			closeErr := reader.Close()
+			if copyErr != nil {
+				return fail(copyErr)
+			}
+			if closeErr != nil {
+				return fail(closeErr)
+			}
+			if clip.Kind == "image" {
+				args = append(args, "-loop", "1")
+			}
+			audioAvailable[clip.ID] = clip.Kind == "video" && strings.TrimSpace(version.AudioCodec) != ""
+			args = append(args, "-i", path)
+		}
+		original := request.OriginalAudio[:0]
+		for _, clip := range request.OriginalAudio {
+			if audioAvailable[clip.VisualClipID] {
+				original = append(original, clip)
+			}
+		}
+		request.OriginalAudio = original
+	}
 	for index, clip := range request.Audio {
 		path := filepath.Join(dir, fmt.Sprintf("audio-%02d.bin", index+1))
 		_, reader, openErr := r.Audio.OpenAudio(ctx, request.OrganizationID, request.ProjectID, clip.Asset)
@@ -144,7 +176,12 @@ func (r FFmpegTimelineRenderer) Render(ctx context.Context, request TimelineRend
 		args = append(args, "-i", path)
 	}
 	args = append(args, "-f", "lavfi", "-t", seconds(request.DurationMS), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000")
-	subtitles, err := BuildASSSubtitles(request.Captions, request.Width, request.Height)
+	var subtitles []byte
+	if len(request.CaptionStyles) > 0 {
+		subtitles, _, err = BuildASSSubtitlesWithStyles(request.Captions, request.Width, request.Height, request.CaptionStyles)
+	} else {
+		subtitles, err = BuildASSSubtitles(request.Captions, request.Width, request.Height)
+	}
 	if err != nil {
 		return fail(err)
 	}

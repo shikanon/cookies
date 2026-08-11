@@ -523,6 +523,37 @@ func TestArchiveTaskHidesItFromActiveQueueButRetainsItsLineage(t *testing.T) {
 	}
 }
 
+func TestRenameTaskPreservesDraftHistoryAndRequiresCurrentVersion(t *testing.T) {
+	t.Parallel()
+	service := testService()
+	rc := testRequestContext()
+	intake, err := service.CreateIntake(context.Background(), rc, "project_1", "creative-intake-rename", validManualRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := service.CreateTask(context.Background(), rc.Actor, "project_1", intake.ID, defaultTaskRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := service.RenameTask(context.Background(), rc.Actor, "project_1", task.ID, RenameTaskRequest{ExpectedVersion: task.Version, DisplayName: "娇兰黄金复原蜜 15 秒广告"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.DisplayName != "娇兰黄金复原蜜 15 秒广告" || renamed.Version != task.Version+1 {
+		t.Fatalf("renamed task = %#v", renamed)
+	}
+	detail, err := service.GetTaskDetail(context.Background(), rc.Actor, "project_1", task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Draft.Version != 1 {
+		t.Fatalf("rename changed draft history: %#v", detail.Draft)
+	}
+	if _, err := service.RenameTask(context.Background(), rc.Actor, "project_1", task.ID, RenameTaskRequest{ExpectedVersion: task.Version, DisplayName: "旧浏览器覆盖"}); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("stale rename error = %v, want %v", err, ErrVersionConflict)
+	}
+}
+
 func TestImagePlanRetriesRetainEachProviderAttempt(t *testing.T) {
 	t.Parallel()
 	service := testService()
@@ -1269,6 +1300,20 @@ func (r *memoryRepository) ListTasks(_ context.Context, _ contract.OrganizationI
 	}
 	return values, nil
 }
+func (r *memoryRepository) RenameTask(_ context.Context, _ contract.OrganizationID, _ contract.ProjectID, taskID string, expectedVersion int64, displayName string, now time.Time) (CreativeTask, error) {
+	value, ok := r.tasks[taskID]
+	if !ok {
+		return CreativeTask{}, ErrNotFound
+	}
+	if value.Task.Version != expectedVersion {
+		return CreativeTask{}, ErrVersionConflict
+	}
+	value.Task.DisplayName = displayName
+	value.Task.Version++
+	value.Task.UpdatedAt = now
+	r.tasks[taskID] = value
+	return value.Task, nil
+}
 func (r *memoryRepository) GetTaskDetail(_ context.Context, _ contract.OrganizationID, _ contract.ProjectID, id string) (TaskDetail, error) {
 	value, ok := r.tasks[id]
 	if !ok {
@@ -1372,7 +1417,7 @@ func (r *memoryRepository) CreateVersion(_ context.Context, value CreativeVersio
 			}
 			return existing, true, nil
 		}
-		if existing.TaskID == value.TaskID && existing.Version == value.Version {
+		if ((value.TaskID != "" && existing.TaskID == value.TaskID) || (value.EditTaskID != "" && existing.EditTaskID == value.EditTaskID)) && existing.Version == value.Version {
 			if !existing.ContentHash.Equal(value.ContentHash) {
 				return CreativeVersion{}, false, ErrVersionConflict
 			}
@@ -1394,7 +1439,7 @@ func (r *memoryRepository) GetVersion(_ context.Context, _ contract.Organization
 func (r *memoryRepository) ListVersions(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, taskID string, limit int) ([]CreativeVersion, error) {
 	values := make([]CreativeVersion, 0, len(r.versions))
 	for _, value := range r.versions {
-		if value.OrganizationID == organizationID && value.ProjectID == projectID && (taskID == "" || value.TaskID == taskID) {
+		if value.OrganizationID == organizationID && value.ProjectID == projectID && (taskID == "" || value.TaskID == taskID || value.EditTaskID == taskID) {
 			values = append(values, value)
 			if len(values) == limit {
 				break

@@ -203,6 +203,7 @@ func (s Service) AnalyzeBrandFilmBrief(ctx context.Context, actor contract.Actor
 	if err != nil {
 		return TaskDetail{}, err
 	}
+	analysis.AssetCandidates = reconcileBriefProductAssets(brand.SourceSnapshot.BriefText, analysis.AssetCandidates)
 	next := cloneBrandVideoDraft(*detail.VideoDraft)
 	next.Revision++
 	next.BrandFilm.Revision = next.Revision
@@ -278,7 +279,10 @@ func (s Service) GenerateBrandFilmConcepts(ctx context.Context, actor contract.A
 		return TaskDetail{}, err
 	}
 	analysis := detail.VideoDraft.BrandFilm.CurrentAnalysis()
-	if request.ExpectedRevision != detail.VideoDraft.Revision || analysis == nil || !analysis.Confirmed {
+	if request.ExpectedRevision != detail.VideoDraft.Revision {
+		return TaskDetail{}, ErrVersionConflict
+	}
+	if analysis == nil || !analysis.Confirmed {
 		return TaskDetail{}, ErrInvalidState
 	}
 	planner := s.BrandFilmPlanner

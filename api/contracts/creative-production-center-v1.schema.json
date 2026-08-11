@@ -1,0 +1,312 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cookies.local/contracts/creative-production-center-v1.schema.json",
+  "title": "Creative production center read and delegated-control contracts",
+  "description": "Project-scoped read models for Creative production runs and assets. These contracts never become the authority for Provider, Render, Assets, review, delivery, or Insights state.",
+  "oneOf": [
+    {"$ref": "#/$defs/ProductionRunPage"},
+    {"$ref": "#/$defs/ProductionRunDetail"},
+    {"$ref": "#/$defs/ProductionAssetPage"},
+    {"$ref": "#/$defs/ProductionRetryResult"},
+    {"$ref": "#/$defs/ProductionProblem"}
+  ],
+  "$defs": {
+    "AssetVersionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_id", "version"],
+      "properties": {
+        "asset_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "ResourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {"type": "string", "minLength": 1, "maxLength": 96},
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "ProductionRunRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "id"],
+      "properties": {
+        "source": {"enum": ["provider", "creative_render", "editing_render", "audio_render"]},
+        "id": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "ProductionSourceTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system", "object_type", "object_id", "display_name"],
+      "properties": {
+        "system": {"const": "creative"},
+        "object_type": {"enum": ["creative_task", "edit_task"]},
+        "object_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "display_name": {"type": ["string", "null"], "maxLength": 255}
+      }
+    },
+    "ProductionNativeStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["family", "execution_status", "provider_status", "render_status"],
+          "properties": {
+            "family": {"const": "provider"},
+            "execution_status": {"enum": ["queued", "running", "succeeded", "failed", "cancelled"]},
+            "provider_status": {"enum": ["submitted", "running", "outputs_ready", "ingesting", "succeeded", "partially_succeeded", "failed", "cancelled", "expired"]},
+            "render_status": {"type": "null"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["family", "execution_status", "provider_status", "render_status"],
+          "properties": {
+            "family": {"enum": ["creative_render", "editing_render", "audio_render"]},
+            "execution_status": {"type": "null"},
+            "provider_status": {"type": "null"},
+            "render_status": {"enum": ["queued", "running", "succeeded", "failed", "cancelled"]}
+          }
+        }
+      ]
+    },
+    "ProductionModelView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logical_alias", "actual_model", "degraded"],
+      "properties": {
+        "logical_alias": {"type": "string", "minLength": 1, "maxLength": 255},
+        "actual_model": {"type": ["string", "null"], "maxLength": 255},
+        "degraded": {"type": "boolean"}
+      }
+    },
+    "ProductionCostView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["availability", "currency", "amount_minor", "unavailable_reason"],
+      "properties": {
+        "availability": {"enum": ["actual", "estimated", "unavailable"]},
+        "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+        "amount_minor": {"type": ["integer", "null"], "minimum": 0},
+        "unavailable_reason": {"type": ["string", "null"], "maxLength": 500}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"availability": {"enum": ["actual", "estimated"]}}},
+          "then": {"properties": {"amount_minor": {"type": "integer", "minimum": 0}, "unavailable_reason": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"availability": {"const": "unavailable"}}},
+          "then": {"properties": {"amount_minor": {"type": "null"}, "unavailable_reason": {"type": "string", "minLength": 1, "maxLength": 500}}}
+        }
+      ]
+    },
+    "ProductionErrorView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1, "maxLength": 128},
+        "message": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "retryable": {"type": "boolean"}
+      }
+    },
+    "ProductionActions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["retry", "open_source"],
+      "properties": {
+        "retry": {"type": "boolean"},
+        "open_source": {"type": "boolean"}
+      }
+    },
+    "ProductionSourceHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "status", "message"],
+      "properties": {
+        "source": {"enum": ["provider", "creative_render", "editing_render", "audio_render", "assets"]},
+        "status": {"enum": ["available", "unavailable"]},
+        "message": {"type": ["string", "null"], "maxLength": 500}
+      }
+    },
+    "ProductionRunSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "project_id", "media_kind", "operation_kind", "source_task", "normalized_status", "native_status", "progress_percent", "model", "output_count", "cost", "error", "actions", "created_at", "updated_at"],
+      "properties": {
+        "ref": {"$ref": "#/$defs/ProductionRunRef"},
+        "project_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "media_kind": {"enum": ["image", "video", "audio", "render"]},
+        "operation_kind": {"type": "string", "minLength": 1, "maxLength": 128},
+        "source_task": {"oneOf": [{"$ref": "#/$defs/ProductionSourceTask"}, {"type": "null"}]},
+        "normalized_status": {"enum": ["queued", "running", "ingesting", "succeeded", "partially_succeeded", "failed", "expired", "cancelled"]},
+        "native_status": {"$ref": "#/$defs/ProductionNativeStatus"},
+        "progress_percent": {"type": "integer", "minimum": 0, "maximum": 100},
+        "model": {"oneOf": [{"$ref": "#/$defs/ProductionModelView"}, {"type": "null"}]},
+        "output_count": {"type": "integer", "minimum": 0},
+        "cost": {"oneOf": [{"$ref": "#/$defs/ProductionCostView"}, {"type": "null"}]},
+        "error": {"oneOf": [{"$ref": "#/$defs/ProductionErrorView"}, {"type": "null"}]},
+        "actions": {"$ref": "#/$defs/ProductionActions"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ProductionRunPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "project_id", "items", "next_cursor", "source_health"],
+      "properties": {
+        "contract_version": {"const": "creative-production-run-page/v1"},
+        "project_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "items": {"type": "array", "items": {"$ref": "#/$defs/ProductionRunSummary"}},
+        "next_cursor": {"type": ["string", "null"], "maxLength": 8192},
+        "source_health": {"type": "array", "items": {"$ref": "#/$defs/ProductionSourceHealth"}}
+      }
+    },
+    "ProductionAssetView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_ref", "role", "media_kind", "display_name", "availability", "mime_type", "width_pixels", "height_pixels", "duration_ms", "preview_url", "preview_expires_at"],
+      "properties": {
+        "asset_ref": {"$ref": "#/$defs/AssetVersionRef"},
+        "role": {"enum": ["input", "output"]},
+        "media_kind": {"enum": ["image", "video", "audio"]},
+        "display_name": {"type": ["string", "null"], "maxLength": 255},
+        "availability": {"enum": ["processing", "ready", "quarantined", "failed", "archived"]},
+        "mime_type": {"type": ["string", "null"], "maxLength": 255},
+        "width_pixels": {"type": ["integer", "null"], "minimum": 1},
+        "height_pixels": {"type": ["integer", "null"], "minimum": 1},
+        "duration_ms": {"type": ["integer", "null"], "minimum": 0},
+        "preview_url": {"type": ["string", "null"], "maxLength": 4096},
+        "preview_expires_at": {"type": ["string", "null"], "format": "date-time"}
+      }
+    },
+    "ProductionParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "aspect_ratio": {"type": "string", "minLength": 1, "maxLength": 32},
+        "resolution": {"type": "string", "minLength": 1, "maxLength": 32},
+        "audio_policy": {"type": "string", "minLength": 1, "maxLength": 64},
+        "render_kind": {"enum": ["preview", "export", "final"]},
+        "target_format": {"type": "string", "minLength": 1, "maxLength": 64},
+        "target_quality": {"type": "string", "minLength": 1, "maxLength": 64}
+      }
+    },
+    "ProductionAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt_count", "max_attempts", "retry_of"],
+      "properties": {
+        "attempt_count": {"type": "integer", "minimum": 0},
+        "max_attempts": {"type": "integer", "minimum": 1},
+        "retry_of": {"oneOf": [{"$ref": "#/$defs/ProductionRunRef"}, {"type": "null"}]}
+      }
+    },
+    "ProductionRunEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "stage", "safe_message", "error_code", "occurred_at"],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 1},
+        "stage": {"type": "string", "minLength": 1, "maxLength": 64},
+        "safe_message": {"type": "string", "minLength": 1, "maxLength": 512},
+        "error_code": {"type": ["string", "null"], "maxLength": 128},
+        "occurred_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ProductionLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_task", "input_asset_refs", "output_asset_refs"],
+      "properties": {
+        "source_task": {"oneOf": [{"$ref": "#/$defs/ProductionSourceTask"}, {"type": "null"}]},
+        "input_asset_refs": {"type": "array", "items": {"$ref": "#/$defs/AssetVersionRef"}},
+        "output_asset_refs": {"type": "array", "items": {"$ref": "#/$defs/AssetVersionRef"}}
+      }
+    },
+    "ProductionRunDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "summary", "input_assets", "output_assets", "parameters", "prompt_ref", "attempt", "retry_chain", "run_events", "lineage", "source_health"],
+      "properties": {
+        "contract_version": {"const": "creative-production-run-detail/v1"},
+        "summary": {"$ref": "#/$defs/ProductionRunSummary"},
+        "input_assets": {"type": "array", "items": {"$ref": "#/$defs/ProductionAssetView"}},
+        "output_assets": {"type": "array", "items": {"$ref": "#/$defs/ProductionAssetView"}},
+        "parameters": {"$ref": "#/$defs/ProductionParameters"},
+        "prompt_ref": {"oneOf": [{"$ref": "#/$defs/ResourceRef"}, {"type": "null"}]},
+        "attempt": {"$ref": "#/$defs/ProductionAttempt"},
+        "retry_chain": {"type": "array", "items": {"$ref": "#/$defs/ProductionRunRef"}},
+        "run_events": {"type": "array", "items": {"$ref": "#/$defs/ProductionRunEvent"}},
+        "lineage": {"$ref": "#/$defs/ProductionLineage"},
+        "source_health": {"type": "array", "items": {"$ref": "#/$defs/ProductionSourceHealth"}}
+      }
+    },
+    "ProductionAssetListItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset", "used_by_runs"],
+      "properties": {
+        "asset": {"$ref": "#/$defs/ProductionAssetView"},
+        "used_by_runs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ProductionRunRef"}}
+      }
+    },
+    "ProductionAssetPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "project_id", "items", "next_cursor", "source_health"],
+      "properties": {
+        "contract_version": {"const": "creative-production-asset-page/v1"},
+        "project_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "items": {"type": "array", "items": {"$ref": "#/$defs/ProductionAssetListItem"}},
+        "next_cursor": {"type": ["string", "null"], "maxLength": 8192},
+        "source_health": {"type": "array", "items": {"$ref": "#/$defs/ProductionSourceHealth"}}
+      }
+    },
+    "ProductionRetryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "status", "previous_run", "new_run", "source_task"],
+      "properties": {
+        "contract_version": {"const": "creative-production-retry/v1"},
+        "status": {"const": "accepted"},
+        "previous_run": {"$ref": "#/$defs/ProductionRunRef"},
+        "new_run": {"$ref": "#/$defs/ProductionRunRef"},
+        "source_task": {"$ref": "#/$defs/ProductionSourceTask"}
+      }
+    },
+    "ProductionProblem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "code", "message", "retryable", "source_task"],
+      "properties": {
+        "contract_version": {"const": "creative-production-problem/v1"},
+        "code": {
+          "enum": [
+            "PRODUCTION_RUN_NOT_FOUND",
+            "PRODUCTION_SOURCE_UNAVAILABLE",
+            "PRODUCTION_CURSOR_INVALID",
+            "PRODUCTION_RETRY_NOT_ALLOWED",
+            "PRODUCTION_RETRY_REQUIRES_SOURCE_WORKFLOW",
+            "PRODUCTION_INPUT_ASSET_UNAVAILABLE",
+            "PRODUCTION_IDEMPOTENCY_CONFLICT"
+          ]
+        },
+        "message": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "retryable": {"type": "boolean"},
+        "source_task": {"oneOf": [{"$ref": "#/$defs/ProductionSourceTask"}, {"type": "null"}]}
+      }
+    }
+  }
+}

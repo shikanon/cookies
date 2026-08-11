@@ -40,6 +40,31 @@ func TestASSSubtitlesEscapeContentAndUseVerticalSafeArea(t *testing.T) {
 	}
 }
 
+func TestC4ASSSubtitlesUseVersionedBrandStyleAndKeywordEmphasis(t *testing.T) {
+	style := TimelineCaptionStyle{
+		ID: "brand-white", Version: 3, FontFamily: "Cookies Fixture Sans", FontSHA256: strings.Repeat("a", 64),
+		FontSize: 44, PrimaryColor: "#F8FAFC", OutlineColor: "#0F172A", Outline: 3, Shadow: 1,
+		Alignment: 2, MarginHorizontal: 64, MarginVertical: 96, MaxCharsPerLine: 12,
+		EmphasisColor: "#38BDF8",
+	}
+	contents, diagnostics, err := BuildASSSubtitlesWithStyles([]TimelineCaption{{
+		StartMS: 1000, EndMS: 2500, Text: "中文 English 123，标点。", StyleID: style.ID,
+		Emphasis: []TimelineCaptionEmphasis{{StartRune: 3, EndRune: 10}},
+	}}, 720, 1280, []TimelineCaptionStyle{style})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{"Style: brand-white,Cookies Fixture Sans,44", "FontSHA256: " + strings.Repeat("a", 64), `{\c&H00F8BD38&}English{\c&H00FCFAF8&}`, `\N`} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("styled ASS output missing %q:\n%s", expected, text)
+		}
+	}
+	if len(diagnostics) != 0 {
+		t.Fatalf("unexpected subtitle diagnostics: %#v", diagnostics)
+	}
+}
+
 func TestBuildTimelineFilterIncludesDuckingMixAndSubtitleBurnIn(t *testing.T) {
 	request := TimelineRenderRequest{DurationMS: 15000, Width: 720, Height: 1280, FrameRate: 30, SampleRate: 48000,
 		Video: []TimelineVideoClip{{ID: "v1", StartMS: 0, EndMS: 15000}},
@@ -67,6 +92,47 @@ func TestBuildTimelineFilterUsesAudioSourceInBeforeLooping(t *testing.T) {
 	graph, _, _ := BuildTimelineFilter(request, "subtitles.ass")
 	if !strings.Contains(graph, "atrim=start=1.2") {
 		t.Fatalf("looping music must honor source_in before loop: %s", graph)
+	}
+}
+
+func TestC5TimelineFilterAppliesOriginalAudioFadeAndMutedTracksAreAbsent(t *testing.T) {
+	request := TimelineRenderRequest{DurationMS: 5000, Width: 720, Height: 1280, FrameRate: 30, SampleRate: 48000,
+		Visual:        []TimelineVisualClip{{ID: "video", Kind: "video", StartMS: 0, EndMS: 5000, Fit: "contain", PositionX: .5, PositionY: .5, Scale: 1, Opacity: 1}},
+		OriginalAudio: []TimelineOriginalAudioClip{{VisualClipID: "video", StartMS: 0, EndMS: 5000, SourceIn: 1000, GainDB: -3, FadeInMS: 500, FadeOutMS: 750}},
+		Audio:         []TimelineAudioClip{{ID: "voice", Role: TimelineAudioVoiceover, StartMS: 1000, EndMS: 4000, SourceIn: 200, GainDB: -6, FadeInMS: 300, FadeOutMS: 400}},
+	}
+	graph, _, _ := BuildTimelineFilter(request, "subtitles.ass")
+	for _, expected := range []string{"[0:a]atrim=start=1.000:duration=5.000", "volume=-3.00dB", "afade=t=in:st=0:d=0.500", "afade=t=out:st=4.250:d=0.750", "atrim=start=0.200:duration=3.000", "afade=t=out:st=2.600:d=0.400", "amix=inputs=3"} {
+		if !strings.Contains(graph, expected) {
+			t.Fatalf("C5 filter missing %q: %s", expected, graph)
+		}
+	}
+}
+
+func TestBuildTimelineFilterCompositesC3VisualLayersByZOrder(t *testing.T) {
+	request := TimelineRenderRequest{DurationMS: 3000, Width: 1080, Height: 1080, FrameRate: 30, SampleRate: 48000,
+		Visual: []TimelineVisualClip{
+			{ID: "overlay-video", Kind: "video", StartMS: 1000, EndMS: 2500, SourceIn: 500, Fit: "cover", PositionX: 0.5, PositionY: 0.5, Scale: 1.2, Opacity: 1, ZIndex: 2},
+			{ID: "primary", Kind: "video", EndMS: 3000, Fit: "contain", PositionX: 0.5, PositionY: 0.5, Scale: 1, Opacity: 1, ZIndex: 0},
+			{ID: "logo", Kind: "image", StartMS: 500, EndMS: 2000, Fit: "contain", PositionX: 0.1, PositionY: 0.9, Scale: 0.3, CropLeft: 0.1, Opacity: 0.6, ZIndex: 1},
+		},
+	}
+	graph, video, audio := BuildTimelineFilter(request, "subtitles.ass")
+	for _, fragment := range []string{
+		"color=c=#000000:s=1080x1080:r=30:d=3.000[base0]",
+		"[0:v]trim=start=0.000:duration=3.000",
+		"[1:v]trim=duration=1.500",
+		"colorchannelmixer=aa=0.600",
+		"[2:v]trim=start=0.500:duration=1.500",
+		"overlay=x='(W-w)*0.100000':y='(H-h)*0.900000'",
+		"enable='between(t,0.500,2.000)'",
+	} {
+		if !strings.Contains(graph, fragment) {
+			t.Fatalf("visual graph missing %q: %s", fragment, graph)
+		}
+	}
+	if video != "[videoout]" || audio != "[audioout]" {
+		t.Fatalf("unexpected output labels %s/%s", video, audio)
 	}
 }
 

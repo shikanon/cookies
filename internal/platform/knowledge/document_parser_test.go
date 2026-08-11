@@ -1,6 +1,8 @@
 package knowledge
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +10,40 @@ import (
 	"testing"
 	"time"
 )
+
+func TestTikaMediaExtractorReturnsImagesWithPageMetadata(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.Header.Get("X-Tika-PDFextractInlineImages") != "true" {
+			t.Fatalf("inline image extraction was not enabled")
+		}
+		switch request.URL.Path {
+		case "/rmeta/html":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`[{"X-TIKA:content":"<div class=\"page\">封面</div><div class=\"page\">第二页</div><div class=\"page\">第三页</div><div class=\"page\">黄金复原蜜</div>"},{"resourceName":"image7.png","Content-Type":"image/png","tika_pg:page_number":"4","width":"191","height":"513"}]`))
+		case "/unpack/all":
+			writer.Header().Set("Content-Type", "application/zip")
+			archive := zip.NewWriter(writer)
+			entry, _ := archive.Create("image7.png")
+			_, _ = entry.Write([]byte("png-content"))
+			_ = archive.Close()
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	media, err := (TikaParser{BaseURL: server.URL, HTTPClient: server.Client()}).ExtractMedia(context.Background(), DocumentParseRequest{
+		Filename: "brief.pdf", MIMEType: "application/pdf", Size: 4, Source: bytes.NewReader([]byte("%PDF")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || len(media) != 1 || media[0].Filename != "image7.png" || media[0].PageNumber != 4 || media[0].PageText != "黄金复原蜜" || media[0].Width != 191 || media[0].Height != 513 || string(media[0].Content) != "png-content" {
+		t.Fatalf("unexpected extracted media: %#v", media)
+	}
+}
 
 func TestTikaParserUsesBoundedRecursiveMetadataEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

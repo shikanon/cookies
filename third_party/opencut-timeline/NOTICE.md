@@ -16,7 +16,15 @@ Reviewed upstream sources:
 - `apps/web/src/timeline/controllers/zoom-controller.ts`
 - `apps/web/src/timeline/snapping/`
 
-The adapted implementation is maintained in
-`src/features/video-editing/timeline.ts`. It replaces OpenCut's EditorCore,
-WASM media time, project storage, and rendering dependencies with cookies'
-own immutable timeline, AssetVersionRef, Go API, and FFmpeg render pipeline.
+The retained adaptation is isolated in:
+
+- `src/features/video-editing/timeline.ts` for command and snapping calculations;
+- `src/features/video-editing/VideoTimeline.tsx` for playhead, resize, zoom,
+  drag/drop, and visible snapping interactions.
+
+The production C7 editor uses cookies-owned `visualTimeline.ts`,
+`VideoEditingCanvasWorkspace.tsx`, AssetVersionRef, Go APIs, and the FFmpeg
+render pipeline. It does not import either isolated adaptation file. The
+automated exit drill in `scripts/verify-opencut-exit.mjs` walks runtime imports
+from `src/main.tsx` and fails if the isolated boundary becomes reachable.
+No OpenCut runtime package is installed.

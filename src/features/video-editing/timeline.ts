@@ -38,6 +38,24 @@ export type TimelineHistory = {
   future: EditorTimeline[]
 }
 
+const MASTER_FRAME_RATE = 30
+
+export function alignToMasterFrame(timeMs: number): number {
+  return Math.max(0, Math.round(Math.round(timeMs * MASTER_FRAME_RATE / 1000) * 1000 / MASTER_FRAME_RATE))
+}
+
+export function findSnapTarget(timeMs: number, candidatesMs: number[], thresholdPx: number, pixelsPerSecond: number): { timeMs: number; distancePx: number } | null {
+  if (thresholdPx <= 0 || pixelsPerSecond <= 0) return null
+  let best: { timeMs: number; distancePx: number } | null = null
+  for (const candidate of candidatesMs) {
+    const distancePx = Math.abs(candidate - timeMs) * pixelsPerSecond / 1000
+    if (distancePx <= thresholdPx && (!best || distancePx < best.distancePx)) {
+      best = { timeMs: candidate, distancePx: Math.round(distancePx * 1000) / 1000 }
+    }
+  }
+  return best
+}
+
 export function createEmptyEditorTimeline(): EditorTimeline {
   return { clips: [], durationMs: 0 }
 }
@@ -83,6 +101,12 @@ export function addClip(timeline: EditorTimeline, asset: TimelineAsset): EditorT
   }
 }
 
+export function insertClip(timeline: EditorTimeline, asset: TimelineAsset, targetIndex: number): EditorTimeline {
+  const added = addClip(timeline, asset)
+  const inserted = added.clips.at(-1)
+  return inserted ? moveClip(added, inserted.id, targetIndex) : timeline
+}
+
 export function moveClip(timeline: EditorTimeline, clipId: string, targetIndex: number): EditorTimeline {
   const currentIndex = timeline.clips.findIndex(clip => clip.id === clipId)
   if (currentIndex < 0) return timeline
@@ -106,8 +130,9 @@ export function splitClip(timeline: EditorTimeline, clipId: string, playheadMs: 
   const index = timeline.clips.findIndex(clip => clip.id === clipId)
   if (index < 0) return timeline
   const clip = timeline.clips[index]
-  if (playheadMs <= clip.timelineStartMs || playheadMs >= clip.timelineEndMs) return timeline
-  const sourceSplitMs = clip.sourceInMs + playheadMs - clip.timelineStartMs
+  const alignedPlayheadMs = alignToMasterFrame(playheadMs)
+  if (alignedPlayheadMs <= clip.timelineStartMs || alignedPlayheadMs >= clip.timelineEndMs) return timeline
+  const sourceSplitMs = clip.sourceInMs + alignedPlayheadMs - clip.timelineStartMs
   const clips = [...timeline.clips]
   clips.splice(index, 1,
     { ...clip, id: `${clip.id}-a`, sourceOutMs: sourceSplitMs },
@@ -143,6 +168,19 @@ export function toEditingTimeline(timeline: EditorTimeline): EditingTimeline {
 
 export function restoreEditorTimeline(timeline: EditingTimeline, assets: TimelineAsset[]): EditorTimeline {
   const assetsByRef = new Map(assets.map(asset => [`${asset.assetId}:v${asset.assetVersion}`, asset]))
+  if (timeline.schema_version === 'editing-timeline/v2') {
+    const primary = timeline.tracks.find(track => track.kind === 'visual' && track.role === 'primary')
+    if (!primary) return createEmptyEditorTimeline()
+    const clips = primary.clips.filter(clip => clip.kind === 'video').map(clip => {
+      if (!clip.asset_ref || !clip.source) throw new Error(`镜头 ${clip.id} 缺少素材或源时间引用。`)
+      const asset = assetsByRef.get(`${clip.asset_ref.asset_id}:v${clip.asset_ref.version}`)
+      if (!asset) throw new Error(`镜头 ${clip.id} 引用的素材版本当前不可用。`)
+      return { id: clip.id, assetId: asset.assetId, assetVersion: asset.assetVersion, name: asset.name, previewUrl: asset.previewUrl,
+        timelineStartMs: Math.round(clip.timeline.start_frame * 1000 / 30), timelineEndMs: Math.round((clip.timeline.start_frame + clip.timeline.duration_frames) * 1000 / 30),
+        sourceInMs: Math.round(clip.source.in_us / 1000), sourceOutMs: Math.round(clip.source.out_us / 1000), sourceDurationMs: asset.durationMs }
+    })
+    return { clips, durationMs: Math.round(timeline.duration_frames * 1000 / 30) }
+  }
   const primary = timeline.tracks.find(track => track.role === 'primary_video')
   if (!primary) return createEmptyEditorTimeline()
   const clips = primary.clips.map(clip => {

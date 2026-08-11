@@ -109,10 +109,11 @@ func (r AssetRelation) Validate() error {
 }
 
 type ProjectAsset struct {
-	Ref       contract.ProjectAssetRef `json:"ref"`
-	Asset     Asset                    `json:"asset"`
-	Version   AssetVersion             `json:"version"`
-	CreatedAt time.Time                `json:"created_at"`
+	Ref         contract.ProjectAssetRef `json:"ref"`
+	Asset       Asset                    `json:"asset"`
+	Version     AssetVersion             `json:"version"`
+	UseDecision *AssetUseDecision        `json:"use_decision,omitempty"`
+	CreatedAt   time.Time                `json:"created_at"`
 }
 
 const AssetFeatureSchemaV1 = "asset_feature_v1"

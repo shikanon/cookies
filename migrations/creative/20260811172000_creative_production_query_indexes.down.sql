@@ -1,0 +1,2 @@
+DROP INDEX idx_creative_edit_render_production_query ON creative_edit_render_jobs;
+DROP INDEX idx_creative_render_production_query ON creative_render_jobs;

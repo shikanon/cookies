@@ -60,6 +60,12 @@ type Repository interface {
 	ListPackages(context.Context, contract.OrganizationID, contract.ProjectID, int) ([]CreativePackage, error)
 }
 
+// TaskMetadataRepository is the persistence seam for user-facing task identity.
+// Draft revisions remain append-only and separate from renaming the containing task.
+type TaskMetadataRepository interface {
+	RenameTask(context.Context, contract.OrganizationID, contract.ProjectID, string, int64, string, time.Time) (CreativeTask, error)
+}
+
 // ViralRemakeRepository is a narrow seam for append-only video-draft
 // revisions. It is separate from the base Repository so other Creative test
 // adapters do not need to understand the viral-remake workflow.

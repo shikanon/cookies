@@ -1643,6 +1643,20 @@ func (s *Server) getKnowledgeDocument(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, value)
 }
 
+func (s *Server) extractKnowledgeDocumentMedia(w http.ResponseWriter, r *http.Request) {
+	if s.knowledge == nil {
+		s.notImplemented(w, r)
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	items, err := s.knowledge.ExtractDocumentMedia(r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("document_id"))
+	if err != nil {
+		s.writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) searchKnowledge(w http.ResponseWriter, r *http.Request) {
 	if s.knowledge == nil {
 		s.notImplemented(w, r)
@@ -1795,7 +1809,10 @@ func (s *Server) notImplemented(w http.ResponseWriter, r *http.Request) {
 func writerHeaderNoStore(w http.ResponseWriter) { w.Header().Set("Cache-Control", "private, no-store") }
 func (s *Server) writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message, retryable := http.StatusInternalServerError, "INTERNAL", "The service could not complete the request.", true
+	var assetUseDenied assets.AssetUseDeniedError
 	switch {
+	case errors.As(err, &assetUseDenied):
+		status, code, message, retryable = http.StatusForbidden, string(assetUseDenied.Code), "The asset rights do not allow this operation.", false
 	case errors.Is(err, identity.ErrMembershipForbidden):
 		status, code, message, retryable = http.StatusForbidden, "MEMBERSHIP_OPERATION_FORBIDDEN", "当前身份无权执行该成员操作。", false
 	case errors.Is(err, identity.ErrMembershipNotFound), errors.Is(err, identity.ErrUserNotFound):
@@ -1840,6 +1857,10 @@ func (s *Server) writeServiceError(w http.ResponseWriter, r *http.Request, err e
 		status, code, message, retryable = http.StatusNotFound, "RESOURCE_NOT_FOUND", "The scoped Creative resource does not exist.", false
 	case errors.Is(err, creative.ErrIdempotencyConflict):
 		status, code, message, retryable = http.StatusConflict, contract.ErrorIdempotencyConflict, "The idempotency key conflicts with an earlier Creative request.", false
+	case errors.Is(err, creative.ErrOperationVersionConflict):
+		status, code, message, retryable = http.StatusConflict, "EDIT_OPERATION_VERSION_CONFLICT", "The operation base version no longer matches the current timeline.", false
+	case errors.Is(err, creative.ErrEditTimelineVersionConflict):
+		status, code, message, retryable = http.StatusConflict, "EDIT_TIMELINE_VERSION_CONFLICT", "The timeline version no longer matches the current EditTask.", false
 	case errors.Is(err, creative.ErrIntakeNotReady):
 		status, code, message, retryable = http.StatusConflict, "INTAKE_NEEDS_CLARIFICATION", "The Creative intake needs the missing fields before a task can be created.", false
 	case errors.Is(err, creative.ErrProviderJobConflict):

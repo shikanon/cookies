@@ -3,6 +3,7 @@ package creative
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -72,9 +73,13 @@ func TestBrandFilmFixtureCompletesPersistentPhaseZeroToTwo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace, err = service.GenerateBrandFilmConcepts(ctx, rc.Actor, "project_1", taskID, BrandFilmRevisionRequest{ExpectedRevision: workspace.VideoDraft.Revision})
+	conceptBaseRevision := workspace.VideoDraft.Revision
+	workspace, err = service.GenerateBrandFilmConcepts(ctx, rc.Actor, "project_1", taskID, BrandFilmRevisionRequest{ExpectedRevision: conceptBaseRevision})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, staleErr := service.GenerateBrandFilmConcepts(ctx, rc.Actor, "project_1", taskID, BrandFilmRevisionRequest{ExpectedRevision: conceptBaseRevision}); !errors.Is(staleErr, ErrVersionConflict) {
+		t.Fatalf("stale concept generation error = %v, want ErrVersionConflict", staleErr)
 	}
 	concepts := workspace.VideoDraft.BrandFilm.CurrentConceptSet()
 	if concepts == nil || len(concepts.Candidates) != 3 || workspace.VideoDraft.BrandFilm.SelectedConceptID != "" {
