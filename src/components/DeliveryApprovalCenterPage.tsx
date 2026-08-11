@@ -98,7 +98,7 @@ export function DeliveryApprovalCenterPage({ state, tourCase, tourRunId, selecte
   const approvalValid = selected?.status === 'approved' && approval?.valid === true
   const preflightPassed = selected ? preflightPassedStatuses.has(selected.status) : false
   const optimizationApproval = Boolean(selected?.recommendationId)
-  const manualPackageURL = selected ? projectPath(projectId, 'delivery', 'three-tier', undefined, '人工操作包', undefined, tourRunId, tourCase) : undefined
+  const manualPackageURL = selected ? projectPath(projectId, 'delivery', 'configuration', undefined, '人工操作包', undefined, tourRunId, tourCase) : undefined
 
   return <StateBoundary
     state={state}
@@ -147,6 +147,8 @@ export function DeliveryApprovalCenterPage({ state, tourCase, tourRunId, selecte
             <div><b>PlanVersion</b><span>V{selected.planVersion}</span></div>
             <div><b>申请版本</b><span>v{approval?.changeSetVersion ?? selected.version}</span></div>
             <div><b>内容 Hash</b><span title={approval?.planCanonicalHash ?? selected.planCanonicalHash}>{approval?.hashSummary ?? selected.planCanonicalHash.slice(0, 12)}</span></div>
+            <div><b>平台配置</b><span title={approval?.configuration?.canonicalHash}>{approval?.configuration ? `${approval.configuration.platform} · ${approval.configuration.id} V${approval.configuration.version}` : '旧版快照绑定'}</span></div>
+            <div><b>业务意图</b><span title={approval?.intent?.canonicalHash}>{approval?.intent ? `${approval.intent.id} V${approval.intent.version}` : '旧版无独立 Intent'}</span></div>
             <div><b>Action Hash</b><span title={approval?.actionHash}>{approval?.actionHash.slice(0, 12) ?? '批准后生成'}</span></div>
             <div><b>授权用途</b><span>{optimizationApproval ? '优化配置写入' : approval ? '平台操作演练' : '首次上线操作演练'}</span></div>
             <div><b>预算上限</b><span>¥{formatMinor(approval?.budgetLimit.totalMinor ?? selected.budgetLimit.totalMinor)} {approval?.budgetLimit.currency ?? selected.budgetLimit.currency}</span></div>

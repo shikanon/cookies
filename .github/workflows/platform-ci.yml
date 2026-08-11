@@ -100,6 +100,11 @@ jobs:
           COOKIES_TEST_MYSQL_DSN: cookies:cookies_local_development_only@tcp(127.0.0.1:3306)/cookies?parseTime=true&multiStatements=true
         run: go test ./internal/platform/jobruntime -run TestMySQLStoreLifecycleIntegration -count=1
 
+      - name: Verify DeliveryIntent runtime and legacy upgrade compatibility
+        env:
+          COOKIES_TEST_MYSQL_DSN: cookies:cookies_local_development_only@tcp(127.0.0.1:3306)/cookies?parseTime=true&multiStatements=true
+        run: go test ./internal/systems/delivery -run TestMySQLPlatformRuntimeRoundTripAndLegacyUpgradeCompatibility -count=1
+
       - name: Verify the Knowledge and Research center projection
         env:
           COOKIES_TEST_MYSQL_DSN: cookies:cookies_local_development_only@tcp(127.0.0.1:3306)/cookies?parseTime=true&multiStatements=true

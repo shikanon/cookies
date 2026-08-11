@@ -3,347 +3,158 @@ import { expect, test, type APIRequestContext } from '@playwright/test'
 const projectId = 'project_investor_precision_evidence'
 const otherProjectId = 'project_local'
 
-test('three-tier mock configuration, recommendation decision, approval, and manual package remain immutable and project-scoped', async ({ page, request }) => {
+test('DeliveryIntent and tagged PlatformConfiguration stay immutable, project-scoped, and approval-bound', async ({ page, request }) => {
   const suffix = Date.now().toString(36)
-  const created = await createPlan(request, `Three-tier delivery ${suffix}`)
+  const created = await createPlan(request, suffix, 2)
+  expect(created.current_version).toMatchObject({
+    schema_version: 'delivery-plan-version/v2', runtime_status: 'active', read_only: false,
+    canonical_hash: created.current_version.platform_configuration.canonical_hash,
+    intent: { schema_version: 'delivery-intent/v1', version_number: 1 },
+    platform_configuration: {
+      schema_version: 'delivery-platform-configuration/v2', platform: 'ocean_engine', profile_version: 'oceanengine-configuration/v1',
+      payload: { profile: 'ocean_engine', ocean_engine: { project: expect.any(Object), promotions: expect.any(Array) } },
+    },
+  })
+  expect(created.current_version.platform_configuration.payload.ocean_engine.promotions).toHaveLength(2)
   expect(created.current_version.three_tier_configuration).toBeUndefined()
 
-  const compiled = await compile(request, created.id, created.version, 'golden_path')
-  const snapshot = compiled.current_version.three_tier_configuration
-  expect(snapshot).toBeDefined()
-  if (!snapshot) throw new Error('golden compile did not return a three-tier snapshot')
-  expect(snapshot).toMatchObject({
-    schema: 'delivery-three-tier/v1',
-    source: 'mock',
-    scenario: 'golden_path',
-    fixture_scenario: 'golden_path',
-    generated_at: expect.any(String),
-    evidence: expect.arrayContaining([expect.any(String)]),
-  })
-  expect(snapshot.groups).toHaveLength(1)
-  expect(snapshot.groups[0].plans).toHaveLength(2)
-  expect(snapshot.groups[0].plans.flatMap((plan: ThreeTierPlan) => plan.creatives)).toHaveLength(3)
-  const editableTitle = snapshot.groups[0].plans[0].creatives[0].fields.find(field => field.key === 'title')
-  expect(editableTitle).toMatchObject({
-    key: 'title',
-    recommended: { type: 'string' },
-    effective: { type: 'string' },
-    source: 'mock_fixture',
-    evidence_refs: expect.arrayContaining([expect.any(String)]),
-    mock_required: true,
-    platform_status: 'not_requested',
-    confirmation: true,
-  })
+  const isolated = await request.get(`/api/delivery/v1/projects/${otherProjectId}/plans/${created.id}`)
+  expect(isolated.status()).toBe(404)
 
-  const opened = await request.get(planURL(created.id))
-  expect(opened.status()).toBe(200)
-  expect(await opened.json()).toMatchObject({
-    id: created.id,
-    current_version: { canonical_hash: compiled.current_version.canonical_hash, three_tier_configuration: snapshot },
-  })
+  const legacyCompile = await request.post(`${planURL(created.id)}/configuration:compile`, { data: { expected_version: 1, fixture: 'golden_path' } })
+  expect(legacyCompile.status()).toBe(409)
+  expect(await legacyCompile.json()).toMatchObject({ error: { code: 'LEGACY_CONFIGURATION_UNSUPPORTED' } })
+  const legacyOverride = await request.post(`${planURL(created.id)}/configuration:override`, { data: {} })
+  expect(legacyOverride.status()).toBe(409)
 
-  const overridden = await request.post(`${planURL(created.id)}/configuration:override`, {
-    data: {
-      expected_version: compiled.version,
-      group_id: 'group_1',
-      plan_id: 'plan_1',
-      creative_id: 'creative_1',
-      field_key: 'title',
-      value: { type: 'string', value: '人工确认后的项目标题' },
-      confirmed: true,
-    },
-  })
-  expect(overridden.status()).toBe(200)
-  const overriddenPlan = await overridden.json() as DeliveryPlan
-  expect(overriddenPlan.version).toBe(compiled.version + 1)
-  expect(overriddenPlan.current_version.canonical_hash).not.toBe(compiled.current_version.canonical_hash)
-  expect(overriddenPlan.current_version.three_tier_configuration.groups[0].plans[0].creatives[0].fields.find(field => field.key === 'title')).toMatchObject({
-    key: 'title',
-    manual: { type: 'string', value: '人工确认后的项目标题' },
-    effective: { type: 'string', value: '人工确认后的项目标题' },
-    confirmation: true,
-  })
-
-  const preflight = await request.post(`${planURL(created.id)}/preflight`)
-  expect(preflight.status()).toBe(200)
-  expect(await preflight.json()).toMatchObject({
-    source: 'mock',
-    scenario: 'golden_path',
-    passed: true,
-    blocked: false,
+  const planPreflight = await request.post(`${planURL(created.id)}/preflight`)
+  expect(planPreflight.status()).toBe(200)
+  expect(await planPreflight.json()).toMatchObject({
+    passed: true, blocked: false, scenario: 'platform_configuration',
     checks: expect.arrayContaining([
-      expect.objectContaining({ code: 'three_tier_structure', passed: true }),
-      expect.objectContaining({ code: 'three_tier_required_fields', passed: true }),
-      expect.objectContaining({ code: 'three_tier_dependencies', passed: true }),
-      expect.objectContaining({ code: 'three_tier_confirmation', passed: true }),
+      expect.objectContaining({ code: 'delivery_intent_valid', passed: true }),
+      expect.objectContaining({ code: 'platform_configuration_valid', passed: true }),
     ]),
   })
 
-  // First approval authorizes only the platform-operation rehearsal. That
-  // successful execution creates the exact metric windows consumed by alerts.
-  const firstChangeSetResponse = await request.post(`${planURL(created.id)}:create-change-set`, { data: { expected_version: overriddenPlan.version } })
-  expect(firstChangeSetResponse.status()).toBe(201)
-  let firstChangeSet = await firstChangeSetResponse.json() as ChangeSet
-  const firstPreflight = await request.post(`/api/delivery/v1/projects/${projectId}/change-sets/${firstChangeSet.id}:preflight`, { data: { expected_version: firstChangeSet.version } })
-  expect(firstPreflight.status()).toBe(200)
-  firstChangeSet = await firstPreflight.json() as ChangeSet
-  const firstApproval = await request.post(`/api/delivery/v1/projects/${projectId}/change-sets/${firstChangeSet.id}:approve`, { data: { expected_version: firstChangeSet.version } })
-  expect(firstApproval.status()).toBe(200)
-  firstChangeSet = await firstApproval.json() as ChangeSet
-  const rehearsal = await request.post(`/api/delivery/v1/projects/${projectId}/change-sets/${firstChangeSet.id}:execute`, {
-    headers: { 'Idempotency-Key': `three-tier-rehearsal-${suffix}` },
-    data: { expected_version: firstChangeSet.version, scenario: 'success' },
-  })
-  expect(rehearsal.status()).toBe(201)
-  const rehearsalBody = await rehearsal.json() as { execution: { id: string } }
-  const simulation = await request.post(`/api/delivery/v1/projects/${projectId}/executions/${rehearsalBody.execution.id}/simulation-runs`, {
-    data: { scenario: 'cost_pressure', stable_seed: `three-tier-${suffix}` },
-  })
-  expect(simulation.status()).toBe(201)
-  const simulationBody = await simulation.json() as { run: { id: string } }
-  const alertEvaluation = await request.post(`/api/delivery/v1/projects/${projectId}/alerts:evaluate`, { data: { fixture: 'normal_day', execution_id: rehearsalBody.execution.id } })
-  expect(alertEvaluation.status()).toBe(200)
-  expect((await alertEvaluation.json() as { items: unknown[] }).items.length).toBeGreaterThan(0)
-
-  const executionsBefore = await request.get(`/api/delivery/v1/projects/${projectId}/executions`)
-  expect(executionsBefore.status()).toBe(200)
-  const executionIDsBefore = (await executionsBefore.json() as { items: Array<{ id: string }> }).items.map(item => item.id)
-
-  const generated = await request.post(`${planURL(created.id)}/recommendations:generate`, {
-    data: { expected_version: overriddenPlan.version },
-  })
-  expect(generated.status()).toBe(201)
-  const recommendation = await generated.json() as Recommendation
-  expect(recommendation).toMatchObject({
-    project_id: projectId,
-    plan_id: created.id,
-    plan_version: overriddenPlan.version,
-    status: 'proposed',
-    fingerprint: expect.any(String),
-    base_snapshot_hash: expect.any(String),
-    base_snapshot: { schema: 'delivery-three-tier/v1', source: 'mock', scenario: 'golden_path' },
-    target_snapshot_hash: expect.any(String),
-    target_snapshot: { schema: 'delivery-three-tier/v1', source: 'mock', scenario: 'golden_path' },
-    evidence: expect.arrayContaining([
-      `simulation://execution/${rehearsalBody.execution.id}`,
-      `simulation://run/${simulationBody.run.id}`,
-      expect.stringMatching(/^simulation:\/\/metric\//),
-      expect.stringMatching(/^simulation:\/\/alert\//),
-    ]),
-    simulation_run_id: simulationBody.run.id,
-    provenance: 'delivery-outcome-scenario/v1',
-  })
-
-  const listed = await request.get(`/api/delivery/v1/projects/${projectId}/recommendations?limit=10`)
-  expect(listed.status()).toBe(200)
-  expect(await listed.json()).toMatchObject({ source: 'mock', items: expect.arrayContaining([expect.objectContaining({ id: recommendation.id })]) })
-  const fetchedRecommendation = await request.get(`/api/delivery/v1/projects/${projectId}/recommendations/${recommendation.id}`)
-  expect(fetchedRecommendation.status()).toBe(200)
-  expect(await fetchedRecommendation.json()).toMatchObject({ id: recommendation.id, status: 'proposed' })
-
-  const acceptKey = `three-tier-accept-${suffix}`
-  const accepted = await request.post(`/api/delivery/v1/projects/${projectId}/recommendations/${recommendation.id}:accept`, {
-    headers: { 'Idempotency-Key': acceptKey },
-    data: { expected_version: recommendation.version },
-  })
-  expect(accepted.status()).toBe(201)
-  const decision = await accepted.json() as RecommendationDecision
-  expect(decision).toMatchObject({
-    recommendation: { id: recommendation.id, status: 'accepted', version: recommendation.version + 1 },
-    change_set: {
-      project_id: projectId,
-      plan_id: created.id,
-      status: 'draft',
-      recommendation_id: recommendation.id,
-      target_snapshot_hash: recommendation.target_snapshot_hash,
-      target_snapshot: recommendation.target_snapshot,
-      source: 'mock',
-      scenario: 'golden_path',
-    },
-  })
-
-  const replay = await request.post(`/api/delivery/v1/projects/${projectId}/recommendations/${recommendation.id}:accept`, {
-    headers: { 'Idempotency-Key': acceptKey },
-    data: { expected_version: recommendation.version },
-  })
-  expect(replay.status()).toBe(200)
-  expect(await replay.json()).toMatchObject({ change_set: { id: decision.change_set.id }, recommendation: { id: recommendation.id, status: 'accepted' } })
-
-  const unchangedPlan = await request.get(planURL(created.id))
-  expect(unchangedPlan.status()).toBe(200)
-  expect(await unchangedPlan.json()).toMatchObject({ version: overriddenPlan.version, current_version: { canonical_hash: overriddenPlan.current_version.canonical_hash } })
-  const executionsAfter = await request.get(`/api/delivery/v1/projects/${projectId}/executions`)
-  expect(executionsAfter.status()).toBe(200)
-  expect((await executionsAfter.json() as { items: Array<{ id: string }> }).items.map(item => item.id)).toEqual(executionIDsBefore)
-
-  const changeSetPreflight = await request.post(`/api/delivery/v1/projects/${projectId}/change-sets/${decision.change_set.id}:preflight`, {
-    data: { expected_version: decision.change_set.version },
-  })
-  expect(changeSetPreflight.status()).toBe(200)
-  const preflightChangeSet = await changeSetPreflight.json() as ChangeSet
-  expect(preflightChangeSet.status).toBe('preflight_passed')
-  const approved = await request.post(`/api/delivery/v1/projects/${projectId}/change-sets/${decision.change_set.id}:approve`, {
-    data: { expected_version: preflightChangeSet.version },
-  })
+  const draftResponse = await request.post(`${planURL(created.id)}:create-change-set`, { data: { expected_version: 1 } })
+  expect(draftResponse.status()).toBe(201)
+  let changeSet = await draftResponse.json() as ChangeSet
+  expect(changeSet.target_snapshot).toMatchObject({ schema_version: 'delivery-platform-configuration/v2', configuration_id: `configuration-${suffix}` })
+  expect(changeSet.target_snapshot_hash).toBe(created.current_version.canonical_hash)
+  const checked = await request.post(changeSetActionURL(changeSet.id, 'preflight'), { data: { expected_version: changeSet.version } })
+  expect(checked.status()).toBe(200)
+  changeSet = await checked.json() as ChangeSet
+  const approved = await request.post(changeSetActionURL(changeSet.id, 'approve'), { data: { expected_version: changeSet.version } })
   expect(approved.status()).toBe(200)
-  const approvedChangeSet = await approved.json() as ChangeSet
-  expect(approvedChangeSet).toMatchObject({
-    status: 'approved',
-    approval: { target_snapshot_hash: recommendation.target_snapshot_hash, valid: true, source: 'mock' },
+  changeSet = await approved.json() as ChangeSet
+  expect(changeSet.approval).toMatchObject({
+    valid: true,
+    target_snapshot_hash: created.current_version.canonical_hash,
+    configuration_schema_version: 'delivery-platform-configuration/v2',
+    configuration_id: `configuration-${suffix}`,
+    configuration_version: 1,
+    configuration_platform: 'ocean_engine',
+    configuration_profile_version: 'oceanengine-configuration/v1',
+    configuration_canonical_hash: created.current_version.canonical_hash,
+    intent_schema_version: 'delivery-intent/v1',
+    intent_id: `intent-${suffix}`,
+    intent_version: 1,
+    intent_canonical_hash: created.current_version.intent.canonical_hash,
   })
 
-  const packageResponse = await request.post(`/api/delivery/v1/projects/${projectId}/change-sets/${decision.change_set.id}/manual-action-package`, {
-    data: { expected_version: approvedChangeSet.version },
+  const updateResponse = await request.patch(planURL(created.id), { data: runtimePayload(suffix, 2, 0, 'Updated Ocean project') })
+  expect(updateResponse.status()).toBe(200)
+  const updated = await updateResponse.json() as DeliveryPlan
+  expect(updated.current_version_number).toBe(2)
+  expect(updated.versions).toHaveLength(2)
+  expect(updated.current_version.platform_configuration.payload.ocean_engine.promotions).toHaveLength(0)
+  expect(updated.current_version.canonical_hash).not.toBe(created.current_version.canonical_hash)
+
+  const staleExecution = await request.post(changeSetActionURL(changeSet.id, 'execute'), {
+    headers: { 'Idempotency-Key': `stale-${suffix}` }, data: { expected_version: changeSet.version, scenario: 'success' },
   })
-  expect(packageResponse.status()).toBe(201)
-  const actionPackage = await packageResponse.json() as ManualActionPackage
-  expect(actionPackage).toMatchObject({
-    project_id: projectId,
-    change_set_id: decision.change_set.id,
-    target_snapshot_hash: recommendation.target_snapshot_hash,
-    forbidden_actions: expect.arrayContaining(['platform_api_call', 'automatic_execution']),
-    evidence: expect.arrayContaining([expect.any(String)]),
-    provenance: 'approved_change_set',
-  })
-  expect(actionPackage.instructions).toEqual(expect.arrayContaining([
-    expect.objectContaining({ group_id: 'group_1', plan_id: expect.any(String), creative_id: expect.any(String), field_key: expect.any(String), source: 'mock_fixture', expected_result: expect.any(String), evidence_refs: expect.arrayContaining([expect.any(String)]) }),
-  ]))
-  const packageReplay = await request.post(`/api/delivery/v1/projects/${projectId}/change-sets/${decision.change_set.id}/manual-action-package`, {
-    data: { expected_version: approvedChangeSet.version },
-  })
-  expect(packageReplay.status()).toBe(200)
-  expect(await packageReplay.json()).toMatchObject({ id: actionPackage.id, content_hash: actionPackage.content_hash })
-  const refreshedPackage = await request.get(`/api/delivery/v1/projects/${projectId}/change-sets/${decision.change_set.id}/manual-action-package`)
-  expect(refreshedPackage.status()).toBe(200)
-  expect(await refreshedPackage.json()).toMatchObject({ id: actionPackage.id, source: 'mock' })
+  expect(staleExecution.status()).toBe(409)
+  expect(await staleExecution.json()).toMatchObject({ error: { code: expect.stringMatching(/STALE_PLAN_VERSION|APPROVAL_CONTENT_MISMATCH/) } })
 
-  await page.goto(`/projects/${projectId}/delivery/optimization?view=${encodeURIComponent('已采纳')}&plan_id=${created.id}`)
-  const recommendationCard = page.locator('.delivery-recommendation-card').first()
-  await expect(page.getByRole('heading', { name: '优化中心', exact: true, level: 1 })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '建议决策与跟踪', exact: true })).toHaveCount(0)
-  await expect(recommendationCard).toContainText(/计划预算下调 (?:5|[6-9]|1\d|20)%/)
-  await expect(recommendationCard).toContainText('建议产生的变化')
-  await expect(recommendationCard).toContainText('风险与约束')
-  await expect(page.getByRole('region', { name: '建议因果证据' })).toContainText('投放效果情景模拟')
-  await expect(page.getByRole('link', { name: /检查优化草稿|查看优化配置/ })).toHaveAttribute('href', new RegExp(`/delivery/three-tier.*change_set_id=${decision.change_set.id}`))
-  await expect(page.locator('.delivery-config-package')).toHaveCount(0)
-  const recommendationTextSize = await recommendationCard.locator('.delivery-recommendation-summary dd').first().evaluate(element => Number.parseFloat(getComputedStyle(element).fontSize))
-  expect(recommendationTextSize).toBeGreaterThanOrEqual(12)
-
-  await page.goto(`/projects/${projectId}/delivery/three-tier?view=${encodeURIComponent('人工操作包')}&plan_id=${created.id}&change_set_id=${decision.change_set.id}`)
-  const packagePanel = page.locator('.delivery-config-package')
-  await expect(packagePanel.getByText('操作包已就绪', { exact: true })).toBeVisible()
-  await expect(page.getByRole('region', { name: '人工执行安全边界' })).toContainText('以下操作不在授权范围内，请勿执行')
-  await expect(page.getByRole('region', { name: '待人工填写清单' })).toContainText('按广告组、计划、创意顺序')
-  await expect(packagePanel.getByText('source=mock', { exact: false })).toHaveCount(0)
-  await expect(packagePanel.getByText('manual_action_package', { exact: false })).toHaveCount(0)
-  await expect(page.locator('.delivery-config-config-card')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '检查与提交' })).toHaveCount(0)
-  await expect(page.locator('.delivery-config-recommendation-page')).toHaveCount(0)
-  await expect(page.getByRole('tab', { name: '优化建议' })).toHaveCount(0)
-
-  await page.getByRole('tab', { name: '检查与提交' }).click()
-  await expect(page.getByRole('heading', { name: '检查草稿并提交变更申请' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '建议只待决策' })).toHaveCount(0)
-  await expect(page.locator('.delivery-config-config-card')).toHaveCount(0)
-  await expect(page.locator('.delivery-config-flow-grid--preflight > article > header').getByText('1', { exact: true })).toHaveCount(0)
-  await expect(page.locator('.delivery-config-preflight-actions > button')).toHaveCount(2)
-  await expect(page.getByRole('button', { name: '打回修改' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /批准/ })).toHaveCount(0)
-  await expect(page.getByRole('link', { name: '查看审批记录' })).toHaveAttribute('href', new RegExp(`/delivery/approvals/${decision.change_set.id}`))
-  await expect.poll(() => new URL(page.url()).searchParams.get('plan_id')).toBe(created.id)
-
-  await page.getByRole('tab', { name: '配置映射' }).click()
-  await expect(page.locator('.delivery-config-config-card')).toBeVisible()
-  await expect(page.locator('.delivery-config-flow-grid')).toHaveCount(0)
-  await expect.poll(() => new URL(page.url()).searchParams.get('plan_id')).toBe(created.id)
-
-  const crossProjectPlan = await request.get(`/api/delivery/v1/projects/${otherProjectId}/plans/${created.id}`)
-  expect(crossProjectPlan.status()).toBe(404)
-  const crossProjectRecommendation = await request.get(`/api/delivery/v1/projects/${otherProjectId}/recommendations/${recommendation.id}`)
-  expect(crossProjectRecommendation.status()).toBe(404)
-  const crossProjectPackage = await request.get(`/api/delivery/v1/projects/${otherProjectId}/change-sets/${decision.change_set.id}/manual-action-package`)
-  expect(crossProjectPackage.status()).toBe(404)
-})
-
-test('server fixtures expose required, dependency, confirmation, and platform-pending preflight checks', async ({ request }) => {
-  for (const fixture of ['missing_required_field', 'orphan_dependency', 'missing_confirmation', 'platform_fields_pending'] as const) {
-    const plan = await createPlan(request, `Three-tier ${fixture} ${Date.now().toString(36)}`)
-    const compiled = await compile(request, plan.id, plan.version, fixture)
-    const preflight = await request.post(`${planURL(plan.id)}/preflight`)
-    expect(preflight.status(), fixture).toBe(200)
-    const body = await preflight.json() as { source: string; checks: Array<{ code: string; passed: boolean }> }
-    expect(body.source).toBe('mock')
-    const failedCodes = body.checks.filter(check => !check.passed).map(check => check.code)
-    if (fixture === 'missing_required_field') expect(failedCodes).toContain('three_tier_required_fields')
-    if (fixture === 'orphan_dependency') expect(failedCodes).toContain('three_tier_dependencies')
-    if (fixture === 'missing_confirmation') expect(failedCodes).toContain('three_tier_confirmation')
-    if (fixture === 'platform_fields_pending') expect(failedCodes).toContain('three_tier_platform_pending')
-    expect(compiled.current_version.three_tier_configuration?.source).toBe('mock')
-  }
-})
-
-test('manual override opens as a centered modal above the fixed status bar', async ({ page, request }) => {
-  const viewport = { width: 1311, height: 912 }
-  const created = await createPlan(request, `Three-tier override dialog ${Date.now().toString(36)}`)
-  await compile(request, created.id, created.version, 'golden_path')
-
-  await page.setViewportSize(viewport)
+  await page.goto(`/projects/${projectId}/delivery/configuration?plan_id=${created.id}&view=${encodeURIComponent('配置映射')}`)
+  await expect(page.getByRole('heading', { name: 'Updated Ocean project', level: 4 })).toBeVisible()
+  await expect(page.getByText('每日预算', { exact: true })).toBeVisible()
+  await page.getByText('查看技术信息', { exact: true }).click()
+  await expect(page.getByText('schema=delivery-platform-configuration/v2')).toBeVisible()
+  await expect(page.getByText('暂未添加推广单元')).toBeVisible()
+  await expect(page.getByRole('button', { name: /编译三层配置|人工覆盖/ })).toHaveCount(0)
   await page.goto(`/projects/${projectId}/delivery/three-tier?plan_id=${created.id}`)
-  const landingPageField = page.locator('.delivery-config-field').filter({ hasText: '落地页' }).first()
-  await landingPageField.getByRole('button', { name: '人工覆盖' }).click()
-
-  const dialog = page.getByRole('dialog', { name: '人工覆盖：落地页' })
-  await expect(dialog).toBeVisible()
-  await expect(page.locator('.delivery-config-override-backdrop')).toHaveCSS('position', 'fixed')
-  await expect(page.locator('.delivery-config-override-backdrop')).toHaveCSS('z-index', '40')
-  await expect(page.locator('body')).toHaveCSS('overflow', 'hidden')
-  const box = await dialog.boundingBox()
-  expect(box).not.toBeNull()
-  expect(Math.abs(box!.x + box!.width / 2 - viewport.width / 2)).toBeLessThan(12)
-  expect(Math.abs(box!.y + box!.height / 2 - viewport.height / 2)).toBeLessThan(3)
-  expect(box!.y).toBeGreaterThanOrEqual(24)
-  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height - 24)
-
-  await page.keyboard.press('Escape')
-  await expect(dialog).toHaveCount(0)
-  expect(await page.locator('body').evaluate(element => element.style.overflow)).toBe('')
+  await expect.poll(() => new URL(page.url()).pathname).toBe(`/projects/${projectId}/delivery/configuration`)
 })
 
-async function createPlan(request: APIRequestContext, name: string): Promise<DeliveryPlan> {
-  const response = await request.post(`/api/delivery/v1/projects/${projectId}/plans`, {
-    data: {
-      name,
-      objective: 'Deterministic three-tier mock contract coverage',
-      advertiser: { id: 'mock-advertiser-001', name: 'Mock advertiser', platform: 'ocean_engine' },
-      budget: { total_minor: 300000, currency: 'CNY' },
-      schedule: { start_at: '2026-08-04T00:00:00Z', end_at: '2026-08-11T00:00:00Z', timezone: 'Asia/Shanghai' },
-      tracking: { landing_page: 'https://example.test/three-tier', pixel_id: 'PX-THREE-TIER', conversion_event: 'submit' },
-      creative_references: [{ asset_id: 'asset_demo_investor_creative_video', version: 1, confirmed: true }],
-      strategy_reference: { task_id: 'task_demo_precision_strategy', version: 1 },
-      source_strategy_version: 'task_demo_precision_strategy@v1',
-    },
-  })
+test('Magnetic Engine is a stable non-executable CAPABILITY_PENDING profile', async ({ request }) => {
+  const suffix = `magnetic-${Date.now().toString(36)}`
+  const input = runtimePayload(suffix, 1, 0, 'Magnetic pending')
+  input.platform_configuration = {
+    schema_version: 'delivery-platform-configuration/v2', configuration_id: `configuration-${suffix}`, version_number: 1,
+    platform: 'magnetic_engine', profile_version: 'magnetic-engine-configuration/v1', hash_algorithm: 'RFC8785-JCS-SHA256(canonical_payload)',
+    payload: { profile: 'magnetic_engine', magnetic_engine: { profile: 'magnetic_engine', status: 'capability_pending', reason_code: 'CAPABILITY_PENDING', reason: 'no verified field evidence' } },
+    configuration_provenance: { kind: 'manual', generator_ref: 'e2e' }, fact_provenance: { source: 'mock', snapshot_ref: `mock://${suffix}` }, compilation_metadata: {},
+  }
+  const response = await request.post(`/api/delivery/v1/projects/${projectId}/plans`, { data: { intent: input.intent, platform_configuration: input.platform_configuration } })
+  expect(response.status()).toBe(201)
+  const plan = await response.json() as DeliveryPlan
+  expect(plan.current_version).toMatchObject({ runtime_status: 'capability_pending', scenario: 'capability_pending' })
+  const preflight = await request.post(`${planURL(plan.id)}/preflight`)
+  expect(preflight.status()).toBe(200)
+  expect(await preflight.json()).toMatchObject({ passed: false, blocked: true, checks: [expect.objectContaining({ code: 'CAPABILITY_PENDING' })] })
+})
+
+async function createPlan(request: APIRequestContext, suffix: string, promotions: number): Promise<DeliveryPlan> {
+  const payload = runtimePayload(suffix, 1, promotions, 'Ocean project')
+  const response = await request.post(`/api/delivery/v1/projects/${projectId}/plans`, { data: { intent: payload.intent, platform_configuration: payload.platform_configuration } })
   expect(response.status()).toBe(201)
   return response.json() as Promise<DeliveryPlan>
 }
 
-async function compile(request: APIRequestContext, planId: string, expectedVersion: number, fixture: Fixture): Promise<DeliveryPlan> {
-  const response = await request.post(`${planURL(planId)}/configuration:compile`, { data: { expected_version: expectedVersion, fixture } })
-  expect(response.status(), fixture).toBe(201)
-  return response.json() as Promise<DeliveryPlan>
+function runtimePayload(suffix: string, version: number, promotionCount: number, name: string): any {
+  const ref = (kind: string, id: string) => ({ namespace: 'cookies', object_kind: kind, scope: `project:${projectId}`, id, version: 'v1', content_hash: 'a'.repeat(64), state: 'resolved' })
+  const material = ref('asset_version', 'asset_demo_investor_creative_video')
+  const intent = {
+    schema_version: 'delivery-intent/v1', intent_id: `intent-${suffix}`, version_number: version, hash_algorithm: 'RFC8785-JCS-SHA256(canonical_payload)',
+    payload: {
+      payload_schema_version: 'delivery-intent/v1', marketing_objective: 'qualified conversions',
+      budget_boundary: { currency: 'CNY', minimum_total_minor: 0, maximum_total_minor: 300000 },
+      schedule_boundary: { earliest_start: '2026-08-11T00:00:00+08:00', latest_end: '2026-08-25T00:00:00+08:00', timezone: 'Asia/Shanghai' },
+      optimization_preferences: [], material_references: [material], audience_constraints: {}, strategy_reference: ref('strategy_version', 'task_demo_precision_strategy'),
+    },
+    configuration_provenance: { kind: 'manual', generator_ref: 'e2e' }, fact_provenance: { source: 'mock', snapshot_ref: `mock://${suffix}/intent/${version}` },
+  }
+  const promotions = Array.from({ length: promotionCount }, (_, index) => ({
+    draft_schema_version: 'oceanengine-configuration/v1', promotion_draft_id: `promotion-${suffix}-${index + 1}`,
+    delivery_identity: { mode: 'account_info' }, base_material_references: [material], copy_items: [{ text: `copy ${index + 1}` }], settings: {}, promotion_name: `Promotion ${index + 1}`,
+  }))
+  return {
+    expected_version: version - 1,
+    intent,
+    platform_configuration: {
+      schema_version: 'delivery-platform-configuration/v2', configuration_id: `configuration-${suffix}`, version_number: version,
+      platform: 'ocean_engine', profile_version: 'oceanengine-configuration/v1', hash_algorithm: 'RFC8785-JCS-SHA256(canonical_payload)',
+      payload: { profile: 'ocean_engine', ocean_engine: { profile: 'ocean_engine', project: {
+        draft_schema_version: 'oceanengine-configuration/v1', project_draft_id: `project-${suffix}-${version}`, account_reference: ref('advertiser_account', 'account-1'),
+        marketing_purpose: 'ecommerce', marketing_scenario: 'manual_delivery', carrier: 'landing_page', delivery_mode: 'manual', targeting: { smart_expansion: false },
+        schedule: { start_at: '2026-08-11T00:00:00+08:00', end_at: '2026-08-25T00:00:00+08:00', timezone: 'Asia/Shanghai' },
+        budget_and_bidding: { currency: 'CNY', daily_budget_minor: 20000, bidding_strategy: 'manual_bid', charging_mode: 'CPC', bid_minor: 100 }, project_name: name,
+      }, promotions } },
+      configuration_provenance: { kind: 'manual', generator_ref: 'e2e' }, fact_provenance: { source: 'mock', snapshot_ref: `mock://${suffix}/configuration/${version}` },
+      compilation_metadata: { field_evidence: [{ field: 'project', state: 'operator_reviewed' }], evidence_refs: [] },
+    },
+  }
 }
 
-function planURL(planId: string) {
-  return `/api/delivery/v1/projects/${projectId}/plans/${planId}`
-}
+function planURL(planId: string) { return `/api/delivery/v1/projects/${projectId}/plans/${planId}` }
+function changeSetActionURL(id: string, action: string) { return `/api/delivery/v1/projects/${projectId}/change-sets/${id}:${action}` }
 
-type Fixture = 'golden_path' | 'missing_required_field' | 'orphan_dependency' | 'missing_confirmation' | 'platform_fields_pending'
-type ThreeTierField = { key: string; recommended: { type: string; value: unknown }; effective: { type: string; value: unknown }; manual?: { type: string; value: unknown }; source: string; evidence_refs: string[]; mock_required: boolean; platform_status: string; confirmation: boolean }
-type ThreeTierPlan = { id: string; creatives: Array<{ id: string; fields: ThreeTierField[] }> }
-type ThreeTierConfiguration = { schema: string; source: string; scenario: string; fixture_scenario: string; generated_at: string; evidence: string[]; groups: Array<{ id: string; plans: ThreeTierPlan[] }> }
-type DeliveryPlan = { id: string; version: number; current_version: { canonical_hash: string; three_tier_configuration?: ThreeTierConfiguration } }
-type Recommendation = { id: string; version: number; status: string; target_snapshot_hash: string; target_snapshot: ThreeTierConfiguration }
-type ChangeSet = { id: string; version: number; status: string; approval?: { target_snapshot_hash?: string; valid: boolean; source: string } }
-type RecommendationDecision = { recommendation: Recommendation; change_set: ChangeSet }
-type ManualActionPackage = { id: string; content_hash: string; instructions: Array<Record<string, unknown>>; forbidden_actions: string[]; evidence: string[]; provenance: string }
+type DeliveryPlan = {
+  id: string
+  current_version_number: number
+  versions: Array<Record<string, unknown>>
+  current_version: any
+}
+type ChangeSet = { id: string; version: number; target_snapshot: any; target_snapshot_hash: string; approval?: any }

@@ -1,0 +1,99 @@
+{
+  "schema_version": "delivery-intent/v1",
+  "intent_id": "intent-ecommerce-1",
+  "version_number": 1,
+  "hash_algorithm": "RFC8785-JCS-SHA256(canonical_payload)",
+  "canonical_hash": "706500a701bdb01065dff277c269b048b2071df6da53ea5602c174c79655b0c5",
+  "payload": {
+    "payload_schema_version": "delivery-intent/v1",
+    "marketing_objective": "increase qualified ecommerce conversions",
+    "budget_boundary": {
+      "currency": "CNY",
+      "minimum_total_minor": 30000,
+      "maximum_total_minor": 1000000,
+      "minimum_daily_minor": 30000,
+      "maximum_daily_minor": 300000
+    },
+    "schedule_boundary": {
+      "earliest_start": "2026-08-11T00:00:00+08:00",
+      "latest_end": "2026-08-31T23:59:59+08:00",
+      "timezone": "Asia/Shanghai"
+    },
+    "optimization_preferences": [
+      {
+        "metric": "cost_per_conversion",
+        "direction": "minimize",
+        "target_value": 120,
+        "unit": "CNY"
+      }
+    ],
+    "product_references": [
+      {
+        "namespace": "oceanengine",
+        "object_kind": "product",
+        "scope": "account:6391",
+        "id": "product-1",
+        "version": "v1",
+        "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "resolved",
+        "display_name_snapshot": "example product",
+        "evidence_version": "evidence/v1"
+      }
+    ],
+    "landing_page_references": [
+      {
+        "namespace": "oceanengine",
+        "object_kind": "landing_page",
+        "scope": "account:6391",
+        "state": "unresolved",
+        "reason": "landing page selection is pending"
+      }
+    ],
+    "material_references": [
+      {
+        "namespace": "cookies",
+        "object_kind": "asset_version",
+        "scope": "project:project-1",
+        "id": "asset-1:v1",
+        "version": "v1",
+        "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "resolved"
+      }
+    ],
+    "audience_constraints": {
+      "include_references": [
+        {
+          "namespace": "oceanengine",
+          "object_kind": "audience_package",
+          "scope": "account:6391",
+          "state": "unresolved",
+          "reason": "audience package is optional"
+        }
+      ],
+      "constraints": ["exclude existing purchasers"]
+    },
+    "strategy_reference": {
+      "namespace": "cookies",
+      "object_kind": "strategy_version",
+      "scope": "project:project-1",
+      "id": "strategy-task-1:v3",
+      "version": "v3",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "state": "resolved"
+    }
+  },
+  "configuration_provenance": {
+    "kind": "manual",
+    "generator_ref": "operator-brief"
+  },
+  "fact_provenance": {
+    "source": "replay",
+    "snapshot_ref": "replay://intent-ecommerce-1",
+    "evidence_refs": ["evidence://intent-ecommerce-1"],
+    "observed_at": "2026-08-10T09:30:00Z"
+  },
+  "audit": {
+    "created_by": "user-1",
+    "created_at": "2026-08-10T10:00:00Z"
+  }
+}

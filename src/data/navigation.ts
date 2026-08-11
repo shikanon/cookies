@@ -72,7 +72,7 @@ export const systems: SystemDefinition[] = [
     nav: [
       { id: 'tour', label: '上线后优化闭环', icon: Route, group: '计划与执行', layout: 'workspace', description: '从计划来源、首次上线授权、平台操作演练走到指标、告警、优化申请与人工操作包。', views: ['走测总览'] },
       { id: 'plans', label: '投放计划', icon: Megaphone, group: '计划与执行', layout: 'workspace', description: '配置目标、预算、受众、版位、创意和校验。', views: ['全部计划', '草稿', '待审批', '执行中', '已完成', '版本'] },
-      { id: 'three-tier', label: '内部配置编排', icon: Boxes, group: '计划与执行', layout: 'workspace', description: '编译和检查广告组、计划与创意配置；已采纳建议在这里落实为草稿与人工操作包。', views: ['配置映射', '检查与提交', '人工操作包'] },
+      { id: 'configuration', label: '平台配置', icon: Boxes, group: '计划与执行', layout: 'workspace', description: '查看 DeliveryIntent 到平台配置的不可变映射，并提交预检与审批。', views: ['配置映射', '检查与提交', '人工操作包'] },
       { id: 'execution', label: '执行中心', icon: PlaySquare, group: '计划与执行', layout: 'operations', description: '管理受控执行、等待用户、接管、恢复和验证。', views: ['待执行', '执行中', '等待用户', '结果未知', '失败', '接管', '完成'] },
       { id: 'monitoring', label: '监控告警', icon: Activity, group: '监控与优化', layout: 'analysis', description: '运行可重复的投放效果情景模拟，并从同一 SimulationRun 的指标与事件生成告警。', views: ['全部告警', '审核拒绝', '跑量不足', '素材疲劳', '追踪异常', '成本恶化'] },
       { id: 'optimization', label: '优化中心', icon: TrendingUp, group: '监控与优化', layout: 'analysis', description: '基于同一 SimulationRun 的指标与告警生成建议，由人工采纳或拒绝并跟踪优化草稿。', views: ['待处理建议', '已采纳', '观察中', '已拒绝', '效果跟踪'] },

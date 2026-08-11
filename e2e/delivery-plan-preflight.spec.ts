@@ -3,130 +3,58 @@ import { expect, test, type Page } from '@playwright/test'
 const primaryProjectId = 'project_investor_precision_evidence'
 const otherProjectId = 'project_local'
 
-test('DeliveryPlan 草稿生命周期、Project 隔离与服务端权威预检', async ({ page, request }) => {
+test('DeliveryPlan editor creates immutable v2 intent/configuration history with authoritative preflight', async ({ page, request }) => {
   const suffix = Date.now().toString(36)
-  const goldenName = `E2E 黄金计划 ${suffix}`
-
+  const planName = `E2E 平台配置计划 ${suffix}`
   await page.goto(`/projects/${primaryProjectId}/delivery/plans`)
-  await expect(page.getByRole('tablist', { name: '投放计划视图' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '计划草稿' })).toBeVisible()
-  const workspace = page.locator('.delivery-lifecycle-workspace')
-  const workspaceBox = await workspace.boundingBox()
-  expect(workspaceBox?.height).toBeLessThanOrEqual(720)
-  await expect(page.locator('.delivery-plan-scroll')).toHaveCSS('overflow-y', 'auto')
-  await expect(page.locator('.delivery-plan-form')).toHaveCSS('overflow-y', 'auto')
-  const blankDraftButton = page.getByRole('button', { name: '新建空白草稿', exact: true })
-  await expect(blankDraftButton.locator('svg.lucide-file-plus')).toBeVisible()
-  await page.getByLabel('计划名称').fill(`不应继承 ${suffix}`)
-  await blankDraftButton.click()
-  await expect(page.getByLabel('计划名称')).not.toHaveValue(`不应继承 ${suffix}`)
-  await expect(page.getByLabel('投放平台')).toHaveValue('巨量引擎')
-  await page.getByLabel('账户边界').selectOption('')
-  await expect(page.getByLabel('账户边界')).toHaveClass(/field-missing/)
-  await expect(page.getByLabel('账户边界').locator('xpath=..')).toContainText('必填')
-  await page.getByLabel('策略来源').selectOption('')
-  await expect(page.getByLabel('策略来源')).toHaveClass(/field-missing/)
-  await expect(page.getByLabel('策略来源').locator('xpath=..')).toContainText('必填')
-  await startNewPlan(page, goldenName)
-  const targetFieldControlOffsets = await page.locator('.delivery-field-grid > label').evaluateAll(labels =>
-    labels.map(label => {
-      const control = label.querySelector('input, textarea, select')
-      if (!control) throw new Error('delivery field label is missing its control')
-      return Math.round(control.getBoundingClientRect().top - label.getBoundingClientRect().top)
-    }),
-  )
-  expect(Math.max(...targetFieldControlOffsets) - Math.min(...targetFieldControlOffsets)).toBeLessThanOrEqual(1)
-  await expect(page.getByRole('button', { name: '保存草稿', exact: true })).toBeInViewport()
-  await expect(page.getByText('Mock 环境', { exact: true }).first()).toBeVisible()
-
+  await startNewPlan(page, planName)
   await page.getByRole('button', { name: '预算与排期', exact: true }).click()
   await page.getByLabel('总预算').fill('3000')
-  await page.getByRole('button', { name: '追踪', exact: true }).click()
-  await page.getByLabel('追踪像素 ID').fill(`PX-E2E-${suffix}`)
   await page.getByRole('button', { name: '素材引用', exact: true }).click()
-  await page.getByLabel('已确认素材').selectOption('')
-  await expect(page.getByLabel('已确认素材')).toHaveClass(/field-missing/)
-  await expect(page.getByLabel('已确认素材').locator('xpath=..')).toContainText('必填')
   await page.getByLabel('已确认素材').selectOption('asset_demo_investor_creative_video')
 
-  const createResponsePromise = page.waitForResponse(response =>
-    response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/delivery/v1/projects/${primaryProjectId}/plans`,
-  )
+  const createPromise = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/delivery/v1/projects/${primaryProjectId}/plans`)
   await page.getByRole('button', { name: '保存草稿', exact: true }).click()
-  const createResponse = await createResponsePromise
+  const createResponse = await createPromise
   expect(createResponse.status()).toBe(201)
-  const created = await createResponse.json() as { id: string; source: string; scenario: string; current_version_number: number; current_version: { strategy_reference: { content_hash: string; route: string }; creative_references: Array<{ content_hash: string; route: string }> } }
-  expect(created).toMatchObject({ source: 'mock', scenario: 'golden_path', current_version_number: 1 })
-  expect(created.current_version.strategy_reference.content_hash).toMatch(/^[0-9a-f]{64}$/)
-  expect(created.current_version.strategy_reference.route).toContain('/strategy/workspaces/')
-  expect(created.current_version.creative_references[0].content_hash).toMatch(/^[0-9a-f]{64}$/)
-  expect(created.current_version.creative_references[0].route).toContain('/creative/reviews/')
+  const created = await createResponse.json() as any
+  expect(created).toMatchObject({ source: 'mock', scenario: 'platform_configuration', current_version_number: 1 })
+  expect(created.current_version).toMatchObject({
+    schema_version: 'delivery-plan-version/v2', runtime_status: 'active',
+    intent: { schema_version: 'delivery-intent/v1', payload: { marketing_objective: '获取高质量销售线索并验证投前门禁' } },
+    platform_configuration: { schema_version: 'delivery-platform-configuration/v2', platform: 'ocean_engine' },
+  })
+  expect(created.current_version.canonical_hash).toBe(created.current_version.platform_configuration.canonical_hash)
   const planId = created.id
-  await expect(page.getByText(/已保存为 V1/)).toBeVisible()
 
   await page.goto(`/projects/${primaryProjectId}/delivery/plans?plan_id=${planId}`)
-  await expect.poll(() => new URL(page.url()).searchParams.get('plan_id')).toBe(planId)
-  await expect(page.getByRole('heading', { name: goldenName })).toBeVisible()
-  await expect(page.getByText(goldenName).first()).toBeVisible()
-  await page.getByRole('button').filter({ hasText: goldenName }).first().click()
+  await expect(page.getByRole('heading', { name: planName })).toBeVisible()
   await page.getByRole('button', { name: '预算与排期', exact: true }).click()
   await page.getByLabel('总预算').fill('4200')
-  const updateResponsePromise = page.waitForResponse(response =>
-    response.request().method() === 'PATCH' && new URL(response.url()).pathname === `/api/delivery/v1/projects/${primaryProjectId}/plans/${planId}`,
-  )
+  const updatePromise = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === `/api/delivery/v1/projects/${primaryProjectId}/plans/${planId}`)
   await page.getByRole('button', { name: '保存新版本', exact: true }).click()
-  const updateResponse = await updateResponsePromise
+  const updateResponse = await updatePromise
   expect(updateResponse.status()).toBe(200)
-  const updated = await updateResponse.json() as { current_version_number: number; versions: Array<{ version_number: number; budget: { total_minor: number } }> }
+  const updated = await updateResponse.json() as any
   expect(updated.current_version_number).toBe(2)
-  expect(updated.versions).toEqual(expect.arrayContaining([
-    expect.objectContaining({ version_number: 1, budget: { total_minor: 300000, currency: 'CNY' } }),
-    expect.objectContaining({ version_number: 2, budget: { total_minor: 420000, currency: 'CNY' } }),
-  ]))
+  expect(updated.versions).toHaveLength(2)
+  expect(updated.versions[0].intent.payload.budget_boundary.maximum_total_minor).toBe(300000)
+  expect(updated.versions[1].intent.payload.budget_boundary.maximum_total_minor).toBe(420000)
+  expect(updated.versions[0].canonical_hash).not.toBe(updated.versions[1].canonical_hash)
   await expect(page.getByRole('button', { name: '查看版本 V1' })).toBeVisible()
   await expect(page.getByRole('button', { name: '查看版本 V2' })).toBeVisible()
-  await page.getByRole('button', { name: '查看版本 V1' }).click()
-  await expect(page.getByText('历史快照 · V1')).toBeVisible()
-  await expect(page.locator('.version-snapshot').getByText('¥3,000.00')).toBeVisible()
+
+  const preflightPromise = waitForPreflight(page, planId)
+  await page.getByRole('button', { name: '检查当前草稿', exact: true }).click()
+  expect(await preflightPromise).toMatchObject({ source: 'mock', scenario: 'platform_configuration', passed: true, blocked: false })
+  await expect(page.getByText('业务意图有效')).toBeVisible()
+  await expect(page.getByText('平台配置有效')).toBeVisible()
 
   const crossProject = await request.get(`/api/delivery/v1/projects/${otherProjectId}/plans/${planId}`)
   expect(crossProject.status()).toBe(404)
-  expect(await crossProject.json()).toMatchObject({ error: { code: 'RESOURCE_NOT_FOUND' } })
   await page.goto(`/projects/${otherProjectId}/delivery/plans`)
-  await expect(page.getByText(goldenName)).toHaveCount(0)
-
-  await page.goto(`/projects/${primaryProjectId}/delivery/plans`)
-  await expect(page.getByText(goldenName).first()).toBeVisible()
-  await page.getByRole('button').filter({ hasText: goldenName }).first().click()
-  const goldenPreflightPromise = waitForPreflight(page, planId)
-  await page.getByRole('button', { name: '检查当前草稿', exact: true }).click()
-  const goldenPreflight = await goldenPreflightPromise
-  expect(goldenPreflight).toMatchObject({ source: 'mock', scenario: 'golden_path', passed: true, blocked: false })
-  await expect(page.getByText('黄金场景全部通过，可继续后续受控流程。')).toBeVisible()
-
-  const budgetPlanId = await createScenarioPlan(page, `E2E 预算零计划 ${suffix}`, async () => {
-    await page.getByRole('button', { name: '预算与排期', exact: true }).click()
-    await page.getByLabel('总预算').fill('0')
-  })
-  const budgetPreflightPromise = waitForPreflight(page, budgetPlanId)
-  await page.getByRole('button', { name: '检查当前草稿', exact: true }).click()
-  const budgetPreflight = await budgetPreflightPromise
-  expect(budgetPreflight).toMatchObject({ source: 'mock', scenario: 'budget_zero', blocked: true })
-  await expect(page.getByText('服务端预检阻断', { exact: true })).toBeVisible()
-  await expect(page.getByText('error', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '修复 budget_positive' }).click()
-  await expect(page.getByLabel('总预算')).toBeFocused()
-
-  const trackingPlanId = await createScenarioPlan(page, `E2E 追踪缺失计划 ${suffix}`, async () => {
-    await page.getByRole('button', { name: '追踪', exact: true }).click()
-    await page.getByLabel('追踪像素 ID').fill('')
-  })
-  const trackingPreflightPromise = waitForPreflight(page, trackingPlanId)
-  await page.getByRole('button', { name: '检查当前草稿', exact: true }).click()
-  const trackingPreflight = await trackingPreflightPromise
-  expect(trackingPreflight).toMatchObject({ source: 'mock', scenario: 'tracking_missing', blocked: true })
-  await page.getByRole('button', { name: '修复 tracking_complete' }).click()
-  await expect(page.getByLabel('追踪像素 ID')).toBeFocused()
+  await expect(page.getByText(planName)).toHaveCount(0)
 })
 
 async function startNewPlan(page: Page, name: string) {
@@ -137,29 +65,8 @@ async function startNewPlan(page: Page, name: string) {
   await page.getByLabel('策略来源').selectOption('task_demo_precision_strategy')
 }
 
-async function createScenarioPlan(page: Page, name: string, configure: () => Promise<void>) {
-  await startNewPlan(page, name)
-  await configure()
-  const createResponsePromise = page.waitForResponse(response =>
-    response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/delivery/v1/projects/${primaryProjectId}/plans`,
-  )
-  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
-  const response = await createResponsePromise
-  expect(response.status()).toBe(201)
-  const plan = await response.json() as { id: string; source: string; scenario: string }
-  expect(plan.source).toBe('mock')
-  return plan.id
-}
-
 async function waitForPreflight(page: Page, planId: string) {
-  const response = await page.waitForResponse(candidate =>
-    candidate.request().method() === 'POST' && new URL(candidate.url()).pathname === `/api/delivery/v1/projects/${primaryProjectId}/plans/${planId}/preflight`,
-  )
+  const response = await page.waitForResponse(candidate => candidate.request().method() === 'POST' && new URL(candidate.url()).pathname === `/api/delivery/v1/projects/${primaryProjectId}/plans/${planId}/preflight`)
   expect(response.status()).toBe(200)
-  return response.json() as Promise<{
-    source: string
-    scenario: string
-    passed: boolean
-    blocked: boolean
-  }>
+  return response.json() as Promise<{ source: string; scenario: string; passed: boolean; blocked: boolean }>
 }

@@ -1,13 +1,21 @@
 # 智能投放系统：架构路线图与当前实现
 
+## 当前运行时权威链
+
+权威边界为 `DeliveryIntent v1 -> tagged PlatformConfiguration v2 -> DeliveryPlanVersion v2 -> ChangeSet -> Approval`。五类记录均受 Organization/Project 隔离并绑定不可变版本。Repository 在同一事务中提交 Intent、PlatformConfiguration 与 PlanVersion。
+
+读取按持久化 schema 分派：v2 使用 PlatformConfiguration 规范投影；历史 ThreeTier 使用冻结旧投影并始终只读。预检直接消费类型化配置：OceanEngine 必须有一个 Project、可以有空 Promotions，并要求执行所需稳定引用均已解析；Magnetic Engine 确定性返回 `CAPABILITY_PENDING`。
+
+新运行时不会把 v2 机械投影回 ThreeTier，也不引入 Connector、平台 API、DecisionEngine、工作流编译器或 Computer Use 执行。
+
 | 属性 | 内容 |
 | --- | --- |
-| 状态 | 历史 mock 闭环包含计划创建、草稿检查、两段审批、平台操作演练、指标/告警、建议和人工操作包；只读业务校准已收口，Delivery 配置模型与行为编译进入下一阶段 |
+| 状态 | DeliveryIntent 与判别式平台配置已切换到本地运行时；真实平台写入仍保持关闭 |
 | 记录日期 | 2026-07-29 |
-| 实现快照日期 | 2026-08-07 |
+| 实现快照日期 | 2026-08-10 |
 | 关联文档 | [广告智能投放 PRD](../04-intelligent-delivery-prd.md)、[当前实现盘点与未实现项计划](../plans/2026-07-28-implementation-gap-plan.md) |
 
-本文记录智能投放系统的领域架构路线图，以及当前交付的 DeliveryPlan 生命周期、服务端权威检查、内容哈希绑定审批、持久化平台操作演练、上线后指标/告警和证据驱动建议与人工操作包。除“当前实现快照”和以下冻结契约明确列出的内容外，真实平台能力仍是后续设计草案，不属于当前实现的行为契约。只读校准收口、目标配置模型、Connector 阻塞边界和后续 PR 切片见[收口与配置契约](./read-only-calibration-closeout.md)。
+本文记录智能投放系统的领域架构路线图，以及当前交付的 DeliveryPlan 生命周期、服务端权威检查、内容哈希绑定审批、持久化平台操作演练、上线后指标/告警和证据驱动建议与人工操作包。除“当前实现快照”和以下冻结契约明确列出的内容外，真实平台能力仍是后续设计草案，不属于当前实现的行为契约。当前目标领域模型见[`DeliveryIntent` 与平台配置契约](./platform-configuration-contracts.md)；只读校准、Connector 阻塞边界和历史结论见[收口文档](./read-only-calibration-closeout.md)。
 
 ### 只读业务校准覆盖说明
 
@@ -15,12 +23,12 @@
 
 - 投手与产品语言统一为“投放账号 → 项目 → 单元”；`PlatformAccount/PlatformProject/PlatformPromotion` 只用于代码和适配层；
 - 真实电商工作流覆盖商品/落地页/锚点/人群包准备、素材上传和质量过滤、多项目/多单元创建、开启及投后优化；
-- 内部 ThreeTier 由 Delivery 自主维护，按真实页面拆为项目字段和单元字段，不向其他模块 Owner 转交投放模型设计；
+- 历史 ThreeTier 只保留当前 mock 运行时语义；新领域契约以平台无关 `DeliveryIntent` 绑定判别式 `PlatformConfiguration`，不再要求兼容投影；
 - 产品目标覆盖完整竞价投放场景，当前电商路径只是第一条已校准路径，缺少分支持续进入业务 Schema 覆盖矩阵；
 - 预检、模拟、影子分析和采纳建议不产生平台写入；目标流程默认只在最终真实创建/开启前进行一次确认，高风险动作按风险追加确认；
 - 素材来自前序板块不可变版本或用户上传，Delivery 只保存版本引用、平台素材映射和审核/质量/使用状态，不复制素材内容或修改素材/洞察模块。
 
-本节是只读业务校准后的产品目标，不反向篡改历史 mock 闭环已落库的审批、哈希和审计语义。后续实现应通过兼容迁移收敛到该目标，而不是把历史 mock 流程继续暴露为投手标准操作。
+本节是只读业务校准后的产品目标，不反向篡改历史 mock 闭环已落库的审批、哈希和审计语义。后续 API/持久化切换应直接消费新契约并显式处理版本边界，不把历史 mock 流程继续暴露为投手标准操作，也不新增 ThreeTier 兼容 projector。
 
 ## 当前实现快照
 
@@ -383,6 +391,8 @@ type PlatformAdapter interface {
 
 ### 模块 6：三段投放配置 mock、建议与人工操作包
 
+> 本节描述当前运行时的历史 mock 行为，不是新平台配置领域模型。新实现以[`DeliveryIntent` 与平台配置契约](./platform-configuration-contracts.md)为准；本次契约冻结不修改该运行时。
+
 **做什么**：把泛化的 DeliveryPlan 展开为广告组、广告计划、广告创意三个内部配置区段，使投手在没有真实写权限时也能完成完整配置、预检、审批和人工执行准备；区段名称不构成平台对象层级承诺。
 
 - `DeliveryPlanVersion` 保存三段配置快照、对象依赖、来源策略/创意版本、推荐值、人工修改值、平台待补字段和风险。
@@ -424,7 +434,7 @@ type PlatformAdapter interface {
 | 阶段 | 目标 | 启动前提 |
 | --- | --- | --- |
 | 只读校准与 Connector 依赖对齐 | 在专用竞价投放账户（受 Git 管理文档仅记录尾号 `6391`）下，以已登录 Computer Use 会话只读校准所有可访问项目、PlatformProject/PlatformPromotion、动态表单和页面语义；真实报表采集、标准化和发布由数据洞察 Connector Owner 负责 | **已完成**；[只读 Schema v0.1](./schemas/oceanengine-bidding-schema-v0.1.json)已冻结；Delivery consumer port、mock/replay 已随 PR #38 进入 `upstream/main`；Connector 正式输出仍是外部依赖 |
-| Delivery 配置模型与行为流程编译 | 将获批内部配置与已校准平台 schema 编译为 `PlatformProjectDraft`、`PlatformPromotionDraft[]`、选择器、确认点、识别条件和恢复分支 | 只读 Schema、ThreeTier 兼容映射和本地 mock/replay；不需要 Connector 或平台写入 |
+| Delivery 配置模型与行为流程编译 | 由平台无关 `DeliveryIntent` 编译判别式 `PlatformConfiguration`；巨量 profile 为一个 Project 与零个或多个 Promotions，行为编译另行接入 | **领域契约已完成**；无需 ThreeTier 兼容映射、Connector 或平台写入；运行时切换另行立项 |
 | 影子分析 | 仅消费数据洞察发布的真实只读指标运行影子告警/建议 | Connector 指标口径/新鲜度、对象映射、正式消费契约、样例和 Consumer Contract 测试可用；当前 **No-Go** |
 | 受控写入 | 在测试项目内通过 Computer Use 填写草稿、读取回填值、人工确认提交并核验结果 | 明确写入范围、小额硬上限、人工负责人、Kill Switch、审批重验和防重演练 |
 | 生产化 | 限流、事件重放、可靠性指标、凭据轮换、第二平台适配器 | 真实闭环证明瓶颈后启动 |

@@ -167,10 +167,6 @@ func (s Service) prepareTourCases(ctx context.Context, actor contract.ActorConte
 	if err != nil {
 		return err
 	}
-	preflightPlan, err = s.CompileThreeTierConfiguration(ctx, actor, projectID, preflightPlan.ID, CompileThreeTierRequest{ExpectedVersion: int(preflightPlan.Version), Fixture: ThreeTierFixtureMissingRequiredField})
-	if err != nil {
-		return err
-	}
 	preflightChangeSet, err := s.CreateChangeSet(ctx, actor, projectID, preflightPlan.ID, preflightPlan.Version)
 	if err != nil {
 		return err
@@ -196,9 +192,15 @@ func (s Service) prepareTourCases(ctx context.Context, actor contract.ActorConte
 	if _, err = prepareApprovedTourPlan(ctx, s, actor, projectID, stalePlan); err != nil {
 		return err
 	}
-	staleDraft := draftFromVersion(stalePlan.CurrentVersion)
-	staleDraft.Objective += "；当前版本已经更新，旧审批必须失效"
-	if _, err = s.UpdatePlan(ctx, actor, projectID, stalePlan.ID, UpdatePlanRequest{ExpectedVersion: int(stalePlan.Version), PlanDraft: staleDraft}); err != nil {
+	staleIntent := *cloneJSONPointer(stalePlan.CurrentVersion.DeliveryIntent)
+	staleIntent.VersionNumber++
+	staleIntent.Payload.MarketingObjective += "；当前版本已经更新，旧审批必须失效"
+	staleIntent.CanonicalHash = ""
+	staleConfiguration := *cloneJSONPointer(stalePlan.CurrentVersion.PlatformConfiguration)
+	staleConfiguration.VersionNumber++
+	staleConfiguration.Intent = IntentBinding{}
+	staleConfiguration.CanonicalHash = ""
+	if _, err = s.UpdatePlan(ctx, actor, projectID, stalePlan.ID, UpdatePlanRequest{ExpectedVersion: int(stalePlan.Version), Intent: &staleIntent, PlatformConfiguration: &staleConfiguration}); err != nil {
 		return err
 	}
 
@@ -260,18 +262,30 @@ func tourPlanRequest(runID, tourCase string, now time.Time) CreatePlanRequest {
 		TourCaseReviewRejected:   "审核拒绝告警",
 	}
 	start := now.UTC().Truncate(24 * time.Hour).Add(7 * 24 * time.Hour)
-	return CreatePlanRequest{PlanDraft: PlanDraft{
-		Name:                  fmt.Sprintf("上线后优化闭环 · %s · %s", labels[tourCase], runID),
-		Objective:             "验证计划来源、审批、平台操作演练、上线后指标与优化证据链。",
-		Advertiser:            AdvertiserInput{ID: "mock-tour-advertiser", Name: "演示广告主（模拟）", Platform: "ocean_engine"},
-		Budget:                Budget{TotalMinor: 3000000, Currency: "CNY"},
-		Schedule:              Schedule{StartAt: start, EndAt: start.Add(14 * 24 * time.Hour), Timezone: "Asia/Shanghai"},
-		Tracking:              Tracking{LandingPage: "https://demo.cookies.local/tour", PixelID: "PX-TOUR-MOCK", ConversionEvent: "lead_submit"},
-		CreativeReferences:    []CreativeReference{{AssetID: "asset_demo_investor_creative_video", Version: 1, Confirmed: true}},
-		StrategyReference:     StrategyReference{TaskID: "task_demo_precision_strategy", Version: 1},
-		SourceStrategyVersion: "task_demo_precision_strategy@v1",
-	}}
+	identity := runID + "-" + tourCase
+	ref := func(kind, id string) StableReference {
+		return StableReference{Namespace: "cookies", ObjectKind: kind, Scope: "tour:" + runID, ID: id, Version: "v1", ContentHash: strings.Repeat("a", 64), State: ReferenceResolved}
+	}
+	material := ref("asset_version", "asset_demo_investor_creative_video")
+	intent, _ := FinalizeDeliveryIntent(DeliveryIntent{
+		SchemaVersion: DeliveryIntentSchemaV1, IntentID: "intent-" + identity, VersionNumber: 1, HashAlgorithm: CanonicalPayloadHashAlgorithm,
+		Payload:                 DeliveryIntentPayload{PayloadSchemaVersion: DeliveryIntentSchemaV1, MarketingObjective: "验证计划来源、审批、平台操作演练、上线后指标与优化证据链。", BudgetBoundary: IntentBudgetBoundary{Currency: "CNY", MinimumTotalMinor: 0, MaximumTotalMinor: 3000000}, ScheduleBoundary: IntentScheduleBoundary{EarliestStart: start, LatestEnd: start.Add(14 * 24 * time.Hour), Timezone: "Asia/Shanghai"}, OptimizationPreferences: []OptimizationPreference{}, MaterialReferences: []StableReference{material}, AudienceConstraints: IntentAudienceConstraints{}, StrategyReference: ref("strategy_version", "task_demo_precision_strategy")},
+		ConfigurationProvenance: ConfigurationProvenance{Kind: ConfigurationGeneratedManually, GeneratorRef: "delivery-tour"}, FactProvenance: FactProvenance{Source: FactSourceMock, SnapshotRef: "mock://tour/" + identity}, Audit: ContractAuditMetadata{CreatedBy: "delivery-tour", CreatedAt: now},
+	})
+	fieldEvidence := []PlatformFieldEvidence{{Field: "project", State: PlatformEvidenceOperatorReviewed}}
+	if tourCase == TourCasePreflightFailure {
+		fieldEvidence = []PlatformFieldEvidence{{Field: "project.account_reference", State: PlatformEvidencePending, Reason: "tour preflight failure"}}
+	}
+	configuration, _ := FinalizePlatformConfiguration(PlatformConfiguration{
+		SchemaVersion: PlatformConfigurationSchemaV2, ConfigurationID: "configuration-" + identity, VersionNumber: 1, Platform: DeliveryPlatformOceanEngine, ProfileVersion: OceanEngineConfigurationProfileV1,
+		Intent: IntentBinding{SchemaVersion: intent.SchemaVersion, IntentID: intent.IntentID, VersionNumber: intent.VersionNumber, CanonicalHash: intent.CanonicalHash}, HashAlgorithm: CanonicalPayloadHashAlgorithm,
+		Payload:                 PlatformConfigurationPayload{Profile: DeliveryPlatformOceanEngine, OceanEngine: &OceanEngineConfiguration{Profile: DeliveryPlatformOceanEngine, Project: &OceanEngineProjectDraft{DraftSchemaVersion: OceanEngineConfigurationProfileV1, ProjectDraftID: "project-" + identity, AccountReference: ref("advertiser_account", "mock-tour-advertiser"), MarketingPurpose: "lead_generation", MarketingScenario: "manual_delivery", Carrier: "landing_page", DeliveryMode: "manual", Targeting: OceanEngineTargeting{SmartExpansion: false}, Schedule: OceanEngineSchedule{StartAt: start, EndAt: start.Add(14 * 24 * time.Hour), Timezone: "Asia/Shanghai"}, BudgetAndBidding: OceanEngineBudgetAndBidding{Currency: "CNY", DailyBudgetMinor: 200000, BiddingStrategy: "manual_bid", ChargingMode: "CPC", BidMinor: int64Pointer(100)}, ProjectName: fmt.Sprintf("上线后优化闭环 · %s · %s", labels[tourCase], runID)}, Promotions: []OceanEnginePromotionDraft{{DraftSchemaVersion: OceanEngineConfigurationProfileV1, PromotionDraftID: "promotion-" + identity, DeliveryIdentity: OceanEngineDeliveryIdentity{Mode: "account_info"}, BaseMaterialReferences: []StableReference{material}, CopyItems: []OceanEngineCopyItem{{Text: "tour copy"}}, PromotionName: "Tour promotion"}}}},
+		ConfigurationProvenance: ConfigurationProvenance{Kind: ConfigurationGeneratedManually, GeneratorRef: "delivery-tour"}, FactProvenance: FactProvenance{Source: FactSourceMock, SnapshotRef: "mock://tour/" + identity}, Audit: ContractAuditMetadata{CreatedBy: "delivery-tour", CreatedAt: now}, CompilationMetadata: CompilationMetadata{FieldEvidence: fieldEvidence, EvidenceRefs: []string{"mock://tour/" + identity}},
+	})
+	return CreatePlanRequest{Intent: &intent, PlatformConfiguration: &configuration}
 }
+
+func int64Pointer(value int64) *int64 { return &value }
 
 func (s Service) GetTourRun(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, runID string) (DeliveryTourRun, error) {
 	if err := s.ready(actor, projectID, ScopeRead); err != nil {
@@ -347,7 +361,7 @@ func (s Service) hydrateTourRun(ctx context.Context, actor contract.ActorContext
 	for _, definition := range definitions {
 		plan := byCase[definition.key]
 		caseStatus, evidence := s.tourCaseEvidence(ctx, actor, run, definition.key, plan)
-		nav := "three-tier"
+		nav := "configuration"
 		if definition.key == TourCaseReviewRejected {
 			nav = "monitoring"
 		}
@@ -430,23 +444,32 @@ func (s Service) goldenTourSteps(ctx context.Context, actor contract.ActorContex
 	}
 	steps := []DeliveryTourStep{
 		{Key: "plan_creation", Title: "第 0 步：核对本次运行的投放计划", CompletionCondition: "计划已绑定当前运行，且策略任务与素材版本均可返回上游核对", URL: base("plans", "计划列表"), Explanation: "准备完整数据时，服务端会为当前运行创建并绑定计划，因此准备后此步默认完成；这里负责核对策略与素材来源。"},
-		{Key: "configuration", Title: "编译配置并完成草稿检查", CompletionCondition: "当前不可变 PlanVersion 包含已确认配置快照", URL: base("three-tier", "配置映射"), Explanation: "草稿检查即时发现问题，不产生审批记录。"},
-		{Key: "first_approval", Title: "提交首个变更申请并前往审批中心", CompletionCondition: "首个变更申请通过最终检查并在审批中心形成有效批准", URL: base("three-tier", "检查与提交"), Explanation: "配置编排只负责提交；批准或打回统一在审批中心完成，本次批准只授权平台操作演练。"},
+		{Key: "configuration", Title: "核对平台配置并完成草稿检查", CompletionCondition: "当前不可变 PlanVersion 包含 DeliveryIntent 与 tagged PlatformConfiguration", URL: base("configuration", "配置映射"), Explanation: "草稿检查即时发现问题，不产生审批记录。"},
+		{Key: "first_approval", Title: "提交首个变更申请并前往审批中心", CompletionCondition: "首个变更申请通过最终检查并在审批中心形成有效批准", URL: base("configuration", "检查与提交"), Explanation: "配置页面只负责提交；批准或打回统一在审批中心完成，本次批准只授权平台操作演练。"},
 		{Key: "execution", Title: "运行平台操作演练", CompletionCondition: "成功 Execution、Step 和 Evidence 已持久化", URL: base("approvals", "待我审批"), Explanation: "验证平台操作链和审批边界，不预测真实投放效果。"},
 		{Key: "monitoring", Title: "运行投放效果情景模拟并生成告警", CompletionCondition: "同一 SimulationRun 的三段指标窗口已产生可追溯告警", URL: base("monitoring", "全部告警"), Explanation: "显式选择情景与稳定 seed；规则模型先产出指标和事件，告警规则再读取同一运行的指标。"},
 		{Key: "recommendation", Title: "在优化中心根据指标与告警生成建议", CompletionCondition: "建议明确引用 SimulationRun、Execution、指标窗口和告警", URL: base("optimization", "待处理建议"), Explanation: "没有同一投后演练的完整证据链就不能生成建议。"},
 		{Key: "new_change_set", Title: "在优化中心采纳建议并生成优化草稿", CompletionCondition: "建议只关联一个新的 draft 变更申请", URL: base("optimization", "待处理建议"), Explanation: "采纳只起草修改；随后前往内部配置编排检查并提交，不自动应用。"},
-		{Key: "second_approval", Title: "提交优化申请并前往审批中心", CompletionCondition: "优化变更申请在审批中心形成有效批准", URL: base("three-tier", "检查与提交"), Explanation: "配置编排只负责提交；第二次批准针对新的优化写入，不是重复审批同一内容。"},
-		{Key: "manual_action_package", Title: "生成既有人工操作包", CompletionCondition: "获批优化变更申请已编译不可变 ManualActionPackage", URL: base("three-tier", "人工操作包"), Explanation: "操作包说明人工步骤，不代表平台已经执行。"},
+		{Key: "second_approval", Title: "提交优化申请并前往审批中心", CompletionCondition: "优化变更申请在审批中心形成有效批准", URL: base("configuration", "检查与提交"), Explanation: "配置页面只负责提交；第二次批准针对新的优化写入，不是重复审批同一内容。"},
+		{Key: "manual_action_package", Title: "生成既有人工操作包", CompletionCondition: "获批优化变更申请已编译不可变 ManualActionPackage", URL: base("configuration", "人工操作包"), Explanation: "操作包说明人工步骤，不代表平台已经执行。"},
 	}
 	if plan.ID == "" {
 		return steps
 	}
-	steps[0].Complete = plan.TourRunID == run.ID && plan.TourOwnerID == actor.Principal.ID && plan.TourCase == string(TourCaseGoldenPath) && plan.CurrentVersion.StrategyReference.ContentHash != "" && len(plan.CurrentVersion.CreativeReferences) > 0 && plan.CurrentVersion.CreativeReferences[0].ContentHash != ""
-	if steps[0].Complete {
-		steps[0].Evidence = []string{"run=" + run.ID, "plan=" + plan.ID, "strategy=" + plan.CurrentVersion.StrategyReference.TaskID, "creative=" + plan.CurrentVersion.CreativeReferences[0].AssetID}
+	strategyID, materialID := plan.CurrentVersion.StrategyReference.TaskID, ""
+	if plan.CurrentVersion.IsPlatformConfigurationV2() {
+		strategyID = plan.CurrentVersion.DeliveryIntent.Payload.StrategyReference.ID
+		if len(plan.CurrentVersion.DeliveryIntent.Payload.MaterialReferences) > 0 {
+			materialID = plan.CurrentVersion.DeliveryIntent.Payload.MaterialReferences[0].ID
+		}
+	} else if len(plan.CurrentVersion.CreativeReferences) > 0 {
+		materialID = plan.CurrentVersion.CreativeReferences[0].AssetID
 	}
-	steps[1].Complete = plan.CurrentVersion.ThreeTierConfiguration != nil
+	steps[0].Complete = plan.TourRunID == run.ID && plan.TourOwnerID == actor.Principal.ID && plan.TourCase == string(TourCaseGoldenPath) && strategyID != "" && materialID != ""
+	if steps[0].Complete {
+		steps[0].Evidence = []string{"run=" + run.ID, "plan=" + plan.ID, "strategy=" + strategyID, "creative=" + materialID}
+	}
+	steps[1].Complete = plan.CurrentVersion.PlatformConfiguration != nil || plan.CurrentVersion.ThreeTierConfiguration != nil
 	if steps[1].Complete {
 		steps[1].Evidence = []string{"plan_version=" + fmt.Sprint(plan.CurrentVersionNumber), "snapshot=" + plan.CurrentVersion.CanonicalHash}
 	}
@@ -514,7 +537,7 @@ func (s Service) goldenTourSteps(ctx context.Context, actor contract.ActorContex
 			if recommendationChangeSet.Status != ChangeSetDraft && recommendationChangeSet.Status != ChangeSetPreflightFailed {
 				steps[7].URL = tourApprovalPageURL(run.ProjectID, run.ID, TourCaseGoldenPath, plan.ID, recommendationChangeSet.ID)
 			}
-			currentConfigurationHash, _ := snapshotHash(plan.CurrentVersion.ThreeTierConfiguration)
+			currentConfigurationHash := currentPlanConfigurationHash(plan.CurrentVersion)
 			approvedTargetMaterialized := currentConfigurationHash != "" && currentConfigurationHash == recommendationChangeSet.TargetSnapshotHash
 			steps[7].Complete = recommendationChangeSet.Approval != nil && (recommendationChangeSet.Approval.Valid || approvedTargetMaterialized)
 			steps[7].Evidence = []string{"change_set=" + recommendationChangeSet.ID, "status=" + string(recommendationChangeSet.Status)}
@@ -525,6 +548,14 @@ func (s Service) goldenTourSteps(ctx context.Context, actor contract.ActorContex
 		}
 	}
 	return steps
+}
+
+func currentPlanConfigurationHash(version DeliveryPlanVersion) string {
+	if version.IsPlatformConfigurationV2() {
+		return version.PlatformConfiguration.CanonicalHash
+	}
+	hash, _ := snapshotHash(version.ThreeTierConfiguration)
+	return hash
 }
 
 func tourPageURL(projectID contract.ProjectID, nav, runID, tourCase, planID, view string) string {

@@ -1,0 +1,46 @@
+{
+  "schema_version": "delivery-platform-configuration/v2",
+  "configuration_id": "magnetic-config-pending-1",
+  "version_number": 1,
+  "platform": "magnetic_engine",
+  "profile_version": "magnetic-engine-configuration/v1",
+  "intent": {
+    "schema_version": "delivery-intent/v1",
+    "intent_id": "intent-ecommerce-1",
+    "version_number": 1,
+    "canonical_hash": "706500a701bdb01065dff277c269b048b2071df6da53ea5602c174c79655b0c5"
+  },
+  "hash_algorithm": "RFC8785-JCS-SHA256(canonical_payload)",
+  "canonical_hash": "c32d1ab4159e80a6de84a343a2bc812b9bb877fa2f53f4c63758e1b001ab5325",
+  "payload": {
+    "profile": "magnetic_engine",
+    "magnetic_engine": {
+      "profile": "magnetic_engine",
+      "status": "capability_pending",
+      "reason_code": "CAPABILITY_PENDING",
+      "reason": "No verified Magnetic Engine write-form evidence is available."
+    }
+  },
+  "configuration_provenance": {
+    "kind": "manual",
+    "generator_ref": "capability-registry"
+  },
+  "fact_provenance": {
+    "source": "page_evidence",
+    "evidence_refs": ["capability://magnetic-engine/pending"],
+    "observed_at": "2026-08-10T09:30:00Z"
+  },
+  "audit": {
+    "created_by": "system",
+    "created_at": "2026-08-10T10:00:00Z"
+  },
+  "compilation_metadata": {
+    "field_evidence": [
+      {
+        "field": "platform",
+        "state": "write_validation_pending",
+        "reason": "platform fields intentionally not modeled"
+      }
+    ]
+  }
+}

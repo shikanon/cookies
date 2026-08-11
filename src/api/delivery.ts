@@ -40,7 +40,89 @@ export const deliveryApi = {
 }
 
 export type DeliverySource = 'mock'
-export type DeliveryScenario = 'golden_path' | 'budget_zero' | 'creative_unconfirmed' | 'tracking_missing' | 'incomplete_draft' | 'project_plan_list' | 'approval_queue' | 'missing_required_field' | 'orphan_dependency' | 'missing_confirmation' | 'platform_fields_pending' | 'preflight_failure' | 'approval_expired' | 'plan_stale' | 'partial_execution' | 'result_unknown' | 'review_rejected_alert'
+export type DeliveryScenario = 'golden_path' | 'budget_zero' | 'creative_unconfirmed' | 'tracking_missing' | 'incomplete_draft' | 'project_plan_list' | 'approval_queue' | 'missing_required_field' | 'orphan_dependency' | 'missing_confirmation' | 'platform_fields_pending' | 'platform_configuration' | 'capability_pending' | 'preflight_failure' | 'approval_expired' | 'plan_stale' | 'partial_execution' | 'result_unknown' | 'review_rejected_alert'
+
+export type DeliveryPlatform = 'ocean_engine' | 'magnetic_engine'
+export type StableReference = {
+  namespace: string
+  object_kind: string
+  scope: string
+  id?: string
+  version?: string
+  content_hash?: string
+  state: 'resolved' | 'unresolved' | 'blocked' | 'redacted'
+  reason?: string
+  display_name_snapshot?: string
+  evidence_version?: string
+}
+
+export type DeliveryIntent = {
+  schema_version: 'delivery-intent/v1'
+  intent_id: string
+  version_number: number
+  hash_algorithm: 'RFC8785-JCS-SHA256(canonical_payload)'
+  canonical_hash?: string
+  payload: {
+    payload_schema_version: 'delivery-intent/v1'
+    marketing_objective: string
+    budget_boundary: { currency: 'CNY'; minimum_total_minor: number; maximum_total_minor: number; minimum_daily_minor?: number; maximum_daily_minor?: number }
+    schedule_boundary: { earliest_start: string; latest_end: string; timezone: string }
+    optimization_preferences: Array<{ metric: string; direction: 'minimize' | 'maximize'; target_value?: number; unit?: string }>
+    product_references?: StableReference[]
+    landing_page_references?: StableReference[]
+    material_references: StableReference[]
+    audience_constraints: { include_references?: StableReference[]; exclude_references?: StableReference[]; constraints?: string[] }
+    strategy_reference: StableReference
+  }
+  configuration_provenance: { kind: 'manual' | 'rule' | 'decision_engine' | 'import'; generator_ref?: string; policy_version?: string }
+  fact_provenance: { source: 'mock' | 'replay' | 'connector' | 'page_evidence'; snapshot_ref?: string; evidence_refs?: string[]; observed_at?: string }
+  audit?: { created_by?: string; created_at?: string }
+}
+
+export type PlatformConfiguration = {
+  schema_version: 'delivery-platform-configuration/v2'
+  configuration_id: string
+  version_number: number
+  platform: DeliveryPlatform
+  profile_version: 'oceanengine-configuration/v1' | 'magnetic-engine-configuration/v1'
+  intent?: { schema_version: 'delivery-intent/v1'; intent_id: string; version_number: number; canonical_hash?: string }
+  hash_algorithm: 'RFC8785-JCS-SHA256(canonical_payload)'
+  canonical_hash?: string
+  payload: {
+    profile: DeliveryPlatform
+    ocean_engine?: {
+      profile: 'ocean_engine'
+      project: {
+        draft_schema_version: 'oceanengine-configuration/v1'
+        project_draft_id: string
+        account_reference: StableReference
+        marketing_purpose: string
+        marketing_scenario: string
+        carrier: string
+        delivery_mode: string
+        targeting: { regions?: string[]; age_ranges?: string[]; gender?: string; smart_expansion: boolean }
+        schedule: { start_at: string; end_at: string; timezone: string }
+        budget_and_bidding: { currency: 'CNY'; daily_budget_minor: number; bidding_strategy: string; charging_mode: string; bid_minor?: number }
+        project_name: string
+      }
+      promotions: Array<{
+        draft_schema_version: 'oceanengine-configuration/v1'
+        promotion_draft_id: string
+        delivery_identity: { mode: string; authorized_identity?: StableReference }
+        base_material_references: StableReference[]
+        copy_items: Array<{ text: string }>
+        landing_page_reference?: StableReference
+        settings: { call_to_action?: string; source_label?: string; comments_enabled?: boolean }
+        promotion_name: string
+      }>
+    }
+    magnetic_engine?: { profile: 'magnetic_engine'; status: 'capability_pending'; reason_code: 'CAPABILITY_PENDING'; reason: string }
+  }
+  configuration_provenance: { kind: 'manual' | 'rule' | 'decision_engine' | 'import'; generator_ref?: string; policy_version?: string }
+  fact_provenance: { source: 'mock' | 'replay' | 'connector' | 'page_evidence'; snapshot_ref?: string; evidence_refs?: string[]; observed_at?: string }
+  audit?: { created_by?: string; created_at?: string }
+  compilation_metadata: { field_evidence?: Array<{ field: string; state: 'observed' | 'sample_only' | 'operator_reviewed' | 'platform_pending' | 'blocked_by_event_asset' | 'write_validation_pending'; reason?: string }>; steps?: string[]; evidence_refs?: string[] }
+}
 
 export type DeliveryPlanDraft = {
   name: string
@@ -81,12 +163,16 @@ export type DeliveryPlanDraft = {
 }
 
 export type DeliveryPlanVersion = DeliveryPlanDraft & {
+
+  schemaVersion?: 'delivery-plan-version/v2'
+  runtimeStatus?: 'active' | 'capability_pending' | 'legacy_unsupported'
+  readOnly?: boolean
   planId: string
   organizationId: string
   projectId: string
   versionNumber: number
   canonicalHash: string
-  platform: 'ocean_engine_mock'
+  platform: 'ocean_engine_mock' | DeliveryPlatform
   advertiser: DeliveryPlanDraft['advertiser'] & {
     source: DeliverySource
     scenario: DeliveryScenario
@@ -97,6 +183,8 @@ export type DeliveryPlanVersion = DeliveryPlanDraft & {
   createdAt: string
   /** Server-compiled, three-tier mock configuration. */
   threeTierConfiguration?: DeliveryThreeTierConfiguration
+  deliveryIntent?: DeliveryIntent
+  platformConfiguration?: PlatformConfiguration
 }
 
 export type DeliveryFieldValue = string | number | boolean | null | string[]
@@ -147,6 +235,10 @@ export type DeliveryRecommendation = {
   cooldown?: string
   source: DeliverySource
   scenario: string
+  baseConfiguration?: PlatformConfiguration
+  targetConfiguration?: PlatformConfiguration
+  baseSnapshotHash?: string
+  targetSnapshotHash?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -160,6 +252,8 @@ export type ManualActionPackage = {
   generatedAt: string
   optimizedPlanVersion: number
   optimizedPlanHash: string
+  configuration?: { schemaVersion: string; id: string; version: number; platform: DeliveryPlatform; profileVersion: string; canonicalHash: string }
+  intent?: { schemaVersion: string; id: string; version: number; canonicalHash: string }
   instructions: Array<{ fieldKey: string; effectiveValue: DeliveryFieldValue; source: string; confirmationRequired: boolean; expectedResult: string; evidenceRefs: string[] }>
   forbiddenActions: string[]
   evidenceRefs: string[]
@@ -170,7 +264,7 @@ export type DeliveryPlan = {
   organizationId: string
   projectId: string
   status: 'draft'
-  platform: 'ocean_engine_mock'
+  platform: 'ocean_engine_mock' | DeliveryPlatform
   source: DeliverySource
   scenario: DeliveryScenario
   tourRunId?: string
@@ -185,7 +279,7 @@ export type DeliveryPlan = {
 }
 
 export type DeliveryPreflightCheck = {
-  code: 'advertiser_available' | 'budget_positive' | 'schedule_valid' | 'creative_present' | 'creative_confirmed' | 'tracking_complete' | 'upstream_references_resolved' | 'three_tier_structure' | 'three_tier_required_fields' | 'three_tier_dependencies' | 'three_tier_confirmation' | 'three_tier_platform_pending'
+  code: 'advertiser_available' | 'budget_positive' | 'schedule_valid' | 'creative_present' | 'creative_confirmed' | 'tracking_complete' | 'upstream_references_resolved' | 'three_tier_structure' | 'three_tier_required_fields' | 'three_tier_dependencies' | 'three_tier_confirmation' | 'three_tier_platform_pending' | 'delivery_intent_valid' | 'platform_configuration_valid' | 'INVALID_STABLE_REFERENCE' | 'CANONICAL_HASH_MISMATCH' | 'CAPABILITY_PENDING' | 'platform_pending' | 'blocked_by_event_asset' | 'write_validation_pending'
   severity: 'error' | 'warning'
   passed: boolean
   message: string
@@ -216,6 +310,9 @@ export type DeliveryApproval = {
   changeSetId: string
   changeSetVersion: number
   planCanonicalHash: string
+  targetSnapshotHash?: string
+  configuration?: { schemaVersion: string; id: string; version: number; platform: DeliveryPlatform; profileVersion: string; canonicalHash: string }
+  intent?: { schemaVersion: string; id: string; version: number; canonicalHash: string }
   actionHash: string
   hashSummary: string
   action: 'execute'
@@ -236,6 +333,9 @@ export type DeliveryControlChangeSet = {
   planName: string
   planVersion: number
   planCanonicalHash: string
+  targetSnapshot?: PlatformConfiguration
+  legacyTargetSnapshot?: DeliveryThreeTierConfiguration
+  targetSnapshotHash?: string
   recommendationId?: string
   budgetLimit: { totalMinor: number; currency: 'CNY' }
   status: 'draft' | 'preflight_passed' | 'preflight_failed' | 'approved' | 'rejected' | 'executed' | 'rolled_back'
@@ -335,19 +435,24 @@ type WireDeliveryPlanDraft = {
   source_strategy_version: string
 }
 
-type WireDeliveryPlanVersion = WireDeliveryPlanDraft & {
+type WireDeliveryPlanVersion = Partial<WireDeliveryPlanDraft> & {
+  schema_version?: 'delivery-plan-version/v2'
+  runtime_status?: 'active' | 'capability_pending' | 'legacy_unsupported'
+  read_only?: boolean
   plan_id: string
   organization_id: string
   project_id: string
   version_number: number
   canonical_hash: string
-  platform: 'ocean_engine_mock'
-  advertiser: WireDeliveryPlanDraft['advertiser'] & { source: DeliverySource; scenario: DeliveryScenario }
+  platform: 'ocean_engine_mock' | DeliveryPlatform
+  advertiser?: WireDeliveryPlanDraft['advertiser'] & { source: DeliverySource; scenario: DeliveryScenario }
   source: DeliverySource
   scenario: DeliveryScenario
   created_by: { kind: 'user' | 'service'; id: string }
   created_at: string
   three_tier_configuration?: WireDeliveryThreeTierConfiguration | null
+  intent?: DeliveryIntent | null
+  platform_configuration?: PlatformConfiguration | null
 }
 
 export type DeliveryOutcomeScenario = 'steady' | 'cost_pressure' | 'under_delivery' | 'creative_fatigue' | 'tracking_anomaly' | 'review_rejected'
@@ -491,6 +596,10 @@ type WireDeliveryRecommendation = {
   plan_id: string
   plan_version: number
   target_snapshot?: WireDeliveryThreeTierConfiguration | null
+  base_configuration?: PlatformConfiguration | null
+  target_configuration?: PlatformConfiguration | null
+  base_snapshot_hash?: string
+  target_snapshot_hash?: string
   status?: string
   state?: string
   version: number
@@ -523,6 +632,16 @@ type WireManualActionPackage = {
   created_at: string
   optimized_plan_version: number
   optimized_plan_hash: string
+  configuration_schema_version?: string
+  configuration_id?: string
+  configuration_version?: number
+  configuration_platform?: DeliveryPlatform
+  configuration_profile_version?: string
+  configuration_canonical_hash?: string
+  intent_schema_version?: string
+  intent_id?: string
+  intent_version?: number
+  intent_canonical_hash?: string
 }
 
 type WireDeliveryPlan = {
@@ -530,7 +649,7 @@ type WireDeliveryPlan = {
   organization_id: string
   project_id: string
   status: 'draft'
-  platform: 'ocean_engine_mock'
+  platform: 'ocean_engine_mock' | DeliveryPlatform
   source: DeliverySource
   scenario: DeliveryScenario
   tour_run_id?: string | null
@@ -570,6 +689,17 @@ type WireDeliveryApproval = {
   change_set_id: string
   change_set_version: number
   plan_canonical_hash: string
+  target_snapshot_hash?: string
+  configuration_schema_version?: string
+  configuration_id?: string
+  configuration_version?: number
+  configuration_platform?: DeliveryPlatform
+  configuration_profile_version?: string
+  configuration_canonical_hash?: string
+  intent_schema_version?: string
+  intent_id?: string
+  intent_version?: number
+  intent_canonical_hash?: string
   action_hash: string
   hash_summary: string
   action: 'execute'
@@ -590,6 +720,9 @@ type WireDeliveryControlChangeSet = {
   plan_name: string
   plan_version: number
   plan_canonical_hash: string
+  target_snapshot?: PlatformConfiguration
+  legacy_target_snapshot?: WireDeliveryThreeTierConfiguration
+  target_snapshot_hash?: string
   recommendation_id?: string
   budget_limit: { total_minor: number; currency: 'CNY' }
   status: DeliveryControlChangeSet['status']
@@ -673,14 +806,14 @@ export const deliveryPlanApi = {
   async create(projectId: string, draft: DeliveryPlanDraft): Promise<DeliveryPlan> {
     const response = await deliveryPlanRequest<WireDeliveryPlan>(projectId, '/plans', {
       method: 'POST',
-      body: JSON.stringify(toWireDraft(draft)),
+      body: JSON.stringify(toPlatformRuntimeDraft(projectId, `new-${Date.now()}`, 1, draft)),
     })
     return toDeliveryPlan(response)
   },
   async update(projectId: string, planId: string, expectedVersion: number, draft: DeliveryPlanDraft): Promise<DeliveryPlan> {
     const response = await deliveryPlanRequest<WireDeliveryPlan>(projectId, `/plans/${encodeURIComponent(planId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ expected_version: expectedVersion, ...toWireDraft(draft) }),
+      body: JSON.stringify({ expected_version: expectedVersion, ...toPlatformRuntimeDraft(projectId, planId, expectedVersion + 1, draft) }),
     })
     return toDeliveryPlan(response)
   },
@@ -732,14 +865,10 @@ export const deliveryPlanApi = {
 
 /** Three-tier configuration compilation and recommendation lifecycle; all records remain mock-only. */
 export const deliveryConfigurationApi = {
-  async compile(projectId: string, planId: string, expectedVersion: number, fixture: string): Promise<DeliveryPlan> {
-    return toDeliveryPlan(await deliveryPlanRequest<WireDeliveryPlan>(
-      projectId,
-      `/plans/${encodeURIComponent(planId)}/configuration:compile`,
-      { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion, fixture }) },
-    ))
+  async compile(_projectId: string, _planId: string, _expectedVersion: number, _fixture: string): Promise<DeliveryPlan> {
+    throw new DeliveryApiError('LEGACY_CONFIGURATION_UNSUPPORTED', 409, '旧版 ThreeTier 配置仅支持只读访问。')
   },
-  async override(projectId: string, planId: string, input: {
+  async override(_projectId: string, _planId: string, _input: {
     expectedVersion: number
     groupId: string
     planId: string
@@ -748,23 +877,7 @@ export const deliveryConfigurationApi = {
     value: { type: string; value: DeliveryFieldValue }
     confirmed: boolean
   }): Promise<DeliveryPlan> {
-    const { expectedVersion, groupId, planId: targetPlanId, creativeId, fieldKey, value, confirmed } = input
-    return toDeliveryPlan(await deliveryPlanRequest<WireDeliveryPlan>(
-      projectId,
-      `/plans/${encodeURIComponent(planId)}/configuration:override`,
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          expected_version: expectedVersion,
-          group_id: groupId,
-          plan_id: targetPlanId,
-          creative_id: creativeId,
-          field_key: fieldKey,
-          value,
-          confirmed,
-        }),
-      },
-    ))
+    throw new DeliveryApiError('LEGACY_CONFIGURATION_UNSUPPORTED', 409, '旧版 ThreeTier 配置仅支持只读访问。')
   },
   async generateRecommendations(projectId: string, planId: string, expectedVersion: number): Promise<DeliveryRecommendation> {
     const response = await deliveryPlanRequest<WireDeliveryRecommendation>(
@@ -1336,6 +1449,64 @@ function toWireDraft(draft: DeliveryPlanDraft): WireDeliveryPlanDraft {
   }
 }
 
+function toPlatformRuntimeDraft(projectId: string, identity: string, versionNumber: number, draft: DeliveryPlanDraft) {
+  const scope = `project:${projectId}`
+  const materialReferences: StableReference[] = draft.creativeReferences.map(reference => ({
+    namespace: 'cookies', object_kind: 'asset_version', scope,
+    id: reference.assetId, version: String(reference.version), content_hash: reference.contentHash,
+    state: 'resolved', display_name_snapshot: reference.assetId,
+  }))
+  const strategyReference: StableReference = {
+    namespace: 'cookies', object_kind: 'strategy_version', scope,
+    id: draft.strategyReference.taskId, version: String(draft.strategyReference.version), content_hash: draft.strategyReference.contentHash,
+    state: 'resolved', display_name_snapshot: draft.sourceStrategyVersion,
+  }
+  const intent: DeliveryIntent = {
+    schema_version: 'delivery-intent/v1', intent_id: `intent-${identity}`, version_number: versionNumber,
+    hash_algorithm: 'RFC8785-JCS-SHA256(canonical_payload)',
+    payload: {
+      payload_schema_version: 'delivery-intent/v1', marketing_objective: draft.objective,
+      budget_boundary: { currency: 'CNY', minimum_total_minor: 0, maximum_total_minor: draft.budget.totalMinor },
+      schedule_boundary: { earliest_start: draft.schedule.startAt, latest_end: draft.schedule.endAt, timezone: draft.schedule.timezone },
+      optimization_preferences: [], material_references: materialReferences,
+      landing_page_references: [{ namespace: 'cookies', object_kind: 'landing_page', scope, id: draft.tracking.landingPage, state: 'resolved' }],
+      audience_constraints: { constraints: [] }, strategy_reference: strategyReference,
+    },
+    configuration_provenance: { kind: 'manual', generator_ref: 'delivery-plan-editor' },
+    fact_provenance: { source: 'mock', snapshot_ref: `mock://delivery-intent/${identity}/${versionNumber}` },
+  }
+  const dailyBudget = Math.max(0, Math.floor(draft.budget.totalMinor / Math.max(1, Math.ceil((Date.parse(draft.schedule.endAt) - Date.parse(draft.schedule.startAt)) / 86_400_000))))
+  const configuration: PlatformConfiguration = {
+    schema_version: 'delivery-platform-configuration/v2', configuration_id: `configuration-${identity}`, version_number: versionNumber,
+    platform: 'ocean_engine', profile_version: 'oceanengine-configuration/v1', hash_algorithm: 'RFC8785-JCS-SHA256(canonical_payload)',
+    payload: {
+      profile: 'ocean_engine',
+      ocean_engine: {
+        profile: 'ocean_engine',
+        project: {
+          draft_schema_version: 'oceanengine-configuration/v1', project_draft_id: `project-${identity}-${versionNumber}`,
+          account_reference: { namespace: 'oceanengine', object_kind: 'advertiser_account', scope, id: draft.advertiser.id, state: 'resolved', display_name_snapshot: draft.advertiser.name },
+          marketing_purpose: draft.objective, marketing_scenario: 'manual_delivery', carrier: 'landing_page', delivery_mode: 'manual',
+          targeting: { smart_expansion: false },
+          schedule: { start_at: draft.schedule.startAt, end_at: draft.schedule.endAt, timezone: draft.schedule.timezone },
+          budget_and_bidding: { currency: 'CNY', daily_budget_minor: dailyBudget, bidding_strategy: 'manual_bid', charging_mode: 'CPC', bid_minor: 0 },
+          project_name: draft.name,
+        },
+        promotions: materialReferences.map((reference, index) => ({
+          draft_schema_version: 'oceanengine-configuration/v1', promotion_draft_id: `promotion-${identity}-${index + 1}`,
+          delivery_identity: { mode: 'account_info' }, base_material_references: [reference], copy_items: [],
+          landing_page_reference: { namespace: 'cookies', object_kind: 'landing_page', scope, id: draft.tracking.landingPage, state: 'resolved' },
+          settings: { call_to_action: draft.tracking.conversionEvent }, promotion_name: `${draft.name}-${index + 1}`,
+        })),
+      },
+    },
+    configuration_provenance: { kind: 'manual', generator_ref: 'delivery-plan-editor' },
+    fact_provenance: { source: 'mock', snapshot_ref: `mock://platform-configuration/${identity}/${versionNumber}` },
+    compilation_metadata: { field_evidence: [{ field: 'project', state: 'operator_reviewed' }], steps: ['manual_mapping'], evidence_refs: [] },
+  }
+  return { intent, platform_configuration: configuration }
+}
+
 function toDeliveryPlan(plan: WireDeliveryPlan): DeliveryPlan {
   return {
     id: plan.id,
@@ -1358,6 +1529,13 @@ function toDeliveryPlan(plan: WireDeliveryPlan): DeliveryPlan {
 }
 
 function toDeliveryPlanVersion(version: WireDeliveryPlanVersion): DeliveryPlanVersion {
+  const intent = version.intent ?? undefined
+  const configuration = version.platform_configuration ?? undefined
+  const project = configuration?.payload.ocean_engine?.project
+  const firstPromotion = configuration?.payload.ocean_engine?.promotions[0]
+  const materialReferences = intent?.payload.material_references ?? []
+  const typedRuntime = Boolean(intent && configuration)
+  const fallbackAdvertiser = { id: project?.account_reference.id ?? '', name: project?.account_reference.display_name_snapshot ?? '平台账户', platform: 'ocean_engine' as const, source: version.source, scenario: version.scenario }
   return {
     planId: version.plan_id,
     organizationId: version.organization_id,
@@ -1365,30 +1543,37 @@ function toDeliveryPlanVersion(version: WireDeliveryPlanVersion): DeliveryPlanVe
     versionNumber: version.version_number,
     canonicalHash: version.canonical_hash,
     platform: version.platform,
-    name: version.name,
-    objective: version.objective,
+    schemaVersion: version.schema_version,
+    runtimeStatus: version.runtime_status,
+    readOnly: version.read_only,
+    name: typedRuntime ? project?.project_name ?? '平台投放配置' : version.name ?? '平台投放配置',
+    objective: typedRuntime ? intent?.payload.marketing_objective ?? '' : version.objective ?? '',
     advertiser: {
-      id: version.advertiser.id,
-      name: version.advertiser.name,
-      platform: version.advertiser.platform,
-      source: version.advertiser.source,
-      scenario: version.advertiser.scenario,
+      id: typedRuntime ? fallbackAdvertiser.id : version.advertiser?.id ?? '',
+      name: typedRuntime ? fallbackAdvertiser.name : version.advertiser?.name ?? '',
+      platform: typedRuntime ? fallbackAdvertiser.platform : version.advertiser?.platform ?? fallbackAdvertiser.platform,
+      source: typedRuntime ? fallbackAdvertiser.source : version.advertiser?.source ?? fallbackAdvertiser.source,
+      scenario: typedRuntime ? fallbackAdvertiser.scenario : version.advertiser?.scenario ?? fallbackAdvertiser.scenario,
     },
-    budget: { totalMinor: version.budget.total_minor, currency: version.budget.currency },
-    schedule: { startAt: version.schedule.start_at, endAt: version.schedule.end_at, timezone: version.schedule.timezone },
+    budget: typedRuntime
+      ? { totalMinor: intent?.payload.budget_boundary.maximum_total_minor ?? 0, currency: intent?.payload.budget_boundary.currency ?? 'CNY' }
+      : { totalMinor: version.budget?.total_minor ?? 0, currency: version.budget?.currency ?? 'CNY' },
+    schedule: typedRuntime
+      ? { startAt: intent?.payload.schedule_boundary.earliest_start ?? '', endAt: intent?.payload.schedule_boundary.latest_end ?? '', timezone: intent?.payload.schedule_boundary.timezone ?? 'Asia/Shanghai' }
+      : { startAt: version.schedule?.start_at ?? '', endAt: version.schedule?.end_at ?? '', timezone: version.schedule?.timezone ?? 'Asia/Shanghai' },
     tracking: {
-      landingPage: version.tracking.landing_page,
-      pixelId: version.tracking.pixel_id,
-      conversionEvent: version.tracking.conversion_event,
+      landingPage: typedRuntime ? intent?.payload.landing_page_references?.[0]?.id ?? '' : version.tracking?.landing_page ?? '',
+      pixelId: typedRuntime ? '' : version.tracking?.pixel_id ?? '',
+      conversionEvent: typedRuntime ? firstPromotion?.settings.call_to_action ?? '' : version.tracking?.conversion_event ?? '',
     },
-    creativeReferences: version.creative_references.map(reference => ({
+    creativeReferences: (typedRuntime ? materialReferences.map(reference => ({ asset_id: reference.id ?? '', version: Number(reference.version ?? 1), content_hash: reference.content_hash, route: undefined, confirmed: reference.state === 'resolved' })) : version.creative_references ?? []).map(reference => ({
       assetId: reference.asset_id,
       version: reference.version,
       contentHash: reference.content_hash,
       route: reference.route,
       confirmed: reference.confirmed,
     })),
-    strategyReference: version.strategy_reference ? {
+    strategyReference: !typedRuntime && version.strategy_reference ? {
       taskId: version.strategy_reference.task_id,
       version: version.strategy_reference.version,
       contentHash: version.strategy_reference.content_hash,
@@ -1396,15 +1581,18 @@ function toDeliveryPlanVersion(version: WireDeliveryPlanVersion): DeliveryPlanVe
     } : {
       // Compatibility for plan versions created before structured upstream
       // references were introduced. New writes always send strategy_reference.
-      taskId: version.source_strategy_version,
-      version: Number(version.source_strategy_version.match(/(\d+)$/)?.[1] ?? 1),
+      taskId: intent?.payload.strategy_reference.id ?? version.source_strategy_version ?? '',
+      version: Number(intent?.payload.strategy_reference.version ?? version.source_strategy_version?.match(/(\d+)$/)?.[1] ?? 1),
+      contentHash: intent?.payload.strategy_reference.content_hash,
     },
-    sourceStrategyVersion: version.source_strategy_version,
+    sourceStrategyVersion: typedRuntime ? `${intent?.payload.strategy_reference.id ?? ''}@${intent?.payload.strategy_reference.version ?? '1'}` : version.source_strategy_version ?? '',
     source: version.source,
     scenario: version.scenario,
     createdBy: version.created_by,
     createdAt: version.created_at,
     threeTierConfiguration: version.three_tier_configuration ? toThreeTierConfiguration(version.three_tier_configuration, version.created_at) : undefined,
+    deliveryIntent: intent,
+    platformConfiguration: configuration,
   }
 }
 
@@ -1468,7 +1656,11 @@ function toDeliveryRecommendation(value: WireDeliveryRecommendation): DeliveryRe
     observation: stringValue(value.observation_window ?? value.observation),
     cooldown: value.cooldown_until ?? (value.cooldown === undefined ? undefined : stringValue(value.cooldown)),
     source: value.source ?? value.target_snapshot?.source ?? 'mock',
-    scenario: value.scenario ?? value.target_snapshot?.scenario ?? 'golden_path',
+    scenario: value.scenario ?? value.target_snapshot?.scenario ?? (value.target_configuration ? 'platform_configuration' : 'golden_path'),
+    baseConfiguration: value.base_configuration ?? undefined,
+    targetConfiguration: value.target_configuration ?? undefined,
+    baseSnapshotHash: value.base_snapshot_hash,
+    targetSnapshotHash: value.target_snapshot_hash,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   }
@@ -1498,6 +1690,13 @@ function toManualActionPackage(value: WireManualActionPackage): ManualActionPack
     generatedAt: value.created_at,
     optimizedPlanVersion: value.optimized_plan_version,
     optimizedPlanHash: value.optimized_plan_hash,
+    configuration: value.configuration_id && value.configuration_version && value.configuration_platform && value.configuration_schema_version && value.configuration_profile_version && value.configuration_canonical_hash ? {
+      schemaVersion: value.configuration_schema_version, id: value.configuration_id, version: value.configuration_version,
+      platform: value.configuration_platform, profileVersion: value.configuration_profile_version, canonicalHash: value.configuration_canonical_hash,
+    } : undefined,
+    intent: value.intent_id && value.intent_version && value.intent_schema_version && value.intent_canonical_hash ? {
+      schemaVersion: value.intent_schema_version, id: value.intent_id, version: value.intent_version, canonicalHash: value.intent_canonical_hash,
+    } : undefined,
     instructions: layerInstructions.length ? layerInstructions : (value.instructions ?? []).map(instruction => ({
       fieldKey: instruction.field_key,
       effectiveValue: instruction.effective.value,
@@ -1520,6 +1719,9 @@ function toDeliveryControlChangeSet(value: WireDeliveryControlChangeSet): Delive
     planName: value.plan_name,
     planVersion: value.plan_version,
     planCanonicalHash: value.plan_canonical_hash,
+    targetSnapshot: value.target_snapshot,
+    legacyTargetSnapshot: value.legacy_target_snapshot ? toThreeTierConfiguration(value.legacy_target_snapshot, value.created_at) : undefined,
+    targetSnapshotHash: value.target_snapshot_hash,
     recommendationId: value.recommendation_id,
     budgetLimit: {
       totalMinor: value.budget_limit.total_minor,
@@ -1542,6 +1744,21 @@ function toDeliveryControlChangeSet(value: WireDeliveryControlChangeSet): Delive
       changeSetId: value.approval.change_set_id,
       changeSetVersion: value.approval.change_set_version,
       planCanonicalHash: value.approval.plan_canonical_hash,
+      targetSnapshotHash: value.approval.target_snapshot_hash,
+      configuration: value.approval.configuration_id && value.approval.configuration_version && value.approval.configuration_platform && value.approval.configuration_schema_version && value.approval.configuration_profile_version && value.approval.configuration_canonical_hash ? {
+        schemaVersion: value.approval.configuration_schema_version,
+        id: value.approval.configuration_id,
+        version: value.approval.configuration_version,
+        platform: value.approval.configuration_platform,
+        profileVersion: value.approval.configuration_profile_version,
+        canonicalHash: value.approval.configuration_canonical_hash,
+      } : undefined,
+      intent: value.approval.intent_id && value.approval.intent_version && value.approval.intent_schema_version && value.approval.intent_canonical_hash ? {
+        schemaVersion: value.approval.intent_schema_version,
+        id: value.approval.intent_id,
+        version: value.approval.intent_version,
+        canonicalHash: value.approval.intent_canonical_hash,
+      } : undefined,
       actionHash: value.approval.action_hash,
       hashSummary: value.approval.hash_summary,
       action: value.approval.action,

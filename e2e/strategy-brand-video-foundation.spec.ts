@@ -11,11 +11,13 @@ test('isolated Guerlain Project starts a persistent Strategy workspace', async (
 
   const createWorkspace = page.getByRole('button', { name: '创建主策略工作区' })
   const startWorkspace = page.getByRole('button', { name: '开始策略梳理' })
+  const currentChain = page.getByText('当前工作链', { exact: true })
+  await expect(createWorkspace.or(startWorkspace).or(currentChain)).toBeVisible()
   if (await createWorkspace.isVisible().catch(() => false)) {
     await createWorkspace.click()
     await expect(startWorkspace).toBeVisible()
   }
-  await expect(startWorkspace.or(page.getByText('当前工作链', { exact: true }))).toBeVisible()
+  await expect(startWorkspace.or(currentChain)).toBeVisible()
   if (await startWorkspace.isVisible().catch(() => false)) {
     await startWorkspace.click()
     await expect(page.getByRole('button', { name: '开始策略对话' })).toBeVisible()

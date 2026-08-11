@@ -18,7 +18,14 @@ export default function App() {
   const { session, isLoading: isAuthLoading } = useAuth()
   const { currentProject, isLoading, reloadProjects, routeDiagnostic, selectProject, targetProjectId } = useProject()
   const system = systems.find(item => item.key === route.systemKey) ?? systems[0]
-  const navItem = system.nav.find(item => item.id === route.navId) ?? system.nav[0]
+  const canonicalNavId = route.systemKey === 'delivery' && route.navId === 'three-tier' ? 'configuration' : route.navId
+  const navItem = system.nav.find(item => item.id === canonicalNavId) ?? system.nav[0]
+
+  useEffect(() => {
+    if (route.systemKey === 'delivery' && route.navId === 'three-tier' && route.projectId) {
+      navigate(projectPath(route.projectId, 'delivery', 'configuration', route.objectId, route.view, route.contextId, route.tourRunId, route.tourCase), true)
+    }
+  }, [navigate, route])
 
   useEffect(() => {
     if (route.projectId) selectProject(route.projectId)

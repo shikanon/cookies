@@ -2,6 +2,8 @@
 
 Owner: Delivery team.
 
+`20260810120000_delivery_platform_configuration_runtime.up.sql` 是 DeliveryIntent/PlatformConfiguration 的增量切换迁移。它创建不可变 Intent 与判别式配置存储，为 Plan/ChangeSet 增加 schema 判别器，并为 Approval 增加显式 Intent/配置绑定。迁移不对旧 `config_json`、`target_snapshot`、canonical hash 或 approval action hash 执行 `UPDATE`。
+
 `20260731120000_delivery_approval_content_hashes.up.sql` intentionally adds
 `delivery_plan_versions.canonical_hash` as nullable for the SQL phase. The
 `cookies-migrate` command immediately runs

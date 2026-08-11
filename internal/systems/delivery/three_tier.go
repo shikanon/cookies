@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const ThreeTierSchema = "delivery-three-tier/v1"
+
 // ThreeTierConfiguration is a complete, mock-only delivery snapshot. It is
 // deliberately attached to a PlanVersion rather than a mutable plan row.
 type ThreeTierConfiguration struct {

@@ -1,5 +1,11 @@
 # 智能投放只读校准收口与 Delivery 配置契约
 
+## 运行时执行状态（2026-08-10）
+
+此前冻结的切换规则现已在代码中执行。新的公共 Plan 写请求必须同时提交完整 DeliveryIntent 与 tagged PlatformConfiguration；旧 flat-plan 与 ThreeTier 写请求返回 `LEGACY_CONFIGURATION_UNSUPPORTED`。持久化旧版本在读取后标记为 `legacy_unsupported`/只读，保留原 canonical hash，不能进入新预检、提交、审批或执行链。
+
+旧 `/configuration:compile` 与 `/configuration:override` 仅保留为稳定的 deprecated 错误面。前端主路由为 `/delivery/configuration`；`/delivery/three-tier` 作为深链兼容别名重定向，旧数据只展示不编辑。
+
 | 属性 | 内容 |
 | --- | --- |
 | 状态 | 只读业务校准已收口；`oceanengine-bidding-schema/v0.1` 保持冻结；Delivery-owned 新配置模型进入实现准备 |
@@ -115,7 +121,9 @@ Delivery 可以继续实现新的配置模型和行为流程编译器，但真�
 | 真实 Connector 数据影子告警/建议 | **No-Go** | 缺正式对象/指标/质量契约和 Consumer Contract 测试 |
 | 巨量平台创建、开启、暂停或优化写入 | **No-Go** | 本 Goal 不含授权、Computer Use 写入、写后回读和 Kill Switch |
 
-## 9. Delivery-owned 目标配置模型冻结
+## 9. 历史 v1 目标配置模型冻结
+
+> 本节至第 12 节记录只读校准收口时的 `delivery-platform-configuration/v1` 设计，保留用于解释历史 fixture 和决策。当前领域契约已升级为平台无关 `delivery-intent/v1` + 判别式 `delivery-platform-configuration/v2`，以[`DeliveryIntent` 与平台配置契约](./platform-configuration-contracts.md)为准；v1 不修改、不扩展，也不作为新运行时的中间 projector。
 
 ### 9.1 根模型
 
@@ -127,7 +135,7 @@ DeliveryPlanVersion (immutable, version + canonical_hash)
    └─ PlatformPromotionDraft[] (zero or more; business language: units)
 ```
 
-机器契约版本为 `delivery-platform-configuration/v1`。`delivery-three-tier/v1` 是历史 mock 快照，不能通过改名或字段覆盖变成新模型。新模型在内存/文档契约中先实现，持久化字段和 API 迁移另行立项。
+本节当时的机器契约版本为 `delivery-platform-configuration/v1`。`delivery-three-tier/v1` 与该 v1 配置现在都是不可变历史契约，不能通过改名、字段覆盖或重新计算 hash 变成 v2。新 v2 领域模型已在内存/文档契约中实现，持久化字段和 API 切换另行立项。
 
 每个 payload 结构上只含**一个** `PlatformProjectDraft`，所有 `PlatformPromotionDraft[]` 都属于它：项目—单元父关系是结构隐式的，单元不携带 `parent_project_draft_id` 字段（父字段是冗余的，机器契约 `additionalProperties: false` 会拒绝），也不引用未提交的 `platform_id`。
 
@@ -171,7 +179,7 @@ namespace + object_kind + scope(account/project) + external_id
 
 没有稳定 ID 时只能使用 `unresolved`/`blocked` 引用；显示名快照用于审计和 UI，不得作为稳定主键。引用状态、来源版本和 hash 参与新模型 canonical payload；审计人、创建时间、页面 evidence、条件和动作元数据不参与。新契约自包含 `StableReference` 定义，不再复用旧 `PlatformReference`。
 
-## 10. ThreeTier 迁移边界
+## 10. ThreeTier 历史分析边界
 
 | 旧对象/字段 | 新归属 | 处理 |
 | --- | --- | --- |
@@ -186,22 +194,22 @@ namespace + object_kind + scope(account/project) + external_id
 | `ThreeTierField.Source`, `SourceRefs`, `Dependency*`, `Risk*`, `EvidenceRefs`, `PlatformStatus`, `Confirmed` | 新模型编译元数据 | 不复制为平台实体字段；`PlatformStatus` 未确认时保持 `platform_pending` |
 | `schema`, `source`, `scenario`, `fixture_scenario`, `generated_at`, `evidence` | 历史快照元数据 | `delivery-three-tier/v1` 不可变；新模型使用新 schema/version |
 
-禁止的迁移是把 `group → plan → creative` 机械重命名为 `project → promotion → creative`，或把外部商品/素材/策略复制进 Delivery 表。旧快照只读适配，新模型由明确映射规则生成。
+禁止把 `group → plan → creative` 机械重命名为 `project → promotion → creative`，或把外部商品/素材/策略复制进 Delivery 表。此表只解释历史字段归属，不要求实现 ThreeTier → v2 的兼容映射；后续切换从明确版本化的 `DeliveryIntent` 直接生成目标平台 profile。
 
-## 11. 历史兼容策略
+## 11. 历史版本策略
 
 1. 已存在的 `delivery-three-tier/v1` 快照及其 canonical hash 永远保持不可变；历史版本继续可读，不能通过回填或重新计算变成新模型。
-2. 新目标配置使用 `delivery-platform-configuration/v1`（或后续递增版本），与旧快照并列；不修改旧 JSON、旧 hash、旧 Approval/action hash 或旧 API 响应语义。
-3. 读取历史配置时允许建立只读、内存中的兼容投影，并标记 `derived_from_legacy=true`；该投影不能写回历史记录。
-4. 编辑历史配置必须以旧版本内容为输入创建新的 `DeliveryPlanVersion`，递增版本号并生成新的 canonical hash；不原地迁移、不倒退 current 指针、不覆盖历史审批。
-5. 新版本的 ChangeSet/Approval 只绑定新版本的 schema、内容 hash 和目标快照 hash；旧 Approval 不可复用到新模型。
+2. `delivery-platform-configuration/v1` 及其 fixture/hash 同样保持不可变；当前目标使用 `delivery-intent/v1` 和 `delivery-platform-configuration/v2`，不修改旧 JSON、旧 hash、旧 Approval/action hash 或旧 API 响应语义。
+3. 不实现 `derived_from_legacy` 兼容投影，也不让 v2 校验器猜测 ThreeTier 字段含义；历史 API 按历史 schema 读取。
+4. 需要转入新流程时，调用方必须显式创建新的 `DeliveryIntent` 版本，再生成绑定其 id/version/hash 的平台配置；不得把旧快照原地升级。
+5. 后续 ChangeSet/Approval 接入只能绑定新版本的 schema、内容 hash 和意图快照 hash；旧 Approval 不可复用到新模型。
 
 ## 12. 下一阶段可执行 PR 切片
 
 | 切片 | 代码/文档边界 | 验收输出 | 明确不含 |
 | --- | --- | --- | --- |
-| 配置领域契约 | `internal/systems/delivery` 新增模型/引用/条件类型；更新机器 JSON Schema和单元测试 | 能构造并验证 `DeliveryPlanVersion → PlatformProjectDraft → PlatformPromotionDraft[]`，稳定 hash 对字段变化敏感 | 持久化迁移、API、前端 |
-| ThreeTier 兼容映射 | 只读编译器，将历史快照映射为新草稿并报告 unmapped/platform_pending | 每个旧字段有归属、废弃或 unresolved 结果；旧 hash 不变 | 改写历史行、平台写入 |
+| 配置领域契约 | **已完成**：`DeliveryIntent`、判别式 `PlatformConfiguration`、稳定引用、JSON Schema、fixtures 与生产 JCS hash 向量 | 能验证平台无关 intent；巨量一个 Project + 零到多个 Promotions；磁力只返回 `CAPABILITY_PENDING` | 持久化迁移、API、前端、运行时切换 |
+| 运行时直接切换（后续） | API/持久化消费者显式接入新 schema；历史 schema 保持只读 | 新写入不经过 ThreeTier projector；版本/hash/审批绑定可追溯 | 改写历史行、推测式字段迁移、平台写入 |
 | 行为流程编译器 | 基于 SelectorContract/ActionBoundary 编译只读定位、条件、确认和恢复分支 | 对电商手动、销售线索、Android 阻塞和质量异常 fixture 可重放；输出停止条件和 evidence | Computer Use 执行、真实提交 |
 | Mock/replay 消费回归 | 复用 PR #38 的 reader，覆盖 usable 与五类非 usable 质量 | 告警/建议只在 usable 输入生成，来源/窗口/hash/evidence 可追溯 | Connector 目录改动 |
 | Connector adapter（后续） | Connector Owner 发布正式契约后，仅增加 Delivery 适配器和 Consumer Contract 测试 | mock/replay/connector 可按请求来源切换，质量故障不静默回退 | 修改 Connector 实现、影子结论前置 |

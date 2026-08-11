@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Cookies Delivery API
-  version: 1.4.0
-  description: Versioned mock delivery plans, authoritative preflight, content-bound approvals, durable controlled local-simulation execution evidence, and an owner-scoped repeatable mock tour.
+  version: 2.0.0
+  description: Immutable DeliveryIntent and tagged PlatformConfiguration plans, authoritative preflight, content-bound approvals, and legacy read-only history.
 servers:
   - url: /
 security:
@@ -26,12 +26,12 @@ paths:
         default: { $ref: '#/components/responses/Problem' }
     post:
       operationId: createDeliveryPlan
-      summary: Create and persist a mock delivery plan draft
+      summary: Create an immutable DeliveryIntent and tagged PlatformConfiguration plan
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PlanDraft' }
+            schema: { $ref: '#/components/schemas/CreatePlan' }
       responses:
         '201':
           description: Plan and immutable V1 created.
@@ -129,8 +129,10 @@ paths:
       - $ref: '#/components/parameters/ProjectID'
       - $ref: '#/components/parameters/PlanID'
     post:
+      deprecated: true
       operationId: compileDeliveryPlanConfiguration
-      summary: Server-compile a deterministic three-tier mock configuration into a new immutable PlanVersion
+      summary: Rejected legacy ThreeTier write endpoint
+      description: Always returns LEGACY_CONFIGURATION_UNSUPPORTED. Legacy ThreeTier snapshots remain readable but immutable.
       requestBody: { $ref: '#/components/requestBodies/CompileDeliveryConfiguration' }
       responses:
         '201':
@@ -147,8 +149,10 @@ paths:
       - $ref: '#/components/parameters/ProjectID'
       - $ref: '#/components/parameters/PlanID'
     post:
+      deprecated: true
       operationId: overrideDeliveryPlanConfigurationField
-      summary: Override exactly one three-tier creative field and create a new immutable PlanVersion
+      summary: Rejected legacy ThreeTier write endpoint
+      description: Always returns LEGACY_CONFIGURATION_UNSUPPORTED. Create a new DeliveryIntent and PlatformConfiguration version instead.
       requestBody: { $ref: '#/components/requestBodies/OverrideDeliveryConfigurationField' }
       responses:
         '200':
@@ -1043,30 +1047,145 @@ components:
           items: { $ref: '#/components/schemas/CreativeReference' }
         strategy_reference: { $ref: '#/components/schemas/StrategyReference' }
         source_strategy_version: { type: string }
+    StableReference:
+      type: object
+      additionalProperties: false
+      required: [namespace, object_kind, scope, state]
+      properties:
+        namespace: { type: string, minLength: 1 }
+        object_kind: { type: string, minLength: 1 }
+        scope: { type: string, minLength: 1 }
+        id: { type: string }
+        version: { type: string }
+        content_hash: { $ref: '#/components/schemas/CanonicalHash' }
+        state: { type: string, enum: [resolved, unresolved, blocked, redacted] }
+        reason: { type: string }
+        display_name_snapshot: { type: string }
+        evidence_version: { type: string }
+    DeliveryIntent:
+      type: object
+      additionalProperties: false
+      required: [schema_version, intent_id, version_number, hash_algorithm, payload, configuration_provenance, fact_provenance]
+      properties:
+        schema_version: { type: string, const: delivery-intent/v1 }
+        intent_id: { type: string, minLength: 1 }
+        version_number: { type: integer, minimum: 1 }
+        hash_algorithm: { type: string, const: RFC8785-JCS-SHA256(canonical_payload) }
+        canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
+        payload:
+          type: object
+          required: [payload_schema_version, marketing_objective, budget_boundary, schedule_boundary, optimization_preferences, material_references, audience_constraints, strategy_reference]
+          properties:
+            payload_schema_version: { type: string, const: delivery-intent/v1 }
+            marketing_objective: { type: string, minLength: 1 }
+            budget_boundary: { type: object }
+            schedule_boundary: { type: object }
+            optimization_preferences: { type: array, items: { type: object } }
+            product_references: { type: array, items: { $ref: '#/components/schemas/StableReference' } }
+            landing_page_references: { type: array, items: { $ref: '#/components/schemas/StableReference' } }
+            material_references: { type: array, minItems: 1, items: { $ref: '#/components/schemas/StableReference' } }
+            audience_constraints: { type: object }
+            strategy_reference: { $ref: '#/components/schemas/StableReference' }
+        configuration_provenance: { type: object }
+        fact_provenance: { type: object }
+        audit: { type: object, readOnly: true }
+    PlatformConfiguration:
+      type: object
+      additionalProperties: false
+      required: [schema_version, configuration_id, version_number, platform, profile_version, hash_algorithm, payload, configuration_provenance, fact_provenance, compilation_metadata]
+      properties:
+        schema_version: { type: string, const: delivery-platform-configuration/v2 }
+        configuration_id: { type: string, minLength: 1 }
+        version_number: { type: integer, minimum: 1 }
+        platform: { type: string, enum: [ocean_engine, magnetic_engine] }
+        profile_version: { type: string, enum: [oceanengine-configuration/v1, magnetic-engine-configuration/v1] }
+        intent: { type: object, readOnly: true }
+        hash_algorithm: { type: string, const: RFC8785-JCS-SHA256(canonical_payload) }
+        canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
+        payload:
+          oneOf:
+            - $ref: '#/components/schemas/OceanEngineConfigurationPayload'
+            - $ref: '#/components/schemas/MagneticEngineConfigurationPayload'
+        configuration_provenance: { type: object }
+        fact_provenance: { type: object }
+        audit: { type: object, readOnly: true }
+        compilation_metadata: { type: object }
+    OceanEngineConfigurationPayload:
+      type: object
+      additionalProperties: false
+      required: [profile, ocean_engine]
+      properties:
+        profile: { type: string, const: ocean_engine }
+        ocean_engine:
+          type: object
+          additionalProperties: false
+          required: [profile, project, promotions]
+          properties:
+            profile: { type: string, const: ocean_engine }
+            project: { type: object, description: Exactly one OceanEngine Project draft. }
+            promotions: { type: array, minItems: 0, items: { type: object } }
+    MagneticEngineConfigurationPayload:
+      type: object
+      additionalProperties: false
+      required: [profile, magnetic_engine]
+      properties:
+        profile: { type: string, const: magnetic_engine }
+        magnetic_engine:
+          type: object
+          additionalProperties: false
+          required: [profile, status, reason_code, reason]
+          properties:
+            profile: { type: string, const: magnetic_engine }
+            status: { type: string, const: capability_pending }
+            reason_code: { type: string, const: CAPABILITY_PENDING }
+            reason: { type: string, minLength: 1 }
+    CreatePlan:
+      type: object
+      additionalProperties: false
+      required: [intent, platform_configuration]
+      properties:
+        intent: { $ref: '#/components/schemas/DeliveryIntent' }
+        platform_configuration: { $ref: '#/components/schemas/PlatformConfiguration' }
     UpdatePlan:
       type: object
       additionalProperties: false
-      required: [expected_version, name, objective, advertiser, budget, schedule, tracking, creative_references, strategy_reference, source_strategy_version]
+      required: [expected_version, intent, platform_configuration]
       properties:
         expected_version: { type: integer, minimum: 1 }
-        name: { type: string, minLength: 1, maxLength: 255 }
-        objective: { type: string, minLength: 1, maxLength: 2000 }
-        advertiser: { $ref: '#/components/schemas/Advertiser' }
-        budget: { $ref: '#/components/schemas/Budget' }
-        schedule: { $ref: '#/components/schemas/Schedule' }
-        tracking: { $ref: '#/components/schemas/Tracking' }
-        creative_references:
-          type: array
-          maxItems: 50
-          items: { $ref: '#/components/schemas/CreativeReference' }
-        strategy_reference: { $ref: '#/components/schemas/StrategyReference' }
-        source_strategy_version: { type: string }
+        intent: { $ref: '#/components/schemas/DeliveryIntent' }
+        platform_configuration: { $ref: '#/components/schemas/PlatformConfiguration' }
     DeliveryPlanVersion:
+      oneOf:
+        - $ref: '#/components/schemas/PlatformDeliveryPlanVersion'
+        - $ref: '#/components/schemas/LegacyDeliveryPlanVersion'
+    PlatformDeliveryPlanVersion:
+      type: object
+      additionalProperties: false
+      required: [schema_version, runtime_status, plan_id, organization_id, project_id, version_number, canonical_hash, intent, platform_configuration, platform, source, scenario, created_by, created_at]
+      properties:
+        schema_version: { type: string, const: delivery-plan-version/v2 }
+        runtime_status: { type: string, enum: [active, capability_pending] }
+        read_only: { type: boolean, const: false }
+        plan_id: { type: string }
+        organization_id: { type: string }
+        project_id: { type: string }
+        version_number: { type: integer, minimum: 1 }
+        canonical_hash: { $ref: '#/components/schemas/CanonicalHash', description: Exactly equals platform_configuration.canonical_hash. }
+        intent: { $ref: '#/components/schemas/DeliveryIntent' }
+        platform_configuration: { $ref: '#/components/schemas/PlatformConfiguration' }
+        platform: { type: string, enum: [ocean_engine, magnetic_engine] }
+        source: { type: string, const: mock }
+        scenario: { type: string, enum: [platform_configuration, capability_pending] }
+        created_by: { $ref: '#/components/schemas/Principal' }
+        created_at: { type: string, format: date-time }
+    LegacyDeliveryPlanVersion:
       allOf:
         - $ref: '#/components/schemas/PlanDraft'
         - type: object
-          required: [plan_id, organization_id, project_id, version_number, canonical_hash, platform, source, scenario, created_by, created_at]
+          required: [runtime_status, read_only, plan_id, organization_id, project_id, version_number, canonical_hash, platform, source, scenario, created_by, created_at]
           properties:
+            runtime_status: { type: string, const: legacy_unsupported }
+            read_only: { type: boolean, const: true }
             plan_id: { type: string }
             organization_id: { type: string }
             project_id: { type: string }
@@ -1095,7 +1214,7 @@ components:
         end_at: { type: string, format: date-time }
         status: { type: string, const: draft }
         version: { type: integer, minimum: 1 }
-        platform: { type: string, const: ocean_engine_mock }
+        platform: { type: string, enum: [ocean_engine, magnetic_engine, ocean_engine_mock] }
         source: { type: string, const: mock }
         scenario: { $ref: '#/components/schemas/Scenario' }
         tour_run_id:
@@ -1120,7 +1239,7 @@ components:
         updated_at: { type: string, format: date-time }
     Scenario:
       type: string
-      enum: [golden_path, budget_zero, creative_unconfirmed, tracking_missing, incomplete_draft, project_plan_list, approval_queue, missing_required_field, orphan_dependency, missing_confirmation, platform_fields_pending, recommendation_generated, recommendation_accepted, recommendation_rejected, manual_action_package, preflight_failure, approval_expired, plan_stale, partial_execution, result_unknown, review_rejected_alert]
+      enum: [golden_path, budget_zero, creative_unconfirmed, tracking_missing, incomplete_draft, project_plan_list, approval_queue, missing_required_field, orphan_dependency, missing_confirmation, platform_fields_pending, platform_configuration, capability_pending, recommendation_generated, recommendation_accepted, recommendation_rejected, manual_action_package, preflight_failure, approval_expired, plan_stale, partial_execution, result_unknown, review_rejected_alert]
     PlanList:
       type: object
       required: [items, source, scenario]
@@ -1144,7 +1263,7 @@ components:
       required: [field, section, label]
       properties:
         field: { type: string }
-        section: { type: string, enum: [目标与账户, 预算与排期, 追踪, 素材引用] }
+        section: { type: string, enum: [目标与账户, 预算与排期, 追踪, 素材引用, 平台配置, 稳定引用] }
         label: { type: string }
     PreflightCheck:
       type: object
@@ -1152,7 +1271,7 @@ components:
       properties:
         code:
           type: string
-          enum: [advertiser_available, budget_positive, schedule_valid, creative_present, creative_confirmed, tracking_complete, three_tier_structure, three_tier_required_fields, three_tier_dependencies, three_tier_confirmation, three_tier_platform_pending]
+          enum: [advertiser_available, budget_positive, schedule_valid, creative_present, creative_confirmed, tracking_complete, delivery_intent_valid, platform_configuration_valid, INVALID_STABLE_REFERENCE, CANONICAL_HASH_MISMATCH, CAPABILITY_PENDING, platform_pending, blocked_by_event_asset, write_validation_pending, three_tier_structure, three_tier_required_fields, three_tier_dependencies, three_tier_confirmation, three_tier_platform_pending]
         severity: { type: string, enum: [error, warning] }
         passed: { type: boolean }
         message: { type: string }
@@ -1304,7 +1423,7 @@ components:
     DeliveryRecommendation:
       type: object
       additionalProperties: false
-      required: [id, organization_id, project_id, plan_id, plan_version, simulation_run_id, fingerprint, status, base_snapshot, base_snapshot_hash, target_snapshot, target_snapshot_hash, evidence, action, impact, risks, observation, provenance, version, created_by, created_at, updated_at]
+      required: [id, organization_id, project_id, plan_id, plan_version, simulation_run_id, fingerprint, status, base_snapshot_hash, target_snapshot_hash, evidence, action, impact, risks, observation, provenance, version, created_by, created_at, updated_at]
       properties:
         id: { type: string }
         organization_id: { type: string }
@@ -1315,8 +1434,10 @@ components:
         fingerprint: { type: string, minLength: 1 }
         status: { $ref: '#/components/schemas/RecommendationStatus' }
         base_snapshot: { $ref: '#/components/schemas/DeliveryConfigurationSnapshot' }
+        base_configuration: { $ref: '#/components/schemas/PlatformConfiguration' }
         base_snapshot_hash: { $ref: '#/components/schemas/CanonicalHash' }
         target_snapshot: { $ref: '#/components/schemas/DeliveryConfigurationSnapshot' }
+        target_configuration: { $ref: '#/components/schemas/PlatformConfiguration' }
         target_snapshot_hash: { $ref: '#/components/schemas/CanonicalHash' }
         evidence:
           type: array
@@ -1363,7 +1484,8 @@ components:
         plan_name: { type: string, minLength: 1 }
         plan_version: { type: integer, minimum: 1 }
         plan_canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
-        target_snapshot: { $ref: '#/components/schemas/DeliveryConfigurationSnapshot' }
+        target_snapshot: { $ref: '#/components/schemas/PlatformConfiguration' }
+        legacy_target_snapshot: { $ref: '#/components/schemas/DeliveryConfigurationSnapshot', deprecated: true, readOnly: true }
         target_snapshot_hash: { $ref: '#/components/schemas/CanonicalHash' }
         recommendation_id: { type: string }
         budget_limit: { $ref: '#/components/schemas/Budget' }
@@ -1410,6 +1532,16 @@ components:
         change_set_version: { type: integer, minimum: 1 }
         plan_canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
         target_snapshot_hash: { $ref: '#/components/schemas/CanonicalHash' }
+        configuration_schema_version: { type: string, const: delivery-platform-configuration/v2 }
+        configuration_id: { type: string }
+        configuration_version: { type: integer, minimum: 1 }
+        configuration_platform: { type: string, enum: [ocean_engine, magnetic_engine] }
+        configuration_profile_version: { type: string }
+        configuration_canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
+        intent_schema_version: { type: string, const: delivery-intent/v1 }
+        intent_id: { type: string }
+        intent_version: { type: integer, minimum: 1 }
+        intent_canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
         action_hash: { $ref: '#/components/schemas/CanonicalHash' }
         action: { type: string, const: execute }
         scope: { type: string, const: execute_mock }
@@ -1431,7 +1563,7 @@ components:
       additionalProperties: false
       required: [layer, group_id, plan_id, creative_id, field_key, effective, source, confirmation_required, expected_result, evidence_refs]
       properties:
-        layer: { type: string, enum: [group, plan, creative] }
+        layer: { type: string, enum: [project, promotion, group, plan, creative] }
         group_id: { type: string }
         plan_id: { type: string }
         creative_id: { type: string }
@@ -1453,6 +1585,16 @@ components:
         project_id: { type: string }
         change_set_id: { type: string }
         target_snapshot_hash: { $ref: '#/components/schemas/CanonicalHash' }
+        configuration_schema_version: { type: string, const: delivery-platform-configuration/v2 }
+        configuration_id: { type: string }
+        configuration_version: { type: integer, minimum: 1 }
+        configuration_platform: { type: string, enum: [ocean_engine, magnetic_engine] }
+        configuration_profile_version: { type: string }
+        configuration_canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
+        intent_schema_version: { type: string, const: delivery-intent/v1 }
+        intent_id: { type: string }
+        intent_version: { type: integer, minimum: 1 }
+        intent_canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
         content_hash: { $ref: '#/components/schemas/CanonicalHash' }
         instructions:
           type: array

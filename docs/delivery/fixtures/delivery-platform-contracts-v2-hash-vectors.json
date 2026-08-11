@@ -1,0 +1,23 @@
+{
+  "algorithm": "RFC8785-JCS-SHA256(canonical_payload)",
+  "vectors": [
+    {
+      "name": "platform-neutral ecommerce intent",
+      "kind": "intent",
+      "fixture": "delivery-intent-v1-valid.json",
+      "expected_canonical_hash": "706500a701bdb01065dff277c269b048b2071df6da53ea5602c174c79655b0c5"
+    },
+    {
+      "name": "OceanEngine one-project two-promotions profile",
+      "kind": "platform",
+      "fixture": "delivery-platform-configuration-v2-oceanengine-valid.json",
+      "expected_canonical_hash": "bba8f42fe0668070d208b7816b5f00f0dd43cefdbc31b582cfba367cd46adf2a"
+    },
+    {
+      "name": "Magnetic Engine capability-pending profile",
+      "kind": "platform",
+      "fixture": "delivery-platform-configuration-v2-magnetic-pending.json",
+      "expected_canonical_hash": "c32d1ab4159e80a6de84a343a2bc812b9bb877fa2f53f4c63758e1b001ab5325"
+    }
+  ]
+}

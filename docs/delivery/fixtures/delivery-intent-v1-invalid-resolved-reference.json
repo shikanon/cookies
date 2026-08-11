@@ -1,0 +1,7 @@
+{
+  "fixture": "delivery-intent-v1-valid.json",
+  "expected_error": "must have required property 'id'",
+  "mutations": [
+    { "path": "payload.material_references.0.id", "remove": true }
+  ]
+}

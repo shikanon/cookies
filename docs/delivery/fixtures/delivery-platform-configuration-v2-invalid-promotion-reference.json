@@ -1,0 +1,7 @@
+{
+  "fixture": "delivery-platform-configuration-v2-oceanengine-valid.json",
+  "expected_error": "must have required property 'reason'",
+  "mutations": [
+    { "path": "payload.ocean_engine.promotions.1.delivery_identity.authorized_identity.reason", "remove": true }
+  ]
+}

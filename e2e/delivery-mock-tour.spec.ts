@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
+import { createRuntimePlan } from './delivery-runtime-fixture'
 
 const projectId = 'project_investor_precision_evidence'
 
@@ -13,7 +14,7 @@ test('complete delivery mock tour is repeatable, resumable, observable, and safe
   expect(preparedResponse.status()).toBe(201)
   const prepared = await preparedResponse.json() as TourRun
   expectTourContract(prepared, runId)
-  expect(prepared.current_step).toBe('configuration')
+  expect(prepared.current_step).toBe('first_approval')
   expect(Object.fromEntries(prepared.cases.filter(tourCase => tourCase.key !== 'golden_path').map(tourCase => [tourCase.key, tourCase.status]))).toEqual({
     preflight_failure: 'observed',
     approval_expired: 'observed',
@@ -46,17 +47,16 @@ test('complete delivery mock tour is repeatable, resumable, observable, and safe
   await expect(page.getByRole('heading', { name: `上线后优化闭环 · 黄金路径 · ${runId}` })).toBeVisible()
   await expect(page.getByLabel('账户边界')).toHaveValue('mock-tour-advertiser')
   await expect.poll(() => new URL(page.url()).searchParams.get('plan_id')).toBe(goldenPlanId)
-  await page.goto(`/projects/${projectId}/delivery/three-tier?plan_id=${goldenPlanId}&tour_case=golden_path&tour_run_id=${runId}&view=${encodeURIComponent('配置映射')}`)
-  await expect(page.getByRole('heading', { name: '广告组、广告计划与广告创意配置' })).toBeVisible()
+  await page.goto(`/projects/${projectId}/delivery/configuration?plan_id=${goldenPlanId}&tour_case=golden_path&tour_run_id=${runId}&view=${encodeURIComponent('配置映射')}`)
+  await expect(page.getByRole('heading', { name: '平台投放配置' })).toBeVisible()
   await expect(page.getByRole('button', { name: '创建投放计划' })).toHaveCount(0)
   await expect(page.getByRole('definition').filter({ hasText: '巨量引擎' })).toBeVisible()
-  await expect(page.getByRole('definition').filter({ hasText: '巨量内部配置 v1' })).toBeVisible()
-  await page.getByRole('button', { name: '编译三层配置' }).click()
-  await expect(page.getByText('已编译', { exact: true })).toBeVisible()
-  await expect(page.getByText('当前计划 V2', { exact: true })).toBeVisible()
+  await expect(page.getByText('已生成，可进入检查', { exact: true })).toBeVisible()
+  await expect(page.getByText('内容已按当前计划版本锁定', { exact: true })).toBeVisible()
+  await expect(page.getByText('当前计划 V1', { exact: true })).toBeVisible()
   await page.reload()
-  await expect(page.getByText('已编译', { exact: true })).toBeVisible()
-  await expect(page.getByText('当前计划 V2', { exact: true })).toBeVisible()
+  await expect(page.getByText('内容已按当前计划版本锁定', { exact: true })).toBeVisible()
+  await expect(page.getByText('当前计划 V1', { exact: true })).toBeVisible()
   await page.getByRole('link', { name: '返回走测总览' }).click()
   await expect(page.getByText('2 / 9 步完成', { exact: true })).toBeVisible()
   await expect(page.getByText('下一步：提交首个变更申请并前往审批中心', { exact: true })).toBeVisible()
@@ -129,17 +129,7 @@ function expectTourContract(run: TourRun, runId: string) {
 }
 
 async function createOrdinaryPlan(request: APIRequestContext, name: string): Promise<Plan> {
-  return apiJSON<Plan>(request, 'post', `/api/delivery/v1/projects/${projectId}/plans`, {
-    name,
-    objective: 'Reset isolation sentinel',
-    advertiser: { id: 'mock-advertiser-001', name: 'Mock advertiser', platform: 'ocean_engine' },
-    budget: { total_minor: 300000, currency: 'CNY' },
-    schedule: { start_at: '2026-08-12T00:00:00Z', end_at: '2026-08-26T00:00:00Z', timezone: 'Asia/Shanghai' },
-    tracking: { landing_page: 'https://example.test/sentinel', pixel_id: 'PX-SENTINEL', conversion_event: 'submit' },
-    creative_references: [{ asset_id: 'asset_demo_investor_creative_video', version: 1, confirmed: true }],
-    strategy_reference: { task_id: 'task_demo_precision_strategy', version: 1 },
-    source_strategy_version: 'v1',
-  }, 201)
+  return createRuntimePlan(request, projectId, `sentinel-${Date.now().toString(36)}-${name.length}`) as Promise<Plan>
 }
 
 async function apiJSON<T = unknown>(request: APIRequestContext, method: 'get' | 'post', url: string, data: unknown, status: number, headers?: Record<string, string>): Promise<T> {

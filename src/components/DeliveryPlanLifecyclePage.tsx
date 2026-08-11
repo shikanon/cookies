@@ -28,6 +28,8 @@ const scenarioLabels: Record<DeliveryScenario | 'unsaved_draft', string> = {
   orphan_dependency: '三层配置依赖缺失',
   missing_confirmation: '三层配置待人工确认',
   platform_fields_pending: '平台字段待人工填写',
+  platform_configuration: '平台配置',
+  capability_pending: '能力待补',
   preflight_failure: '预检失败演示',
   approval_expired: '审批过期演示',
   plan_stale: '计划版本过期演示',
@@ -50,6 +52,14 @@ const preflightCheckLabels: Record<DeliveryPreflightResult['checks'][number]['co
   three_tier_confirmation: '三层配置已人工确认',
   three_tier_platform_pending: '平台字段待人工填写',
   upstream_references_resolved: '策略任务与素材版本可追溯',
+  delivery_intent_valid: '业务意图有效',
+  platform_configuration_valid: '平台配置有效',
+  INVALID_STABLE_REFERENCE: '稳定引用无效',
+  CANONICAL_HASH_MISMATCH: '规范哈希不匹配',
+  CAPABILITY_PENDING: '平台能力待补',
+  platform_pending: '平台字段待补',
+  blocked_by_event_asset: '事件资产阻塞',
+  write_validation_pending: '真实写入待验证',
 }
 
 function scenarioMetadata(scenario: DeliveryScenario | 'unsaved_draft') {

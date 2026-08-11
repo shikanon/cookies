@@ -109,8 +109,14 @@ func TestApprovalActionHashBindsEveryApprovedActionField(t *testing.T) {
 		OrganizationID: "org_a", ProjectID: "project_a",
 		PlanID: "plan_a", PlanVersion: 2,
 		ChangeSetID: "change_a", ChangeSetVersion: 3,
-		PlanCanonicalHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Action:            ApprovalActionExecute, Scope: ApprovalScopeExecuteMock,
+		PlanCanonicalHash:          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		TargetSnapshotHash:         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		ConfigurationSchemaVersion: PlatformConfigurationSchemaV2, ConfigurationID: "configuration_a", ConfigurationVersion: 2,
+		ConfigurationPlatform: DeliveryPlatformOceanEngine, ConfigurationProfileVersion: OceanEngineConfigurationProfileV1,
+		ConfigurationCanonicalHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		IntentSchemaVersion:        DeliveryIntentSchemaV1, IntentID: "intent_a", IntentVersion: 2,
+		IntentCanonicalHash: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		Action:              ApprovalActionExecute, Scope: ApprovalScopeExecuteMock,
 		BudgetLimitMinor: 300000, Currency: "CNY",
 	}
 	baseHash, err := ApprovalActionHash(base)
@@ -129,6 +135,23 @@ func TestApprovalActionHashBindsEveryApprovedActionField(t *testing.T) {
 		{name: "change set version", mutate: func(value *DeliveryApproval) { value.ChangeSetVersion++ }},
 		{name: "plan hash", mutate: func(value *DeliveryApproval) {
 			value.PlanCanonicalHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		}},
+		{name: "target hash", mutate: func(value *DeliveryApproval) {
+			value.TargetSnapshotHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+		}},
+		{name: "configuration id", mutate: func(value *DeliveryApproval) { value.ConfigurationID = "configuration_b" }},
+		{name: "configuration version", mutate: func(value *DeliveryApproval) { value.ConfigurationVersion++ }},
+		{name: "configuration platform", mutate: func(value *DeliveryApproval) { value.ConfigurationPlatform = DeliveryPlatformMagneticEngine }},
+		{name: "configuration profile", mutate: func(value *DeliveryApproval) {
+			value.ConfigurationProfileVersion = MagneticEngineConfigurationProfileV1
+		}},
+		{name: "configuration hash", mutate: func(value *DeliveryApproval) {
+			value.ConfigurationCanonicalHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+		}},
+		{name: "intent id", mutate: func(value *DeliveryApproval) { value.IntentID = "intent_b" }},
+		{name: "intent version", mutate: func(value *DeliveryApproval) { value.IntentVersion++ }},
+		{name: "intent hash", mutate: func(value *DeliveryApproval) {
+			value.IntentCanonicalHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 		}},
 		{name: "action", mutate: func(value *DeliveryApproval) { value.Action = "pause" }},
 		{name: "scope", mutate: func(value *DeliveryApproval) { value.Scope = "execute_real" }},

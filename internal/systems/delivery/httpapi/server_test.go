@@ -24,8 +24,7 @@ func TestDeliveryHTTPExposesPlanAndControlledActions(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	request := authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/plans", `{
-		"creative_package_id":"creativepackage_1","name":"首轮投放","objective":"验证点击",
-		"budget_cents":10000,"start_at":"2026-07-25T00:00:00Z","end_at":"2026-07-26T00:00:00Z"
+		"intent":{},"platform_configuration":{}
 	}`)
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), "deliveryplan_1") {
@@ -45,6 +44,29 @@ func TestDeliveryHTTPMapsProjectIsolationDenial(t *testing.T) {
 	request := authenticatedRequest(http.MethodGet, "/api/delivery/v1/projects/project_other/plans/plan_1", "")
 	writeError(response, request, identity.ErrProjectAccessDenied)
 	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "PROJECT_ACCESS_DENIED") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestLegacyConfigurationWriteEndpointsAreStableReadOnlyFailures(t *testing.T) {
+	server := New(&applicationStub{})
+	for _, path := range []string{
+		"/api/delivery/v1/projects/project_1/plans/plan_1/configuration:compile",
+		"/api/delivery/v1/projects/project_1/plans/plan_1/configuration:override",
+	} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, authenticatedRequest(http.MethodPost, path, `{}`))
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "LEGACY_CONFIGURATION_UNSUPPORTED") {
+			t.Fatalf("path=%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestDeliveryHTTPMapsContractErrorsWithoutHidingTheStableCode(t *testing.T) {
+	response := httptest.NewRecorder()
+	request := authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/plans", `{}`)
+	writeError(response, request, &delivery.DeliveryContractError{Code: delivery.ContractErrorCanonicalHashMismatch, Field: "canonical_hash", Message: "mismatch"})
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), delivery.ContractErrorCanonicalHashMismatch) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

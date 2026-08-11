@@ -42,7 +42,7 @@ test('A03 审批绑定 Plan/ChangeSet/hash，计划变化后旧审批保留但�
     status: 'preflight_passed',
     plan_canonical_hash: planV1.current_version.canonical_hash,
     source: 'mock',
-    scenario: 'golden_path',
+    scenario: 'platform_configuration',
   })
 
   await page.goto(`/projects/${primaryProjectId}/delivery/approvals/${v1ChangeSet.id}`)
@@ -79,7 +79,7 @@ test('A03 审批绑定 Plan/ChangeSet/hash，计划变化后旧审批保留但�
     budget_limit_minor: 300000,
     currency: 'CNY',
     source: 'mock',
-    scenario: 'golden_path',
+    scenario: 'platform_configuration',
   })
   expect(new Date(approvedV1.approval!.expires_at).getTime() - new Date(approvedV1.approval!.approved_at).getTime()).toBe(24 * 60 * 60 * 1000)
   await expect(page.locator('.gate-row.passed')).toHaveCount(3)
@@ -173,7 +173,7 @@ test('A03 审批绑定 Plan/ChangeSet/hash，计划变化后旧审批保留但�
       plan_version: 2,
       plan_canonical_hash: planV2.current_version.canonical_hash,
       source: 'mock',
-      scenario: 'golden_path',
+      scenario: 'platform_configuration',
     },
   })
   await expect(page.getByRole('button', { name: '启动平台操作演练' })).toBeEnabled()

@@ -66,7 +66,7 @@ func TestApprovedRecommendationTargetBecomesANewPlanVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := DeliveryPlan{ID: "plan_1", OrganizationID: "org_1", ProjectID: "project_1", CurrentVersionNumber: 3, Version: 3, CurrentVersion: version}
-	changeSet := ChangeSet{PlanID: plan.ID, PlanVersion: 3, TargetSnapshot: target, TargetSnapshotHash: targetHash}
+	changeSet := ChangeSet{PlanID: plan.ID, PlanVersion: 3, LegacyTargetSnapshot: target, TargetSnapshotHash: targetHash}
 
 	optimized, replay, err := optimizedVersionFromChangeSet(plan, changeSet, contract.Principal{Kind: contract.PrincipalUser, ID: "user_1"}, now)
 	if err != nil || replay {
@@ -79,6 +79,32 @@ func TestApprovedRecommendationTargetBecomesANewPlanVersion(t *testing.T) {
 	got, replay, err := optimizedVersionFromChangeSet(plan, changeSet, contract.Principal{Kind: contract.PrincipalUser, ID: "user_1"}, now.Add(time.Hour))
 	if err != nil || !replay || got.VersionNumber != 4 {
 		t.Fatalf("materialization must be idempotent: got=%#v replay=%v err=%v", got, replay, err)
+	}
+}
+
+func TestApprovedPlatformConfigurationTargetBecomesANewPlanVersion(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	intent, configuration := readyOceanRuntimeInputs(t, 2)
+	version, err := newPlatformPlanVersion("plan_1", contract.ActorContext{OrganizationID: "org_a", Principal: contract.Principal{Kind: contract.PrincipalUser, ID: "user_1"}}, "project_a", 1, intent, configuration, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := cloneJSONPointer(version.PlatformConfiguration)
+	target.VersionNumber++
+	target.Payload.OceanEngine.Project.BudgetAndBidding.DailyBudgetMinor = 15000
+	target.CanonicalHash = ""
+	target, err = finalizeRecommendationConfiguration(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := DeliveryPlan{ID: "plan_1", OrganizationID: "org_a", ProjectID: "project_a", CurrentVersionNumber: 1, Version: 1, CurrentVersion: version}
+	changeSet := ChangeSet{PlanID: plan.ID, PlanVersion: 1, TargetSnapshot: target, TargetSnapshotHash: target.CanonicalHash}
+	optimized, replay, err := optimizedVersionFromChangeSet(plan, changeSet, contract.Principal{Kind: contract.PrincipalUser, ID: "user_1"}, now.Add(time.Hour))
+	if err != nil || replay {
+		t.Fatalf("optimized=%#v replay=%v err=%v", optimized, replay, err)
+	}
+	if optimized.VersionNumber != 2 || optimized.PlatformConfiguration.CanonicalHash != target.CanonicalHash || optimized.CanonicalHash != target.CanonicalHash {
+		t.Fatalf("typed target was not materialized exactly: %#v", optimized)
 	}
 }
 

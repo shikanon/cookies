@@ -8,6 +8,7 @@ import {
   type DeliveryControlChangeSet,
   type DeliveryFieldValue,
   type DeliveryPlan,
+  type PlatformConfiguration,
   type DeliveryThreeTierField,
   type ManualActionPackage,
 } from '../api/delivery'
@@ -26,6 +27,30 @@ function formatCny(value: number) {
 
 function formatTime(value?: string) {
   return value ? new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }) : '尚无记录'
+}
+
+function formatDate(value?: string) {
+  return value ? new Date(value).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', year: 'numeric' }) : '待设置'
+}
+
+function platformFieldLabel(value: string) {
+  return ({
+    ecommerce: '商品成交',
+    lead_generation: '销售线索',
+    brand_awareness: '品牌曝光',
+    manual_delivery: '手动投放',
+    manual: '手动配置',
+    manual_bid: '手动出价',
+    auto_bid: '自动出价',
+    landing_page: '落地页承接',
+    CPC: '按点击计费',
+    CPM: '按展示计费',
+    OCPM: '按优化目标计费',
+    resolved: '已关联',
+    unresolved: '待补充',
+    blocked: '暂不可用',
+    redacted: '信息已隐藏',
+  } as Record<string, string>)[value] ?? value
 }
 
 function valueText(value: DeliveryFieldValue | undefined) {
@@ -155,6 +180,7 @@ function ManualPackageDetails({ value }: { value: ManualActionPackage }) {
       <div>
         <b>操作包已就绪</b>
         <span title={`source=${value.source} · scenario=${value.scenario} · hash=${value.optimizedPlanHash}`}>生成于 {formatTime(value.generatedAt)} · 已物化优化计划 V{value.optimizedPlanVersion}</span>
+        {value.configuration && value.intent ? <span>配置 {value.configuration.id} V{value.configuration.version} · Intent {value.intent.id} V{value.intent.version}</span> : null}
       </div>
       <strong>仅供人工执行</strong>
     </header>
@@ -178,11 +204,13 @@ function TierObject({
   object,
   location,
   onOverride,
+  readOnly,
 }: {
   type: TierObjectType
   object: { id: string; label: string; fields: DeliveryThreeTierField[] }
   location?: Omit<NonNullable<OverrideTarget>, 'field'>
   onOverride: (target: NonNullable<OverrideTarget>) => void
+  readOnly?: boolean
 }) {
   return <section className={`delivery-config-tier-object delivery-config-tier-object--${type}`}>
     <header><span>{type === 'group' ? '广告组' : type === 'plan' ? '广告计划' : '广告创意'}</span><h4>{object.label}</h4></header>
@@ -194,7 +222,7 @@ function TierObject({
           <span>{field.mockRequired ? '当前必填' : '当前可选'}</span>
           <span className={field.confirmation?.required ? 'delivery-config-required' : ''}>{field.confirmation?.required ? '待人工确认' : '已确认'}</span>
           <span>{field.editable ? '可人工覆盖' : '已锁定'}</span>
-          {field.editable && location ? <button onClick={() => onOverride({ ...location, field })}><SlidersHorizontal size={14}/>人工覆盖</button> : null}
+          {field.editable && location && !readOnly ? <button onClick={() => onOverride({ ...location, field })}><SlidersHorizontal size={14}/>人工覆盖</button> : null}
         </div>
         <details><summary>来源、依赖与风险</summary><dl>
           <div><dt>建议值</dt><dd>{valueText(field.recommendedValue)}</dd></div>
@@ -209,6 +237,44 @@ function TierObject({
       </article>)}
     </div> : <p className="delivery-config-empty-inline">该层暂无可显示字段。</p>}
   </section>
+}
+
+function PlatformConfigurationDetails({ value }: { value: PlatformConfiguration }) {
+  if (value.platform === 'magnetic_engine') {
+    return <div className="delivery-config-empty-inline"><CircleAlert size={18}/><div><b>磁力引擎 · CAPABILITY_PENDING</b><p>{value.payload.magnetic_engine?.reason}</p></div></div>
+  }
+  const ocean = value.payload.ocean_engine
+  if (!ocean?.project) return <div className="delivery-config-empty-inline"><CircleAlert size={18}/>巨量引擎配置缺少唯一 Project。</div>
+  const project = ocean.project
+  return <div className="delivery-config-business-map">
+    <section className="delivery-config-project-card">
+      <header>
+        <div><span className="delivery-config-eyebrow">主投放项目</span><h4>{project.project_name}</h4><p>预算、排期和营销目标将在此项目下统一生效。</p></div>
+        <strong className="delivery-config-ready-state">配置已就绪</strong>
+      </header>
+      <dl className="delivery-config-project-facts">
+        <div><dt>营销目标</dt><dd>{platformFieldLabel(project.marketing_purpose)}</dd><small>{platformFieldLabel(project.marketing_scenario)}</small></div>
+        <div><dt>每日预算</dt><dd>{formatCny(project.budget_and_bidding.daily_budget_minor)}</dd><small>{platformFieldLabel(project.budget_and_bidding.bidding_strategy)} · {platformFieldLabel(project.budget_and_bidding.charging_mode)}</small></div>
+        <div><dt>投放时间</dt><dd>{formatDate(project.schedule.start_at)} — {formatDate(project.schedule.end_at)}</dd><small>{project.schedule.timezone}</small></div>
+        <div><dt>广告账户</dt><dd>{project.account_reference.display_name_snapshot || '已选择广告账户'}</dd><small>{platformFieldLabel(project.account_reference.state)}</small></div>
+      </dl>
+      <details className="delivery-config-technical-details"><summary>查看项目技术信息</summary><dl>
+        <div><dt>项目草稿 ID</dt><dd>{project.project_draft_id}</dd></div>
+        <div><dt>账户引用</dt><dd>{project.account_reference.id ?? '尚未解析'}</dd></div>
+        <div><dt>承接方式</dt><dd>{project.carrier}</dd></div>
+        <div><dt>投放模式</dt><dd>{project.delivery_mode}</dd></div>
+      </dl></details>
+    </section>
+
+    <section className="delivery-config-promotion-section">
+      <header><div><span className="delivery-config-eyebrow">推广单元</span><h4>素材与文案组合</h4><p>每个推广单元均归属于上方同一个投放项目。</p></div><strong>{ocean.promotions.length} 个</strong></header>
+      {ocean.promotions.length ? <div className="delivery-config-promotion-grid">{ocean.promotions.map((promotion, index) => <article key={promotion.promotion_draft_id}>
+        <header><span>推广单元 {index + 1}</span><h5>{promotion.promotion_name}</h5></header>
+        <dl><div><dt>素材</dt><dd>{promotion.base_material_references.length} 个</dd></div><div><dt>文案</dt><dd>{promotion.copy_items.length} 条</dd></div><div><dt>落地页</dt><dd>{promotion.landing_page_reference ? '已关联' : '未关联'}</dd></div></dl>
+        <details className="delivery-config-technical-details"><summary>查看单元技术信息</summary><p>{promotion.promotion_draft_id}</p></details>
+      </article>)}</div> : <div className="delivery-config-empty-inline">暂未添加推广单元。你仍可保存项目，之后再从投放计划中补充素材与文案。</div>}
+    </section>
+  </div>
 }
 
 export function DeliveryThreeTierPage({ state, activeView, tourRunId, tourCase }: { state: DataState; activeView: string; tourRunId?: string; tourCase?: string }) {
@@ -228,6 +294,8 @@ export function DeliveryThreeTierPage({ state, activeView, tourRunId, tourCase }
 
   const selectedPlan = useMemo(() => plans.find(plan => plan.id === selectedId), [plans, selectedId])
   const configuration = selectedPlan?.currentVersion.threeTierConfiguration
+  const platformConfiguration = selectedPlan?.currentVersion.platformConfiguration
+  const legacyReadOnly = Boolean(selectedPlan && !platformConfiguration)
   const showConfiguration = activeView === '配置映射'
   const showPreflight = activeView === '检查与提交'
   const showManualPackage = activeView === '人工操作包'
@@ -374,7 +442,7 @@ export function DeliveryThreeTierPage({ state, activeView, tourRunId, tourCase }
   return <StateBoundary state={state} contextLabel="智能投放 / 内部配置编排" errorDetail="当前 Project 的内部投放配置无法读取，请确认 Delivery 服务可用后刷新。">
     <div className="delivery-config-workspace">
       <header className="delivery-config-heading">
-        <div><span className="section-label">投放配置</span><h2>广告组、广告计划与广告创意配置</h2><p>三个对象并列配置；通常按广告组、广告计划、广告创意的顺序填写。</p></div>
+        <div><span className="section-label">投放配置</span><h2>平台投放配置</h2><p>核对当前计划将如何落到广告平台。需要调整营销目标、预算、排期或素材时，请返回投放计划编辑。</p></div>
         <div className="delivery-config-source"><button onClick={() => void refresh()} disabled={busy}><RefreshCw size={14}/>刷新当前 Project</button></div>
       </header>
 
@@ -382,21 +450,21 @@ export function DeliveryThreeTierPage({ state, activeView, tourRunId, tourCase }
         <label>投放计划<select value={selectedId} onChange={event => setSelectedId(event.target.value)}>{plans.map(plan => <option value={plan.id} key={plan.id}>{plan.currentVersion.name} · V{plan.currentVersionNumber}</option>)}</select></label>
         {showConfiguration ? <>
           <a className="secondary-button" href={selectedPlanEditorURL}>在投放计划中查看</a>
-          <button className="primary-button" onClick={() => void compile()} disabled={busy || !selectedPlan}><Send size={15}/>编译三层配置</button>
+          {legacyReadOnly ? <span className="delivery-config-view-context">这是旧版只读配置，如需调整请新建投放计划。</span> : <span className="delivery-config-view-context">平台配置会随计划版本自动保存；修改内容请返回投放计划。</span>}
         </> : <span className="delivery-config-view-context">当前视图沿用所选计划，不会重复创建任务。</span>}
       </section>
 
-      <dl className="delivery-config-runtime" aria-label="投放平台与配置编译器">
-        <div><dt>投放平台</dt><dd>巨量引擎</dd></div>
-        <div><dt>配置编译器</dt><dd>巨量内部配置 v1 <small>当前固定；平台字段校准后再开放适配器选择</small></dd></div>
+      <dl className="delivery-config-runtime" aria-label="投放平台与配置状态">
+        <div><dt>投放平台</dt><dd>{platformConfiguration?.platform === 'magnetic_engine' ? '磁力引擎' : '巨量引擎'}</dd></div>
+        <div><dt>配置状态</dt><dd>{platformConfiguration ? '已生成，可进入检查' : configuration ? '历史版本，仅供查看' : '待生成'}</dd></div>
       </dl>
 
       {!selectedPlan ? <div className="panel-empty">当前 Project 尚无投放计划。<a href={planEditorBaseURL}>前往投放计划创建</a>，保存后再返回编译配置。</div> : <>
         {showConfiguration ? <section className="delivery-config-config-card">
-          <header><div><span>当前计划 V{selectedPlan.currentVersionNumber}</span><h3>{selectedPlan.currentVersion.name}</h3><p>预算 {formatCny(selectedPlan.currentVersion.budget.totalMinor)} · 更新时间 {formatTime(selectedPlan.updatedAt)}</p></div><div className="delivery-config-contract"><b>{configuration ? '已编译' : '待编译'}</b><span>{configuration ? `生成于 ${formatTime(configuration.generatedAt)}` : '请先服务端编译配置'}</span></div></header>
-          {configuration ? <><div className="delivery-config-config-meta"><span>schema={configuration.schema}</span><span>source={configuration.source}</span><span>scenario={configuration.scenario}</span><span>证据 {configuration.evidenceRefs.length} 条</span></div>
-            <div className="delivery-config-tier-tree">{configuration.groups.map(group => <div key={group.id}><TierObject type="group" object={group} onOverride={selectOverride}/>{group.plans.map(plan => <div className="delivery-config-tier-indent" key={plan.id}><TierObject type="plan" object={plan} onOverride={selectOverride}/>{plan.creatives.map(creative => <div className="delivery-config-tier-indent" key={creative.id}><TierObject type="creative" object={creative} location={{ groupId: group.id, planId: plan.id, creativeId: creative.id }} onOverride={selectOverride}/></div>)}</div>)}</div>)}</div>
-          </> : <div className="delivery-config-empty-inline"><CircleAlert size={18}/>服务端尚未生成配置。请先完成策略与素材引用，再编译内部配置。</div>}
+          <header><div><span>当前计划 V{selectedPlan.currentVersionNumber}</span><h3>{selectedPlan.currentVersion.name}</h3><p>计划总预算 {formatCny(selectedPlan.currentVersion.budget.totalMinor)} · 更新于 {formatTime(selectedPlan.updatedAt)}</p></div><div className="delivery-config-contract"><b>{platformConfiguration ? '配置已就绪' : configuration ? '旧版只读' : '无可读配置'}</b><span>{platformConfiguration ? '内容已按当前计划版本锁定' : configuration ? `生成于 ${formatTime(configuration.generatedAt)}` : '请在投放计划中创建新业务意图'}</span></div></header>
+          {platformConfiguration ? <><details className="delivery-config-config-meta"><summary>查看技术信息</summary><div><span>schema={platformConfiguration.schema_version}</span><span>platform={platformConfiguration.platform}</span><span>profile={platformConfiguration.profile_version}</span><span>Intent V{selectedPlan.currentVersion.deliveryIntent?.version_number}</span><span>hash={platformConfiguration.canonical_hash?.slice(0, 12) ?? selectedPlan.currentVersion.canonicalHash.slice(0, 12)}…</span></div></details><PlatformConfigurationDetails value={platformConfiguration}/></> : configuration ? <><div className="delivery-config-config-meta"><span>schema={configuration.schema}</span><span>source={configuration.source}</span><span>scenario={configuration.scenario}</span><span>只读历史</span></div>
+            <div className="delivery-config-tier-tree">{configuration.groups.map(group => <div key={group.id}><TierObject type="group" object={group} onOverride={selectOverride} readOnly/>{group.plans.map(plan => <div className="delivery-config-tier-indent" key={plan.id}><TierObject type="plan" object={plan} onOverride={selectOverride} readOnly/>{plan.creatives.map(creative => <div className="delivery-config-tier-indent" key={creative.id}><TierObject type="creative" object={creative} location={{ groupId: group.id, planId: plan.id, creativeId: creative.id }} onOverride={selectOverride} readOnly/></div>)}</div>)}</div>)}</div>
+          </> : <div className="delivery-config-empty-inline"><CircleAlert size={18}/>没有可写的平台配置。请返回投放计划创建新的 DeliveryIntent 版本。</div>}
         </section> : null}
 
         {showPreflight ? <section className="delivery-config-flow-grid delivery-config-flow-grid--preflight">

@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shikanon/cookies/docs/delivery/schemas/delivery-platform-configuration-v2.json",
+  "title": "Tagged platform configuration envelope v2",
+  "description": "A DeliveryIntent-bound tagged platform configuration. canonical_hash uses RFC 8785 JCS + SHA-256 over schema_version, platform, profile_version, the intent identity/version/hash binding, payload.profile, and the selected platform profile after excluding stable-reference display/evidence metadata. OceanEngine uses one Project plus zero or more Promotions. Magnetic Engine exposes only capability_pending until verified evidence exists.",
+  "$ref": "#/$defs/PlatformConfiguration",
+  "$defs": {
+    "StableReference": {
+      "$ref": "delivery-intent-v1.json#/$defs/StableReference"
+    },
+    "ConfigurationProvenance": {
+      "$ref": "delivery-intent-v1.json#/$defs/ConfigurationProvenance"
+    },
+    "FactProvenance": {
+      "$ref": "delivery-intent-v1.json#/$defs/FactProvenance"
+    },
+    "AuditMetadata": {
+      "$ref": "delivery-intent-v1.json#/$defs/AuditMetadata"
+    },
+    "IntentBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "intent_id", "version_number", "canonical_hash"],
+      "properties": {
+        "schema_version": { "const": "delivery-intent/v1" },
+        "intent_id": { "type": "string", "minLength": 1 },
+        "version_number": { "type": "integer", "minimum": 1 },
+        "canonical_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "PlatformFieldEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "state"],
+      "properties": {
+        "field": { "type": "string", "minLength": 1 },
+        "state": {
+          "type": "string",
+          "enum": [
+            "observed",
+            "sample_only",
+            "operator_reviewed",
+            "platform_pending",
+            "blocked_by_event_asset",
+            "write_validation_pending"
+          ]
+        },
+        "reason": { "type": "string" }
+      }
+    },
+    "CompilationMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "field_evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PlatformFieldEvidence" }
+        },
+        "steps": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "OceanEngineTargeting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["smart_expansion"],
+      "properties": {
+        "audience_package_reference": { "$ref": "#/$defs/StableReference" },
+        "regions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "age_ranges": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "gender": { "type": "string" },
+        "smart_expansion": { "type": "boolean" }
+      }
+    },
+    "OceanEngineSchedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_at", "end_at", "timezone"],
+      "properties": {
+        "start_at": { "type": "string", "format": "date-time" },
+        "end_at": { "type": "string", "format": "date-time" },
+        "timezone": { "type": "string", "minLength": 1 }
+      }
+    },
+    "OceanEngineBudgetAndBidding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "daily_budget_minor", "bidding_strategy", "charging_mode"],
+      "properties": {
+        "currency": { "type": "string", "minLength": 1 },
+        "daily_budget_minor": { "type": "integer", "minimum": 0 },
+        "bidding_strategy": { "type": "string", "minLength": 1 },
+        "charging_mode": { "type": "string", "minLength": 1 },
+        "bid_minor": { "type": "integer", "minimum": 0 },
+        "roi_coefficient": { "type": "number", "minimum": 0 }
+      },
+      "oneOf": [
+        {
+          "properties": { "bid_minor": true },
+          "required": ["bid_minor"],
+          "not": {
+            "properties": { "roi_coefficient": true },
+            "required": ["roi_coefficient"]
+          }
+        },
+        {
+          "properties": { "roi_coefficient": true },
+          "required": ["roi_coefficient"],
+          "not": {
+            "properties": { "bid_minor": true },
+            "required": ["bid_minor"]
+          }
+        }
+      ]
+    },
+    "OceanEngineProjectDraft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "draft_schema_version",
+        "project_draft_id",
+        "account_reference",
+        "marketing_purpose",
+        "marketing_scenario",
+        "carrier",
+        "delivery_mode",
+        "targeting",
+        "schedule",
+        "budget_and_bidding",
+        "project_name"
+      ],
+      "properties": {
+        "draft_schema_version": { "const": "oceanengine-configuration/v1" },
+        "project_draft_id": { "type": "string", "minLength": 1 },
+        "account_reference": { "$ref": "#/$defs/StableReference" },
+        "marketing_purpose": { "type": "string", "minLength": 1 },
+        "marketing_scenario": { "type": "string", "minLength": 1 },
+        "marketing_product_reference": { "$ref": "#/$defs/StableReference" },
+        "application_reference": { "$ref": "#/$defs/StableReference" },
+        "carrier": { "type": "string", "minLength": 1 },
+        "optimization_target_reference": { "$ref": "#/$defs/StableReference" },
+        "deep_optimization_mode": { "type": "string" },
+        "delivery_mode": { "type": "string", "minLength": 1 },
+        "targeting": { "$ref": "#/$defs/OceanEngineTargeting" },
+        "schedule": { "$ref": "#/$defs/OceanEngineSchedule" },
+        "budget_and_bidding": { "$ref": "#/$defs/OceanEngineBudgetAndBidding" },
+        "monitoring_references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StableReference" }
+        },
+        "project_name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "OceanEngineDeliveryIdentity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "const": "account_info" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "authorized_identity"],
+          "properties": {
+            "mode": { "const": "douyin_account" },
+            "authorized_identity": { "$ref": "#/$defs/StableReference" }
+          }
+        }
+      ]
+    },
+    "OceanEngineCopyItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": { "text": { "type": "string", "minLength": 1 } }
+    },
+    "OceanEnginePromotionSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "call_to_action": { "type": "string" },
+        "source_label": { "type": "string" },
+        "comments_enabled": { "type": "boolean" },
+        "category_reference": { "$ref": "#/$defs/StableReference" },
+        "brand_reference": { "$ref": "#/$defs/StableReference" }
+      }
+    },
+    "OceanEnginePromotionDraft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "draft_schema_version",
+        "promotion_draft_id",
+        "delivery_identity",
+        "base_material_references",
+        "copy_items",
+        "settings",
+        "promotion_name"
+      ],
+      "properties": {
+        "draft_schema_version": { "const": "oceanengine-configuration/v1" },
+        "promotion_draft_id": { "type": "string", "minLength": 1 },
+        "delivery_identity": { "$ref": "#/$defs/OceanEngineDeliveryIdentity" },
+        "base_material_references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StableReference" }
+        },
+        "copy_items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/OceanEngineCopyItem" }
+        },
+        "native_anchor_reference": { "$ref": "#/$defs/StableReference" },
+        "landing_page_reference": { "$ref": "#/$defs/StableReference" },
+        "direct_link_reference": { "$ref": "#/$defs/StableReference" },
+        "product_reference": { "$ref": "#/$defs/StableReference" },
+        "creative_component_references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StableReference" }
+        },
+        "settings": { "$ref": "#/$defs/OceanEnginePromotionSettings" },
+        "promotion_name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "OceanEngineConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "project", "promotions"],
+      "properties": {
+        "profile": { "const": "ocean_engine" },
+        "project": { "$ref": "#/$defs/OceanEngineProjectDraft" },
+        "promotions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/OceanEnginePromotionDraft" }
+        }
+      }
+    },
+    "OceanEnginePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "ocean_engine"],
+      "properties": {
+        "profile": { "const": "ocean_engine" },
+        "ocean_engine": { "$ref": "#/$defs/OceanEngineConfiguration" }
+      }
+    },
+    "MagneticEngineConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "status", "reason_code", "reason"],
+      "properties": {
+        "profile": { "const": "magnetic_engine" },
+        "status": { "const": "capability_pending" },
+        "reason_code": { "const": "CAPABILITY_PENDING" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "MagneticEnginePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "magnetic_engine"],
+      "properties": {
+        "profile": { "const": "magnetic_engine" },
+        "magnetic_engine": { "$ref": "#/$defs/MagneticEngineConfiguration" }
+      }
+    },
+    "PlatformConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "configuration_id",
+        "version_number",
+        "platform",
+        "profile_version",
+        "intent",
+        "hash_algorithm",
+        "canonical_hash",
+        "payload",
+        "configuration_provenance",
+        "fact_provenance",
+        "audit",
+        "compilation_metadata"
+      ],
+      "properties": {
+        "schema_version": { "const": "delivery-platform-configuration/v2" },
+        "configuration_id": { "type": "string", "minLength": 1 },
+        "version_number": { "type": "integer", "minimum": 1 },
+        "platform": { "type": "string", "enum": ["ocean_engine", "magnetic_engine"] },
+        "profile_version": {
+          "type": "string",
+          "enum": ["oceanengine-configuration/v1", "magnetic-engine-configuration/v1"]
+        },
+        "intent": { "$ref": "#/$defs/IntentBinding" },
+        "hash_algorithm": { "const": "RFC8785-JCS-SHA256(canonical_payload)" },
+        "canonical_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "payload": {
+          "oneOf": [
+            { "$ref": "#/$defs/OceanEnginePayload" },
+            { "$ref": "#/$defs/MagneticEnginePayload" }
+          ]
+        },
+        "configuration_provenance": { "$ref": "#/$defs/ConfigurationProvenance" },
+        "fact_provenance": { "$ref": "#/$defs/FactProvenance" },
+        "audit": { "$ref": "#/$defs/AuditMetadata" },
+        "compilation_metadata": { "$ref": "#/$defs/CompilationMetadata" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "platform": { "const": "ocean_engine" } },
+            "required": ["platform"]
+          },
+          "then": {
+            "properties": {
+              "profile_version": { "const": "oceanengine-configuration/v1" },
+              "payload": { "$ref": "#/$defs/OceanEnginePayload" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "platform": { "const": "magnetic_engine" } },
+            "required": ["platform"]
+          },
+          "then": {
+            "properties": {
+              "profile_version": { "const": "magnetic-engine-configuration/v1" },
+              "payload": { "$ref": "#/$defs/MagneticEnginePayload" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

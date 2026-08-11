@@ -1,0 +1,169 @@
+{
+  "schema_version": "delivery-platform-configuration/v2",
+  "configuration_id": "ocean-config-ecommerce-1",
+  "version_number": 1,
+  "platform": "ocean_engine",
+  "profile_version": "oceanengine-configuration/v1",
+  "intent": {
+    "schema_version": "delivery-intent/v1",
+    "intent_id": "intent-ecommerce-1",
+    "version_number": 1,
+    "canonical_hash": "706500a701bdb01065dff277c269b048b2071df6da53ea5602c174c79655b0c5"
+  },
+  "hash_algorithm": "RFC8785-JCS-SHA256(canonical_payload)",
+  "canonical_hash": "bba8f42fe0668070d208b7816b5f00f0dd43cefdbc31b582cfba367cd46adf2a",
+  "payload": {
+    "profile": "ocean_engine",
+    "ocean_engine": {
+      "profile": "ocean_engine",
+      "project": {
+        "draft_schema_version": "oceanengine-configuration/v1",
+        "project_draft_id": "project-draft-1",
+        "account_reference": {
+          "namespace": "oceanengine",
+          "object_kind": "account",
+          "scope": "account:6391",
+          "id": "account-6391",
+          "version": "v1",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "resolved",
+          "display_name_snapshot": "example account"
+        },
+        "marketing_purpose": "ecommerce",
+        "marketing_scenario": "short_video_image_text",
+        "marketing_product_reference": {
+          "namespace": "oceanengine",
+          "object_kind": "product",
+          "scope": "account:6391",
+          "id": "product-1",
+          "version": "v1",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "resolved"
+        },
+        "carrier": "orange_landing_page",
+        "optimization_target_reference": {
+          "namespace": "oceanengine",
+          "object_kind": "optimization_target",
+          "scope": "account:6391",
+          "state": "unresolved",
+          "reason": "platform target id is pending"
+        },
+        "delivery_mode": "manual",
+        "targeting": {
+          "regions": ["CN"],
+          "age_ranges": ["18-60"],
+          "smart_expansion": false
+        },
+        "schedule": {
+          "start_at": "2026-08-11T00:00:00+08:00",
+          "end_at": "2026-08-31T23:59:59+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "budget_and_bidding": {
+          "currency": "CNY",
+          "daily_budget_minor": 30000,
+          "bidding_strategy": "stable_cost",
+          "charging_mode": "CPC",
+          "bid_minor": 100
+        },
+        "project_name": "ecommerce-manual-project"
+      },
+      "promotions": [
+        {
+          "draft_schema_version": "oceanengine-configuration/v1",
+          "promotion_draft_id": "promotion-1",
+          "delivery_identity": { "mode": "account_info" },
+          "base_material_references": [
+            {
+              "namespace": "cookies",
+              "object_kind": "asset_version",
+              "scope": "project:project-1",
+              "id": "asset-1:v1",
+              "version": "v1",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "state": "resolved"
+            }
+          ],
+          "copy_items": [{ "text": "verified ecommerce copy" }],
+          "landing_page_reference": {
+            "namespace": "oceanengine",
+            "object_kind": "landing_page",
+            "scope": "account:6391",
+            "state": "unresolved",
+            "reason": "page selection is pending"
+          },
+          "product_reference": {
+            "namespace": "oceanengine",
+            "object_kind": "product",
+            "scope": "account:6391",
+            "id": "product-1",
+            "version": "v1",
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "state": "resolved"
+          },
+          "settings": {
+            "call_to_action": "platform_pending",
+            "source_label": "ecommerce",
+            "comments_enabled": true
+          },
+          "promotion_name": "ecommerce-promotion-1"
+        },
+        {
+          "draft_schema_version": "oceanengine-configuration/v1",
+          "promotion_draft_id": "promotion-2",
+          "delivery_identity": {
+            "mode": "douyin_account",
+            "authorized_identity": {
+              "namespace": "oceanengine",
+              "object_kind": "authorized_identity",
+              "scope": "account:6391",
+              "state": "blocked",
+              "reason": "identity authorization awaits operator review"
+            }
+          },
+          "base_material_references": [
+            {
+              "namespace": "cookies",
+              "object_kind": "asset_version",
+              "scope": "project:project-1",
+              "id": "asset-1:v1",
+              "version": "v1",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "state": "resolved"
+            }
+          ],
+          "copy_items": [{ "text": "alternate verified copy" }],
+          "settings": { "source_label": "ecommerce" },
+          "promotion_name": "ecommerce-promotion-2"
+        }
+      ]
+    }
+  },
+  "configuration_provenance": {
+    "kind": "rule",
+    "generator_ref": "delivery-policy",
+    "policy_version": "v1"
+  },
+  "fact_provenance": {
+    "source": "replay",
+    "snapshot_ref": "replay://ocean-config-ecommerce-1",
+    "evidence_refs": ["evidence://ocean-config-ecommerce-1"],
+    "observed_at": "2026-08-10T09:30:00Z"
+  },
+  "audit": {
+    "created_by": "user-1",
+    "created_at": "2026-08-10T10:00:00Z"
+  },
+  "compilation_metadata": {
+    "field_evidence": [
+      { "field": "project.carrier", "state": "observed" },
+      {
+        "field": "project.optimization_target_reference",
+        "state": "platform_pending",
+        "reason": "stable target id unavailable"
+      }
+    ],
+    "steps": ["bind intent", "compile OceanEngine profile"],
+    "evidence_refs": ["page://oceanengine/ecommerce-manual"]
+  }
+}

@@ -22,6 +22,12 @@ func nullableString(v string) any {
 	}
 	return v
 }
+func nullablePositiveInt(v int) any {
+	if v < 1 {
+		return nil
+	}
+	return v
+}
 func nullableJSON(v any) any {
 	if v == nil || (reflect.ValueOf(v).Kind() == reflect.Pointer && reflect.ValueOf(v).IsNil()) {
 		return nil
@@ -115,13 +121,14 @@ func (r MySQLRepository) UpdatePlan(ctx context.Context, organizationID contract
 	if err := insertPlanVersion(ctx, tx, version); err != nil {
 		return DeliveryPlan{}, err
 	}
+	startAt, endAt := versionSchedule(version)
 	result, err := tx.ExecContext(ctx, `UPDATE delivery_plans SET
 		creative_package_id = ?, creative_package_hash = ?, creative_version_id = ?,
 		name = ?, objective = ?, budget_cents = ?, start_at = ?, end_at = ?,
 		version = ?, source = ?, scenario = ?, current_version = ?, updated_at = ?
 		WHERE organization_id = ? AND project_id = ? AND id = ? AND current_version = ?`,
 		firstCreativeID(version), firstCreativeHash(version), firstCreativeVersion(version),
-		version.Name, version.Objective, version.Budget.TotalMinor, version.Schedule.StartAt, version.Schedule.EndAt,
+		versionName(version), versionObjective(version), versionBudget(version).TotalMinor, startAt, endAt,
 		version.VersionNumber, version.Source, version.Scenario, version.VersionNumber, version.CreatedAt,
 		organizationID, projectID, id, expectedVersion)
 	if err != nil {
@@ -193,22 +200,73 @@ func (r MySQLRepository) hydratePlan(ctx context.Context, value *DeliveryPlan) e
 	return nil
 }
 
-type execContexter interface {
+type planVersionExecutor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func insertPlanVersion(ctx context.Context, executor execContexter, version DeliveryPlanVersion) error {
+func insertPlanVersion(ctx context.Context, executor planVersionExecutor, version DeliveryPlanVersion) error {
+	if version.IsPlatformConfigurationV2() {
+		intentJSON, err := json.Marshal(version.DeliveryIntent)
+		if err != nil {
+			return err
+		}
+		configurationJSON, err := json.Marshal(version.PlatformConfiguration)
+		if err != nil {
+			return err
+		}
+		intent := version.DeliveryIntent
+		if _, err := executor.ExecContext(ctx, `INSERT INTO delivery_intents (
+			organization_id, project_id, intent_id, version_number, schema_version, canonical_hash, hash_algorithm, intent_json, created_by, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE intent_id=VALUES(intent_id)`, version.OrganizationID, version.ProjectID, intent.IntentID, intent.VersionNumber, intent.SchemaVersion, intent.CanonicalHash, intent.HashAlgorithm, intentJSON, version.CreatedBy.ID, version.CreatedAt); err != nil {
+			return err
+		}
+		var storedIntentSchema, storedIntentHash, storedIntentAlgorithm string
+		var storedIntentJSON []byte
+		if err := executor.QueryRowContext(ctx, `SELECT schema_version,canonical_hash,hash_algorithm,intent_json FROM delivery_intents WHERE organization_id=? AND project_id=? AND intent_id=? AND version_number=?`, version.OrganizationID, version.ProjectID, intent.IntentID, intent.VersionNumber).Scan(&storedIntentSchema, &storedIntentHash, &storedIntentAlgorithm, &storedIntentJSON); err != nil {
+			return err
+		}
+		if storedIntentSchema != intent.SchemaVersion || storedIntentHash != intent.CanonicalHash || storedIntentAlgorithm != intent.HashAlgorithm || !equalJSONDocuments(storedIntentJSON, intentJSON) {
+			return fmt.Errorf("delivery intent immutable identity conflict")
+		}
+		configuration := version.PlatformConfiguration
+		if _, err := executor.ExecContext(ctx, `INSERT INTO delivery_platform_configurations (
+			organization_id, project_id, configuration_id, version_number, schema_version, platform, profile_version,
+			intent_id, intent_version, intent_canonical_hash, canonical_hash, hash_algorithm, configuration_json, created_by, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE configuration_id=VALUES(configuration_id)`, version.OrganizationID, version.ProjectID, configuration.ConfigurationID, configuration.VersionNumber, configuration.SchemaVersion, configuration.Platform, configuration.ProfileVersion, configuration.Intent.IntentID, configuration.Intent.VersionNumber, configuration.Intent.CanonicalHash, configuration.CanonicalHash, configuration.HashAlgorithm, configurationJSON, version.CreatedBy.ID, version.CreatedAt); err != nil {
+			return err
+		}
+		var storedConfigurationSchema, storedPlatform, storedProfile, storedConfigurationIntentID, storedConfigurationIntentHash, storedConfigurationHash, storedConfigurationAlgorithm string
+		var storedIntentVersion int
+		var storedConfigurationJSON []byte
+		if err := executor.QueryRowContext(ctx, `SELECT schema_version,platform,profile_version,intent_id,intent_version,intent_canonical_hash,canonical_hash,hash_algorithm,configuration_json FROM delivery_platform_configurations WHERE organization_id=? AND project_id=? AND configuration_id=? AND version_number=?`, version.OrganizationID, version.ProjectID, configuration.ConfigurationID, configuration.VersionNumber).Scan(&storedConfigurationSchema, &storedPlatform, &storedProfile, &storedConfigurationIntentID, &storedIntentVersion, &storedConfigurationIntentHash, &storedConfigurationHash, &storedConfigurationAlgorithm, &storedConfigurationJSON); err != nil {
+			return err
+		}
+		if storedConfigurationSchema != configuration.SchemaVersion || storedPlatform != string(configuration.Platform) || storedProfile != configuration.ProfileVersion || storedConfigurationIntentID != configuration.Intent.IntentID || storedIntentVersion != configuration.Intent.VersionNumber || storedConfigurationIntentHash != configuration.Intent.CanonicalHash || storedConfigurationHash != configuration.CanonicalHash || storedConfigurationAlgorithm != configuration.HashAlgorithm || !equalJSONDocuments(storedConfigurationJSON, configurationJSON) {
+			return fmt.Errorf("delivery platform configuration immutable identity conflict")
+		}
+	}
 	payload, err := json.Marshal(version)
 	if err != nil {
 		return err
 	}
 	_, err = executor.ExecContext(ctx, `INSERT INTO delivery_plan_versions (
-		organization_id, project_id, plan_id, version_number, config_json, canonical_hash, source, scenario,
+		organization_id, project_id, plan_id, version_number, config_json, canonical_hash, payload_schema_version, source, scenario,
 		created_by_kind, created_by_id, created_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		version.OrganizationID, version.ProjectID, version.PlanID, version.VersionNumber, payload,
-		version.CanonicalHash, version.Source, version.Scenario, version.CreatedBy.Kind, version.CreatedBy.ID, version.CreatedAt)
+		version.CanonicalHash, nullableString(version.SchemaVersion), version.Source, version.Scenario, version.CreatedBy.Kind, version.CreatedBy.ID, version.CreatedAt)
 	return err
+}
+
+func equalJSONDocuments(left, right []byte) bool {
+	var leftValue, rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
 }
 
 func decodePlanVersion(payload []byte, canonicalHash string) (DeliveryPlanVersion, error) {
@@ -217,6 +275,10 @@ func decodePlanVersion(payload []byte, canonicalHash string) (DeliveryPlanVersio
 		return DeliveryPlanVersion{}, fmt.Errorf("decode delivery plan version: %w", err)
 	}
 	value.CanonicalHash = canonicalHash
+	if value.IsLegacy() {
+		value.RuntimeStatus = PlanRuntimeLegacyUnsupported
+		value.ReadOnly = true
+	}
 	calculated, err := PlanCanonicalHash(value)
 	if err != nil {
 		return DeliveryPlanVersion{}, err
@@ -228,6 +290,11 @@ func decodePlanVersion(payload []byte, canonicalHash string) (DeliveryPlanVersio
 }
 
 func firstCreativeID(version DeliveryPlanVersion) string {
+	if version.IsPlatformConfigurationV2() && len(version.DeliveryIntent.Payload.MaterialReferences) > 0 {
+		if id := version.DeliveryIntent.Payload.MaterialReferences[0].ID; id != "" {
+			return id
+		}
+	}
 	if len(version.CreativeReferences) == 0 {
 		return "mock-unset"
 	}
@@ -235,6 +302,11 @@ func firstCreativeID(version DeliveryPlanVersion) string {
 }
 
 func firstCreativeVersion(version DeliveryPlanVersion) string {
+	if version.IsPlatformConfigurationV2() && len(version.DeliveryIntent.Payload.MaterialReferences) > 0 {
+		if value := version.DeliveryIntent.Payload.MaterialReferences[0].Version; value != "" {
+			return value
+		}
+	}
 	if len(version.CreativeReferences) == 0 {
 		return "0"
 	}
@@ -242,6 +314,11 @@ func firstCreativeVersion(version DeliveryPlanVersion) string {
 }
 
 func firstCreativeHash(version DeliveryPlanVersion) string {
+	if version.IsPlatformConfigurationV2() && len(version.DeliveryIntent.Payload.MaterialReferences) > 0 {
+		if value := version.DeliveryIntent.Payload.MaterialReferences[0].ContentHash; value != "" {
+			return value
+		}
+	}
 	if len(version.CreativeReferences) > 0 && version.CreativeReferences[0].ContentHash != "" {
 		return version.CreativeReferences[0].ContentHash
 	}
@@ -254,11 +331,11 @@ func (r MySQLRepository) CreateChangeSet(ctx context.Context, value ChangeSet) (
 		return ChangeSet{}, err
 	}
 	_, err = r.DB.ExecContext(ctx, `INSERT INTO delivery_change_sets (
-		id, organization_id, project_id, plan_id, plan_version, status, risk_level, preflight_notes, target_snapshot, target_snapshot_hash, recommendation_id,
+		id, organization_id, project_id, plan_id, plan_version, status, risk_level, preflight_notes, target_snapshot, target_snapshot_hash, target_snapshot_schema_version, recommendation_id,
 		approved_by, approved_at, rejected_by, rejected_at, rejection_reason, version, created_by, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?)`,
 		value.ID, value.OrganizationID, value.ProjectID, value.PlanID, value.PlanVersion, value.Status,
-		value.RiskLevel, notes, nullableJSON(value.TargetSnapshot), nullableString(value.TargetSnapshotHash), nullableString(value.RecommendationID), value.Version, value.CreatedBy, value.CreatedAt, value.UpdatedAt)
+		value.RiskLevel, notes, changeSetSnapshotJSON(value), nullableString(value.TargetSnapshotHash), nullableString(changeSetSnapshotSchema(value)), nullableString(value.RecommendationID), value.Version, value.CreatedBy, value.CreatedAt, value.UpdatedAt)
 	return value, err
 }
 
@@ -385,12 +462,17 @@ func (r MySQLRepository) ApproveChangeSet(ctx context.Context, changeSet ChangeS
 	_, err = tx.ExecContext(ctx, `INSERT INTO delivery_approvals (
 		approval_id, organization_id, project_id, plan_id, plan_version,
 		change_set_id, change_set_version, plan_canonical_hash, target_snapshot_hash, action_hash,
+		configuration_schema_version, configuration_id, configuration_version, configuration_platform, configuration_profile_version, configuration_canonical_hash,
+		intent_schema_version, intent_id, intent_version, intent_canonical_hash,
 		action, scope, budget_limit_minor, currency, approved_by, approved_at,
 		expires_at, source, scenario
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		approval.ApprovalID, approval.OrganizationID, approval.ProjectID, approval.PlanID,
 		approval.PlanVersion, approval.ChangeSetID, approval.ChangeSetVersion,
-		approval.PlanCanonicalHash, nullableString(approval.TargetSnapshotHash), approval.ActionHash, approval.Action, approval.Scope,
+		approval.PlanCanonicalHash, nullableString(approval.TargetSnapshotHash), approval.ActionHash,
+		nullableString(approval.ConfigurationSchemaVersion), nullableString(approval.ConfigurationID), nullablePositiveInt(approval.ConfigurationVersion), nullableString(string(approval.ConfigurationPlatform)), nullableString(approval.ConfigurationProfileVersion), nullableString(approval.ConfigurationCanonicalHash),
+		nullableString(approval.IntentSchemaVersion), nullableString(approval.IntentID), nullablePositiveInt(approval.IntentVersion), nullableString(approval.IntentCanonicalHash),
+		approval.Action, approval.Scope,
 		approval.BudgetLimitMinor, approval.Currency, approval.ApprovedBy, approval.ApprovedAt,
 		approval.ExpiresAt, approval.Source, approval.Scenario)
 	if err != nil {
@@ -685,6 +767,12 @@ func sameApproval(left, right DeliveryApproval) bool {
 		left.ChangeSetID == right.ChangeSetID &&
 		left.ChangeSetVersion == right.ChangeSetVersion &&
 		left.PlanCanonicalHash == right.PlanCanonicalHash &&
+		left.TargetSnapshotHash == right.TargetSnapshotHash &&
+		left.ConfigurationSchemaVersion == right.ConfigurationSchemaVersion &&
+		left.ConfigurationID == right.ConfigurationID && left.ConfigurationVersion == right.ConfigurationVersion &&
+		left.ConfigurationPlatform == right.ConfigurationPlatform && left.ConfigurationProfileVersion == right.ConfigurationProfileVersion &&
+		left.ConfigurationCanonicalHash == right.ConfigurationCanonicalHash && left.IntentSchemaVersion == right.IntentSchemaVersion &&
+		left.IntentID == right.IntentID && left.IntentVersion == right.IntentVersion && left.IntentCanonicalHash == right.IntentCanonicalHash &&
 		left.ActionHash == right.ActionHash &&
 		left.Action == right.Action &&
 		left.Scope == right.Scope &&
@@ -963,7 +1051,7 @@ func scanAlert(row rowScanner) (DeliveryAlert, error) {
 
 const deliveryPlanSelect = `SELECT id, organization_id, project_id, creative_package_id, creative_package_hash, creative_version_id, name, objective, budget_cents, start_at, end_at, status, version, platform, source, scenario, tour_run_id, tour_owner_id, tour_case, current_version, created_by, created_at, updated_at FROM delivery_plans`
 const changeSetSelect = `SELECT id, organization_id, project_id, plan_id, plan_version, status, risk_level, preflight_notes, target_snapshot, target_snapshot_hash, recommendation_id, approved_by, approved_at, rejected_by, rejected_at, rejection_reason, version, created_by, created_at, updated_at FROM delivery_change_sets`
-const approvalSelect = `SELECT approval_id, organization_id, project_id, plan_id, plan_version, change_set_id, change_set_version, plan_canonical_hash, target_snapshot_hash, action_hash, action, scope, budget_limit_minor, currency, approved_by, approved_at, expires_at, source, scenario FROM delivery_approvals`
+const approvalSelect = `SELECT approval_id, organization_id, project_id, plan_id, plan_version, change_set_id, change_set_version, plan_canonical_hash, target_snapshot_hash, action_hash, configuration_schema_version, configuration_id, configuration_version, configuration_platform, configuration_profile_version, configuration_canonical_hash, intent_schema_version, intent_id, intent_version, intent_canonical_hash, action, scope, budget_limit_minor, currency, approved_by, approved_at, expires_at, source, scenario FROM delivery_approvals`
 
 type rowScanner interface {
 	Scan(...any) error
@@ -1017,11 +1105,29 @@ func decodeChangeSetOptional(value *ChangeSet, notes, target []byte, targetHash,
 		return fmt.Errorf("decode delivery preflight notes: %w", err)
 	}
 	if len(target) > 0 {
-		var snapshot *ThreeTierConfiguration
-		if err := json.Unmarshal(target, &snapshot); err != nil {
-			return fmt.Errorf("decode delivery target snapshot: %w", err)
+		var descriptor struct {
+			SchemaVersion string `json:"schema_version"`
+			Schema        string `json:"schema"`
 		}
-		value.TargetSnapshot = snapshot
+		if err := json.Unmarshal(target, &descriptor); err != nil {
+			return fmt.Errorf("decode delivery target discriminator: %w", err)
+		}
+		switch {
+		case descriptor.SchemaVersion == PlatformConfigurationSchemaV2:
+			var snapshot PlatformConfiguration
+			if err := json.Unmarshal(target, &snapshot); err != nil {
+				return fmt.Errorf("decode delivery target snapshot: %w", err)
+			}
+			value.TargetSnapshot = &snapshot
+		case descriptor.Schema == ThreeTierSchema:
+			var snapshot ThreeTierConfiguration
+			if err := json.Unmarshal(target, &snapshot); err != nil {
+				return fmt.Errorf("decode legacy delivery target snapshot: %w", err)
+			}
+			value.LegacyTargetSnapshot = &snapshot
+		default:
+			return contractFailure(ContractErrorUnknownSchemaVersion, "target_snapshot", "unknown delivery target snapshot schema")
+		}
 	}
 	if targetHash.Valid {
 		value.TargetSnapshotHash = targetHash.String
@@ -1038,18 +1144,41 @@ func decodeChangeSetOptional(value *ChangeSet, notes, target []byte, targetHash,
 	return nil
 }
 
+func changeSetSnapshotJSON(value ChangeSet) any {
+	if value.TargetSnapshot != nil {
+		return nullableJSON(value.TargetSnapshot)
+	}
+	return nullableJSON(value.LegacyTargetSnapshot)
+}
+
+func changeSetSnapshotSchema(value ChangeSet) string {
+	if value.TargetSnapshot != nil {
+		return PlatformConfigurationSchemaV2
+	}
+	return ""
+}
+
 func scanApproval(row rowScanner) (DeliveryApproval, error) {
 	var value DeliveryApproval
-	var targetSnapshotHash sql.NullString
+	var targetSnapshotHash, configurationSchemaVersion, configurationID, configurationPlatform, configurationProfileVersion, configurationCanonicalHash sql.NullString
+	var intentSchemaVersion, intentID, intentCanonicalHash sql.NullString
+	var configurationVersion, intentVersion sql.NullInt64
 	err := row.Scan(
 		&value.ApprovalID, &value.OrganizationID, &value.ProjectID, &value.PlanID,
 		&value.PlanVersion, &value.ChangeSetID, &value.ChangeSetVersion,
-		&value.PlanCanonicalHash, &targetSnapshotHash, &value.ActionHash, &value.Action, &value.Scope,
+		&value.PlanCanonicalHash, &targetSnapshotHash, &value.ActionHash,
+		&configurationSchemaVersion, &configurationID, &configurationVersion, &configurationPlatform, &configurationProfileVersion, &configurationCanonicalHash,
+		&intentSchemaVersion, &intentID, &intentVersion, &intentCanonicalHash, &value.Action, &value.Scope,
 		&value.BudgetLimitMinor, &value.Currency, &value.ApprovedBy, &value.ApprovedAt,
 		&value.ExpiresAt, &value.Source, &value.Scenario,
 	)
 	if targetSnapshotHash.Valid {
 		value.TargetSnapshotHash = targetSnapshotHash.String
 	}
+	value.ConfigurationSchemaVersion, value.ConfigurationID = configurationSchemaVersion.String, configurationID.String
+	value.ConfigurationVersion, value.ConfigurationPlatform = int(configurationVersion.Int64), DeliveryPlatform(configurationPlatform.String)
+	value.ConfigurationProfileVersion, value.ConfigurationCanonicalHash = configurationProfileVersion.String, configurationCanonicalHash.String
+	value.IntentSchemaVersion, value.IntentID = intentSchemaVersion.String, intentID.String
+	value.IntentVersion, value.IntentCanonicalHash = int(intentVersion.Int64), intentCanonicalHash.String
 	return value, err
 }

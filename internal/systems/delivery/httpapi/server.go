@@ -133,28 +133,10 @@ func (s *Server) getTourRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) compileConfiguration(w http.ResponseWriter, r *http.Request) {
-	var body delivery.CompileThreeTierRequest
-	if !decode(w, r, &body) {
-		return
-	}
-	v, err := s.app.CompileThreeTierConfiguration(r.Context(), mustActor(r), projectID(r), r.PathValue("plan_id"), body)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, v)
+	writeError(w, r, delivery.ErrLegacyConfigurationUnsupported)
 }
 func (s *Server) overrideConfiguration(w http.ResponseWriter, r *http.Request) {
-	var body delivery.ThreeTierOverrideRequest
-	if !decode(w, r, &body) {
-		return
-	}
-	v, err := s.app.OverrideThreeTierField(r.Context(), mustActor(r), projectID(r), r.PathValue("plan_id"), body)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, v)
+	writeError(w, r, delivery.ErrLegacyConfigurationUnsupported)
 }
 func (s *Server) generateRecommendation(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -306,6 +288,10 @@ func (s *Server) createPlan(writer http.ResponseWriter, request *http.Request) {
 	if !decode(writer, request, &body) {
 		return
 	}
+	if !body.UsesPlatformRuntime() {
+		writeError(writer, request, delivery.ErrLegacyConfigurationUnsupported)
+		return
+	}
 	value, err := s.app.CreatePlan(request.Context(), mustActor(request), projectID(request), body)
 	if err != nil {
 		writeError(writer, request, err)
@@ -347,6 +333,10 @@ func (s *Server) getPlanDetail(writer http.ResponseWriter, request *http.Request
 func (s *Server) updatePlan(writer http.ResponseWriter, request *http.Request) {
 	var body delivery.UpdatePlanRequest
 	if !decode(writer, request, &body) {
+		return
+	}
+	if body.Intent == nil || body.PlatformConfiguration == nil {
+		writeError(writer, request, delivery.ErrLegacyConfigurationUnsupported)
 		return
 	}
 	value, err := s.app.UpdatePlan(
@@ -613,9 +603,14 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 func writeError(writer http.ResponseWriter, request *http.Request, err error) {
 	status, code, message := http.StatusInternalServerError, "INTERNAL", "服务暂时不可用，请稍后重试"
 	retryable := true
+	contractCode := delivery.DeliveryContractErrorCode(err)
 	switch {
+	case contractCode != "":
+		status, code, message, retryable = http.StatusBadRequest, contractCode, err.Error(), false
 	case errors.Is(err, delivery.ErrInvalidRequest):
 		status, code, message, retryable = http.StatusBadRequest, "INVALID_REQUEST", "请求参数无效", false
+	case errors.Is(err, delivery.ErrLegacyConfigurationUnsupported):
+		status, code, message, retryable = http.StatusConflict, "LEGACY_CONFIGURATION_UNSUPPORTED", "旧版投放配置仅支持只读访问", false
 	case errors.Is(err, delivery.ErrNotFound):
 		status, code, message, retryable = http.StatusNotFound, "RESOURCE_NOT_FOUND", "投放资源不存在", false
 	case errors.Is(err, identity.ErrProjectAccessDenied):

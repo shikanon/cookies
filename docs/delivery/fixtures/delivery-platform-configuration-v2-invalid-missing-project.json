@@ -1,0 +1,7 @@
+{
+  "fixture": "delivery-platform-configuration-v2-oceanengine-valid.json",
+  "expected_error": "must have required property 'project'",
+  "mutations": [
+    { "path": "payload.ocean_engine.project", "remove": true }
+  ]
+}

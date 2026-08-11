@@ -201,6 +201,19 @@ func (r MySQLRepository) ResetTourRun(ctx context.Context, organizationID contra
 	if err != nil {
 		return nil, DeliveryTourRun{}, err
 	}
+	configurationIDs, intentIDs := []string{}, []string{}
+	if len(plans) > 0 {
+		configurationQuery, configurationArgs := scopedInQuery(`SELECT DISTINCT JSON_UNQUOTE(JSON_EXTRACT(config_json,'$.platform_configuration.configuration_id')) FROM delivery_plan_versions`, "plan_id", organizationID, projectID, plans)
+		configurationIDs, err = selectIDs(ctx, tx, configurationQuery+` AND JSON_EXTRACT(config_json,'$.platform_configuration.configuration_id') IS NOT NULL FOR UPDATE`, configurationArgs...)
+		if err != nil {
+			return nil, DeliveryTourRun{}, err
+		}
+		intentQuery, intentArgs := scopedInQuery(`SELECT DISTINCT JSON_UNQUOTE(JSON_EXTRACT(config_json,'$.intent.intent_id')) FROM delivery_plan_versions`, "plan_id", organizationID, projectID, plans)
+		intentIDs, err = selectIDs(ctx, tx, intentQuery+` AND JSON_EXTRACT(config_json,'$.intent.intent_id') IS NOT NULL FOR UPDATE`, intentArgs...)
+		if err != nil {
+			return nil, DeliveryTourRun{}, err
+		}
+	}
 	changeSets, err := selectRelatedIDs(ctx, tx, "delivery_change_sets", "plan_id", organizationID, projectID, plans)
 	if err != nil {
 		return nil, DeliveryTourRun{}, err
@@ -227,6 +240,8 @@ func (r MySQLRepository) ResetTourRun(ctx context.Context, organizationID contra
 		{"delivery_change_sets", "id", changeSets},
 		{"delivery_plan_versions", "plan_id", plans},
 		{"delivery_plans", "id", plans},
+		{"delivery_platform_configurations", "configuration_id", configurationIDs},
+		{"delivery_intents", "intent_id", intentIDs},
 	} {
 		count, deleteErr := deleteRelated(ctx, tx, operation.table, operation.column, organizationID, projectID, operation.ids)
 		if deleteErr != nil {

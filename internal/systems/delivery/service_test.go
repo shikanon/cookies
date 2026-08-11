@@ -914,8 +914,9 @@ func (r *memoryRepository) UpdatePlan(_ context.Context, organizationID contract
 	plan.CurrentVersionNumber = version.VersionNumber
 	plan.CurrentVersion = cloneVersion(version)
 	plan.Versions = append(plan.Versions, cloneVersion(version))
-	plan.Name, plan.Objective = version.Name, version.Objective
-	plan.BudgetCents, plan.StartAt, plan.EndAt = version.Budget.TotalMinor, version.Schedule.StartAt, version.Schedule.EndAt
+	plan.Name, plan.Objective = versionName(version), versionObjective(version)
+	plan.BudgetCents = versionBudget(version).TotalMinor
+	plan.StartAt, plan.EndAt = versionSchedule(version)
 	plan.Scenario, plan.UpdatedAt = version.Scenario, version.CreatedAt
 	r.plans[key] = plan
 	return plan, nil

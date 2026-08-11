@@ -1496,7 +1496,7 @@ export function ModulePage({ system, item, contextId, objectId, routeView, tourR
     : system.key === 'insight' && item.id === 'settings' ? <InsightSettingsPage state={dataState} activeView={activeView}/>
     : system.key === 'delivery' && item.id === 'tour' ? <DeliveryTourPage projectId={currentProject.id} routeRunId={tourRunId}/>
     : system.key === 'delivery' && item.id === 'plans' ? <DeliveryPlanPage state={dataState}/>
-    : system.key === 'delivery' && item.id === 'three-tier' ? <DeliveryThreeTierPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>
+    : system.key === 'delivery' && (item.id === 'configuration' || item.id === 'three-tier') ? <DeliveryThreeTierPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>
     : system.key === 'delivery' && item.id === 'approvals' ? <ApprovalCenterPage state={dataState} tourCase={tourCase} tourRunId={tourRunId} selectedChangeSetId={objectId}/>
     : system.key === 'delivery' && item.id === 'monitoring' ? <DeliveryMonitoringPage tourCase={tourCase}/>
     : system.key === 'delivery' && item.id === 'optimization' ? <DeliveryOptimizationPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>

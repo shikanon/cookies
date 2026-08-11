@@ -252,9 +252,12 @@ func (s Service) GetLatestOutcomeSimulation(ctx context.Context, actor contract.
 }
 
 func outcomeInput(version DeliveryPlanVersion, execution ExecutionResult) (OutcomeSimulationInput, error) {
+	if version.IsPlatformConfigurationV2() {
+		return platformOutcomeInput(version, execution)
+	}
 	configuration := version.ThreeTierConfiguration
-	if execution.ChangeSet.TargetSnapshot != nil {
-		configuration = execution.ChangeSet.TargetSnapshot
+	if execution.ChangeSet.LegacyTargetSnapshot != nil {
+		configuration = execution.ChangeSet.LegacyTargetSnapshot
 	}
 	configurationHash, err := snapshotHash(configuration)
 	if err != nil {
@@ -291,6 +294,60 @@ func outcomeInput(version DeliveryPlanVersion, execution ExecutionResult) (Outco
 		Budget: version.Budget, Schedule: version.Schedule, Objective: version.Objective, OptimizationGoal: optimization,
 		BidMinor: bid, Audience: audience, StrategyReference: version.StrategyReference, CreativeFeatures: features,
 		ConfigurationHash: configurationHash, PlatformExecutionID: execution.Execution.ID, PlatformExecutionMode: execution.Execution.Mode,
+		PlatformExecutionProof: execution.Evidence.ID,
+	}, nil
+}
+
+func platformOutcomeInput(version DeliveryPlanVersion, execution ExecutionResult) (OutcomeSimulationInput, error) {
+	configuration := version.PlatformConfiguration
+	if execution.ChangeSet.TargetSnapshot != nil {
+		configuration = execution.ChangeSet.TargetSnapshot
+	}
+	if configuration == nil || configuration.CanonicalHash == "" {
+		return OutcomeSimulationInput{}, ErrInvalidState
+	}
+	intent := version.DeliveryIntent
+	budget := Budget{TotalMinor: intent.Payload.BudgetBoundary.MaximumTotalMinor, Currency: intent.Payload.BudgetBoundary.Currency}
+	schedule := Schedule{StartAt: intent.Payload.ScheduleBoundary.EarliestStart, EndAt: intent.Payload.ScheduleBoundary.LatestEnd, Timezone: intent.Payload.ScheduleBoundary.Timezone}
+	optimization := intent.Payload.MarketingObjective
+	if len(intent.Payload.OptimizationPreferences) > 0 {
+		optimization = intent.Payload.OptimizationPreferences[0].Metric
+	}
+	audience := strings.Join(intent.Payload.AudienceConstraints.Constraints, ",")
+	if audience == "" {
+		audience = "all"
+	}
+	bid := maxInt64(1, budget.TotalMinor/100)
+	if ocean := configuration.Payload.OceanEngine; ocean != nil && ocean.Project != nil {
+		if ocean.Project.BudgetAndBidding.BidMinor != nil {
+			bid = *ocean.Project.BudgetAndBidding.BidMinor
+		}
+	}
+	strategyVersion := 1
+	if parsed, err := strconv.Atoi(strings.TrimPrefix(intent.Payload.StrategyReference.Version, "v")); err == nil && parsed > 0 {
+		strategyVersion = parsed
+	}
+	strategy := StrategyReference{TaskID: intent.Payload.StrategyReference.ID, Version: int64(strategyVersion), ContentHash: intent.Payload.StrategyReference.ContentHash}
+	features := make([]OutcomeCreativeFeature, 0, len(intent.Payload.MaterialReferences))
+	for _, reference := range intent.Payload.MaterialReferences {
+		versionNumber := 1
+		if parsed, err := strconv.Atoi(strings.TrimPrefix(reference.Version, "v")); err == nil && parsed > 0 {
+			versionNumber = parsed
+		}
+		hash := reference.ContentHash
+		if hash == "" {
+			hash, _ = contract.CanonicalJSONHash(reference)
+		}
+		features = append(features, OutcomeCreativeFeature{AssetID: reference.ID, Version: versionNumber, ContentHash: hash, QualityBP: stableRange(hash, 8500, 11500)})
+	}
+	if len(features) == 0 {
+		features = append(features, OutcomeCreativeFeature{AssetID: "mock-creative", Version: 1, ContentHash: configuration.CanonicalHash, QualityBP: stableRange(configuration.CanonicalHash, 8500, 11500)})
+	}
+	return OutcomeSimulationInput{
+		PlanID: version.PlanID, PlanVersion: version.VersionNumber, PlanCanonicalHash: version.CanonicalHash,
+		Budget: budget, Schedule: schedule, Objective: intent.Payload.MarketingObjective, OptimizationGoal: optimization,
+		BidMinor: bid, Audience: audience, StrategyReference: strategy, CreativeFeatures: features,
+		ConfigurationHash: configuration.CanonicalHash, PlatformExecutionID: execution.Execution.ID, PlatformExecutionMode: execution.Execution.Mode,
 		PlatformExecutionProof: execution.Evidence.ID,
 	}, nil
 }
@@ -426,6 +483,9 @@ func minInt64(left, right int64) int64 {
 }
 
 func firstCreativeAsset(version DeliveryPlanVersion) string {
+	if version.IsPlatformConfigurationV2() && len(version.DeliveryIntent.Payload.MaterialReferences) > 0 {
+		return version.DeliveryIntent.Payload.MaterialReferences[0].ID
+	}
 	if len(version.CreativeReferences) > 0 {
 		return version.CreativeReferences[0].AssetID
 	}

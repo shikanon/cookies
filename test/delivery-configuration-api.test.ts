@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { deliveryConfigurationApi } from '../src/api/delivery.ts'
+import { DeliveryApiError, deliveryConfigurationApi } from '../src/api/delivery.ts'
 
 const now = '2026-08-04T08:00:00.000Z'
 
-test('delivery configuration client uses server-authoritative compile and one-field override contracts', async t => {
+test('delivery configuration client blocks all legacy ThreeTier writes before transport', async t => {
   const originalFetch = globalThis.fetch
   const calls: Array<{ url: string; init?: RequestInit }> = []
   globalThis.fetch = async (url, init) => {
@@ -13,8 +13,8 @@ test('delivery configuration client uses server-authoritative compile and one-fi
   }
   t.after(() => { globalThis.fetch = originalFetch })
 
-  const compiled = await deliveryConfigurationApi.compile('project_1', 'plan_1', 2, 'golden_path')
-  const overridden = await deliveryConfigurationApi.override('project_1', 'plan_1', {
+  await assert.rejects(deliveryConfigurationApi.compile('project_1', 'plan_1', 2, 'golden_path'), (error: unknown) => error instanceof DeliveryApiError && error.code === 'LEGACY_CONFIGURATION_UNSUPPORTED')
+  await assert.rejects(deliveryConfigurationApi.override('project_1', 'plan_1', {
     expectedVersion: 3,
     groupId: 'group_1',
     planId: 'tier_plan_1',
@@ -22,17 +22,8 @@ test('delivery configuration client uses server-authoritative compile and one-fi
     fieldKey: 'budget',
     value: { type: 'integer', value: 320000 },
     confirmed: true,
-  })
-
-  assert.deepEqual(JSON.parse(calls[0].init?.body as string), { expected_version: 2, fixture: 'golden_path' })
-  assert.equal(calls[0].url, '/api/delivery/v1/projects/project_1/plans/plan_1/configuration:compile')
-  assert.deepEqual(JSON.parse(calls[1].init?.body as string), {
-    expected_version: 3, group_id: 'group_1', plan_id: 'tier_plan_1', creative_id: 'creative_1', field_key: 'budget',
-    value: { type: 'integer', value: 320000 }, confirmed: true,
-  })
-  assert.equal(calls[1].url, '/api/delivery/v1/projects/project_1/plans/plan_1/configuration:override')
-  assert.equal(compiled.currentVersion.threeTierConfiguration?.groups[0]?.label, 'Golden group')
-  assert.equal(overridden.currentVersion.threeTierConfiguration?.groups[0]?.plans[0]?.creatives[0]?.fields[0]?.label, '预算')
+  }), (error: unknown) => error instanceof DeliveryApiError && error.code === 'LEGACY_CONFIGURATION_UNSUPPORTED')
+  assert.equal(calls.length, 0)
 })
 
 test('delivery configuration recommendation and approved manual-package endpoints preserve their safety boundary', async t => {

@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
+import { createRuntimePlan } from './delivery-runtime-fixture'
 
 const projectId = 'project_investor_precision_evidence'
 const otherProjectId = 'project_local'
@@ -127,21 +128,7 @@ test('Delivery execution scenarios persist steps, enforce idempotency, and prese
 })
 
 async function approvedChangeSet(request: APIRequestContext, suffix: string): Promise<ChangeSet> {
-  const planResponse = await request.post(`/api/delivery/v1/projects/${projectId}/plans`, {
-    data: {
-      name: `Execution E2E ${suffix}`,
-      objective: 'Verify durable simulated delivery execution',
-      advertiser: { id: 'mock-advertiser-001', name: 'Cookies Mock 广告主', platform: 'ocean_engine' },
-      budget: { total_minor: 300000, currency: 'CNY' },
-      schedule: { start_at: '2026-08-01T00:00:00Z', end_at: '2026-08-31T00:00:00Z', timezone: 'Asia/Shanghai' },
-      tracking: { landing_page: 'https://demo.cookies.local', pixel_id: `PX-${suffix}`, conversion_event: 'lead_submit' },
-      creative_references: [{ asset_id: 'asset_demo_investor_creative_video', version: 1, confirmed: true }],
-      strategy_reference: { task_id: 'task_demo_precision_strategy', version: 1 },
-      source_strategy_version: 'task_demo_precision_strategy@v1',
-    },
-  })
-  expect(planResponse.status()).toBe(201)
-  const plan = await planResponse.json() as { id: string; version: number }
+	const plan = await createRuntimePlan(request, projectId, suffix) as { id: string; version: number }
 
   const changeSetResponse = await request.post(`/api/delivery/v1/projects/${projectId}/plans/${plan.id}:create-change-set`, {
     data: { expected_version: plan.version },

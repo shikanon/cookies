@@ -87,9 +87,9 @@ PlatformAccount
 
 ### 2.2 Delivery 自主职责与稳定引用
 
-文件夹归属即职责边界：`docs/delivery/**` 与 `internal/systems/delivery/**` 内的 ThreeTier 语义、真实页面 Schema、字段拆分和预检由 Delivery 负责，不再作为 Owner 确认项向上抛；Delivery 不修改 Connector 或 Insights 文件。
+文件夹归属即职责边界：`docs/delivery/**` 与 `internal/systems/delivery/**` 内的平台配置语义、真实页面 Schema、字段拆分和预检由 Delivery 负责，不再作为 Owner 确认项向上抛；Delivery 不修改 Connector 或 Insights 文件。
 
-内部 ThreeTier 只作为 Delivery 的编排结构：
+以下 ThreeTier 解释只用于记录历史 mock 与页面校准之间的差异，不是当前目标领域模型：
 
 - `ThreeTierGroup` 是内部组织单元，不强行等同某个巨量对象；
 - `ThreeTierPlan` 按真实页面字段拆入项目或单元；
@@ -461,9 +461,9 @@ PlatformPromotionDraft
 | `review_status` | 平台审核状态只读结果 | `not_input` | 不能作为创建草稿输入字段；应从写后查询/Connector 读取 |
 | `disclosure` | 人工合规确认/平台披露字段候选 | `platform_pending` | 当前值仅为 mock 审核提示，没有页面字段证据 |
 
-这意味着不能通过简单改名把 `group → plan → creative` 变成 `project → promotion → creative`。Delivery 自主形成独立的 `PlatformProjectDraft`、`PlatformPromotionDraft` 与引用集合，再由后续行为编译消费；不需要把拆分问题提交给其他模块 Owner。
+这意味着不能通过简单改名把 `group → plan → creative` 变成 `project → promotion → creative`。该表保留为历史分析证据；新领域模型不实现 ThreeTier 兼容 projector，而是从版本化平台无关 intent 直接形成目标平台 profile。
 
-新配置的根模型冻结为 `DeliveryPlanVersion → PlatformProjectDraft → PlatformPromotionDraft[]`，机器契约为 [`delivery-platform-configuration/v1`](./schemas/delivery-platform-configuration-v1.json)。`delivery-three-tier/v1` 仍是不可变历史 mock 快照；编辑历史配置必须创建新的 PlanVersion 和 canonical hash，不得原地迁移历史记录。字段归属、条件表达、稳定引用和 PR 切片以[收口文档](./read-only-calibration-closeout.md)为准。
+当前根模型冻结为平台无关 [`DeliveryIntent`](./schemas/delivery-intent-v1.json) 绑定判别式 [`PlatformConfiguration`](./schemas/delivery-platform-configuration-v2.json)。巨量 profile 明确为一个 Project 与零个或多个 Promotions，父关系结构隐式；磁力引擎仅表达 `CAPABILITY_PENDING`，不猜测平台字段。`delivery-three-tier/v1` 与 [`delivery-platform-configuration/v1`](./schemas/delivery-platform-configuration-v1.json) 都保持不可变历史语义。完整版本、引用、hash 与切换边界见[新契约说明](./platform-configuration-contracts.md)。
 
 ## 7. 当前批次进度
 
@@ -531,7 +531,7 @@ PlatformPromotionDraft
 - 将黄金业务流前移到商品、落地页、锚点、人群包和素材准备，并覆盖素材上传、平台审核/质量过滤、多项目/多单元创建、最终开启与投后优化；
 - 明确首个真实电商场景以手动投放为主，重点覆盖版位、人群包、行为兴趣、智能放量、连续时段、学习期和数据驱动调价；
 - 将深度优化方式和倍数调价改为数据驱动策略，不固化为静态推荐；
-- 确认 ThreeTier 拆分、页面 Schema 和稳定引用由 Delivery 自主维护，不再列为其他 Owner 的确认问题；
+- 确认历史 ThreeTier 差异分析、页面 Schema 和稳定引用由 Delivery 自主维护；当前目标以 `DeliveryIntent` + 平台 profile 建模，不要求其他 Owner 或兼容 projector 解释 ThreeTier；
 - 冻结完整场景覆盖目标，缺少的营销目的、载体、目标、模式、定向、竞价和单元形态持续加入覆盖矩阵；
 - 纠正投放身份语义：字段必选，账户信息分支无需更多输入，抖音号分支必须引用已授权账号；
 - 将两段固定审批修正为历史 mock 行为；目标流程默认只在最终真实创建/开启前进行一次确认，高风险动作按风险追加确认。

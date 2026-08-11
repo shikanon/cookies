@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
+import { createRuntimePlan } from './delivery-runtime-fixture'
 
 const projectId = 'project_investor_precision_evidence'
 const otherProjectId = 'project_local'
@@ -50,8 +51,8 @@ test('Delivery monitoring evaluates fixtures, preserves provenance, paginates, a
       is_simulated: true,
       simulation_run_id: expect.any(String),
       scenario: alert.type === 'review_rejected' ? 'anomaly_day' : 'normal_day',
-      dataset_version: 'delivery-outcome-scenario/v1',
-      fixture_version: expect.any(String),
+      dataset_version: expect.stringMatching(/^post-launch-simulator\/v1\/delivery-outcome-scenario\/v1\/[a-f0-9]{12}$/),
+      fixture_version: expect.stringMatching(/^post-launch-simulator\/v1\/delivery-outcome-scenario\/v1\/[a-f0-9]{12}$/),
       owner: { source: 'workflow_context' },
       evidence_refs: expect.arrayContaining([expect.any(String)]),
       freshness: { status: 'fresh', as_of: expect.any(String), evaluated_at: expect.any(String) },
@@ -132,21 +133,7 @@ function alertsURL(query = '') {
 
 async function createMonitoringMetricSnapshot(request: APIRequestContext) {
   const suffix = `monitoring-${Date.now().toString(36)}`
-  const planResponse = await request.post(`/api/delivery/v1/projects/${projectId}/plans`, {
-    data: {
-      name: `Monitoring E2E ${suffix}`,
-      objective: 'Provide deterministic evidence for monitoring alert evaluation',
-      advertiser: { id: 'mock-advertiser-001', name: 'Cookies Mock Advertiser', platform: 'ocean_engine' },
-      budget: { total_minor: 300000, currency: 'CNY' },
-      schedule: { start_at: '2026-08-01T00:00:00Z', end_at: '2026-08-31T00:00:00Z', timezone: 'Asia/Shanghai' },
-      tracking: { landing_page: 'https://demo.cookies.local', pixel_id: `PX-${suffix}`, conversion_event: 'lead_submit' },
-      creative_references: [{ asset_id: 'asset_demo_investor_creative_video', version: 1, confirmed: true }],
-      strategy_reference: { task_id: 'task_demo_precision_strategy', version: 1 },
-      source_strategy_version: 'task_demo_precision_strategy@v1',
-    },
-  })
-  expect(planResponse.status()).toBe(201)
-  const plan = await planResponse.json() as { id: string; version: number }
+	const plan = await createRuntimePlan(request, projectId, suffix) as { id: string; version: number }
 
   const changeSetResponse = await request.post(`/api/delivery/v1/projects/${projectId}/plans/${plan.id}:create-change-set`, { data: { expected_version: plan.version } })
   expect(changeSetResponse.status()).toBe(201)

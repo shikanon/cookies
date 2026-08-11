@@ -12,13 +12,13 @@ import (
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
 
-// CreateRecommendation persists a project-scoped recommendation derived from a three-tier snapshot.
+// CreateRecommendation persists a project-scoped recommendation derived from an immutable configuration snapshot.
 func (r MySQLRepository) CreateRecommendation(ctx context.Context, v DeliveryRecommendation) (DeliveryRecommendation, error) {
-	target, err := json.Marshal(v.TargetSnapshot)
+	target, err := json.Marshal(recommendationTarget(v))
 	if err != nil {
 		return v, err
 	}
-	base, err := json.Marshal(v.BaseSnapshot)
+	base, err := json.Marshal(recommendationBase(v))
 	if err != nil {
 		return v, err
 	}
@@ -105,8 +105,8 @@ func (r MySQLRepository) AcceptRecommendation(ctx context.Context, v DeliveryRec
 		return RecommendationAcceptance{}, false, ErrInvalidState
 	}
 	notes, _ := json.Marshal(cs.PreflightNotes)
-	target, _ := json.Marshal(cs.TargetSnapshot)
-	_, err = tx.ExecContext(ctx, `INSERT INTO delivery_change_sets (id,organization_id,project_id,plan_id,plan_version,status,risk_level,preflight_notes,target_snapshot,target_snapshot_hash,recommendation_id,approved_by,approved_at,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?,?,?)`, cs.ID, cs.OrganizationID, cs.ProjectID, cs.PlanID, cs.PlanVersion, cs.Status, cs.RiskLevel, notes, target, cs.TargetSnapshotHash, cs.RecommendationID, cs.Version, cs.CreatedBy, cs.CreatedAt, cs.UpdatedAt)
+	target := changeSetSnapshotJSON(cs)
+	_, err = tx.ExecContext(ctx, `INSERT INTO delivery_change_sets (id,organization_id,project_id,plan_id,plan_version,status,risk_level,preflight_notes,target_snapshot,target_snapshot_hash,target_snapshot_schema_version,recommendation_id,approved_by,approved_at,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?,?,?)`, cs.ID, cs.OrganizationID, cs.ProjectID, cs.PlanID, cs.PlanVersion, cs.Status, cs.RiskLevel, notes, target, cs.TargetSnapshotHash, nullableString(changeSetSnapshotSchema(cs)), cs.RecommendationID, cs.Version, cs.CreatedBy, cs.CreatedAt, cs.UpdatedAt)
 	if err != nil {
 		return RecommendationAcceptance{}, false, err
 	}
@@ -199,18 +199,12 @@ func scanRecommendation(row rowScanner) (DeliveryRecommendation, error) {
 		return v, err
 	}
 	v.SimulationRunID = simulationRunID.String
-	var t ThreeTierConfiguration
-	if len(base) > 0 {
-		var b ThreeTierConfiguration
-		if err = json.Unmarshal(base, &b); err != nil {
-			return v, err
-		}
-		v.BaseSnapshot = &b
-	}
-	if err = json.Unmarshal(target, &t); err != nil {
+	if err = decodeRecommendationSnapshot(&v, base, true); err != nil {
 		return v, err
 	}
-	v.TargetSnapshot = &t
+	if err = decodeRecommendationSnapshot(&v, target, false); err != nil {
+		return v, err
+	}
 	_ = json.Unmarshal(evidence, &v.Evidence)
 	_ = json.Unmarshal(risks, &v.Risks)
 	if cooldown.Valid {
@@ -226,4 +220,56 @@ func scanRecommendation(row rowScanner) (DeliveryRecommendation, error) {
 		v.AcceptedChangeSetID = cs.String
 	}
 	return v, nil
+}
+
+func recommendationBase(value DeliveryRecommendation) any {
+	if value.BaseConfiguration != nil {
+		return value.BaseConfiguration
+	}
+	return value.BaseSnapshot
+}
+
+func recommendationTarget(value DeliveryRecommendation) any {
+	if value.TargetConfiguration != nil {
+		return value.TargetConfiguration
+	}
+	return value.TargetSnapshot
+}
+
+func decodeRecommendationSnapshot(value *DeliveryRecommendation, payload []byte, base bool) error {
+	if len(payload) == 0 || string(payload) == "null" {
+		return nil
+	}
+	var descriptor struct {
+		SchemaVersion string `json:"schema_version"`
+		Schema        string `json:"schema"`
+	}
+	if err := json.Unmarshal(payload, &descriptor); err != nil {
+		return err
+	}
+	if descriptor.SchemaVersion == PlatformConfigurationSchemaV2 {
+		var configuration PlatformConfiguration
+		if err := json.Unmarshal(payload, &configuration); err != nil {
+			return err
+		}
+		if base {
+			value.BaseConfiguration = &configuration
+		} else {
+			value.TargetConfiguration = &configuration
+		}
+		return nil
+	}
+	if descriptor.Schema == ThreeTierSchema {
+		var snapshot ThreeTierConfiguration
+		if err := json.Unmarshal(payload, &snapshot); err != nil {
+			return err
+		}
+		if base {
+			value.BaseSnapshot = &snapshot
+		} else {
+			value.TargetSnapshot = &snapshot
+		}
+		return nil
+	}
+	return contractFailure(ContractErrorUnknownSchemaVersion, "recommendation_snapshot", "unknown recommendation snapshot schema")
 }

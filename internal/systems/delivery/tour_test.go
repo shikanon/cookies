@@ -187,7 +187,7 @@ func TestDeliveryTourPrepareReplayOwnershipAndIsolatedReset(t *testing.T) {
 	if replay || run.Status != TourRunPrepared || run.OwnerID != actor.Principal.ID || run.Source != SourceMock {
 		t.Fatalf("unexpected prepared run: replay=%t run=%#v", replay, run)
 	}
-	if len(run.Cases) != 7 || len(run.Steps) != 9 || run.CurrentStep != "configuration" {
+	if len(run.Cases) != 7 || len(run.Steps) != 9 || run.CurrentStep != "first_approval" {
 		t.Fatalf("tour contract is incomplete: cases=%d steps=%d current=%q", len(run.Cases), len(run.Steps), run.CurrentStep)
 	}
 	if !run.Steps[0].Complete || !strings.Contains(run.Steps[0].Explanation, "准备后此步默认完成") || !strings.Contains(strings.Join(run.Steps[0].Evidence, " "), "run="+run.ID) {
@@ -282,11 +282,7 @@ func TestDeliveryTourRoutesSubmittedChangeSetToApprovalCenter(t *testing.T) {
 	if goldenPlan.ID == "" {
 		t.Fatal("golden tour plan is missing")
 	}
-	compiled, err := service.CompileThreeTierConfiguration(ctx, actor, "project_a", goldenPlan.ID, CompileThreeTierRequest{ExpectedVersion: int(goldenPlan.Version), Fixture: ThreeTierFixtureGoldenPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	changeSet, err := service.CreateChangeSet(ctx, actor, "project_a", compiled.ID, int64(compiled.CurrentVersionNumber))
+	changeSet, err := service.CreateChangeSet(ctx, actor, "project_a", goldenPlan.ID, int64(goldenPlan.CurrentVersionNumber))
 	if err != nil {
 		t.Fatal(err)
 	}

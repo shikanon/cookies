@@ -16,7 +16,7 @@
 
 `投放账户 → 项目列表/项目表单 → 单元列表/单元表单 → 数据中心 → 账户/项目/单元/基础素材报表`
 
-本摘要的收口结论见[只读校准收口与 Delivery 配置契约](./read-only-calibration-closeout.md)：消费端口、mock/replay 和历史兼容边界已按 `upstream/main` 的 PR #38 实现更新；Connector 仍是真实数据影子分析的外部依赖，不是 Delivery 模型实现的前置阻塞。
+本摘要的收口结论见[只读校准收口](./read-only-calibration-closeout.md)，当前目标模型见[`DeliveryIntent` 与平台配置契约](./platform-configuration-contracts.md)：消费端口和 mock/replay 已按 `upstream/main` 的 PR #38 实现更新；历史 schema 保持只读版本边界，不新增兼容 projector。Connector 仍是真实数据影子分析的外部依赖，不是 Delivery 模型实现的前置阻塞。
 
 巨量当前页面的稳定业务骨架应表达为：
 

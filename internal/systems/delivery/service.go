@@ -36,6 +36,7 @@ var (
 	ErrUnsupportedConfigurationWorkflow = errors.New("delivery repository does not support the configuration workflow")
 	ErrUnsupportedTour                  = errors.New("delivery repository does not support delivery tours")
 	ErrTourOwnerMismatch                = errors.New("delivery tour belongs to another owner")
+	ErrLegacyConfigurationUnsupported   = errors.New("legacy delivery configuration is read-only and unsupported by this operation")
 )
 
 type DeliveryPlanStatus string
@@ -69,7 +70,15 @@ type CreatePlanRequest struct {
 	StartAt           time.Time `json:"start_at,omitempty"`
 	EndAt             time.Time `json:"end_at,omitempty"`
 	PlanDraft
+	Intent                *DeliveryIntent        `json:"intent,omitempty"`
+	PlatformConfiguration *PlatformConfiguration `json:"platform_configuration,omitempty"`
 }
+
+func (r CreatePlanRequest) usesPlatformRuntime() bool {
+	return r.Intent != nil || r.PlatformConfiguration != nil
+}
+
+func (r CreatePlanRequest) UsesPlatformRuntime() bool { return r.usesPlatformRuntime() }
 
 func (r CreatePlanRequest) usesLifecycleDraft() bool {
 	return r.PlanDraft.Advertiser.ID != "" || r.PlanDraft.Schedule.Timezone != "" ||
@@ -77,6 +86,12 @@ func (r CreatePlanRequest) usesLifecycleDraft() bool {
 }
 
 func (r CreatePlanRequest) Validate() error {
+	if r.usesPlatformRuntime() {
+		if r.Intent == nil || r.PlatformConfiguration == nil {
+			return ErrInvalidRequest
+		}
+		return nil
+	}
 	if r.usesLifecycleDraft() {
 		return r.PlanDraft.Validate()
 	}
@@ -128,32 +143,33 @@ type DeliveryPlan struct {
 }
 
 type ChangeSet struct {
-	ID                 string                  `json:"id"`
-	OrganizationID     contract.OrganizationID `json:"organization_id"`
-	ProjectID          contract.ProjectID      `json:"project_id"`
-	PlanID             string                  `json:"plan_id"`
-	PlanName           string                  `json:"plan_name"`
-	PlanVersion        int64                   `json:"plan_version"`
-	PlanCanonicalHash  string                  `json:"plan_canonical_hash"`
-	TargetSnapshot     *ThreeTierConfiguration `json:"target_snapshot,omitempty"`
-	TargetSnapshotHash string                  `json:"target_snapshot_hash,omitempty"`
-	RecommendationID   string                  `json:"recommendation_id,omitempty"`
-	BudgetLimit        Budget                  `json:"budget_limit"`
-	Status             ChangeSetStatus         `json:"status"`
-	RiskLevel          string                  `json:"risk_level"`
-	PreflightNotes     []string                `json:"preflight_notes"`
-	ApprovedBy         string                  `json:"approved_by,omitempty"`
-	ApprovedAt         *time.Time              `json:"approved_at,omitempty"`
-	RejectedBy         string                  `json:"rejected_by,omitempty"`
-	RejectedAt         *time.Time              `json:"rejected_at,omitempty"`
-	RejectionReason    string                  `json:"rejection_reason,omitempty"`
-	Approval           *ApprovalView           `json:"approval,omitempty"`
-	Source             Source                  `json:"source"`
-	Scenario           Scenario                `json:"scenario"`
-	Version            int64                   `json:"version"`
-	CreatedBy          string                  `json:"created_by"`
-	CreatedAt          time.Time               `json:"created_at"`
-	UpdatedAt          time.Time               `json:"updated_at"`
+	ID                   string                  `json:"id"`
+	OrganizationID       contract.OrganizationID `json:"organization_id"`
+	ProjectID            contract.ProjectID      `json:"project_id"`
+	PlanID               string                  `json:"plan_id"`
+	PlanName             string                  `json:"plan_name"`
+	PlanVersion          int64                   `json:"plan_version"`
+	PlanCanonicalHash    string                  `json:"plan_canonical_hash"`
+	TargetSnapshot       *PlatformConfiguration  `json:"target_snapshot,omitempty"`
+	LegacyTargetSnapshot *ThreeTierConfiguration `json:"legacy_target_snapshot,omitempty"`
+	TargetSnapshotHash   string                  `json:"target_snapshot_hash,omitempty"`
+	RecommendationID     string                  `json:"recommendation_id,omitempty"`
+	BudgetLimit          Budget                  `json:"budget_limit"`
+	Status               ChangeSetStatus         `json:"status"`
+	RiskLevel            string                  `json:"risk_level"`
+	PreflightNotes       []string                `json:"preflight_notes"`
+	ApprovedBy           string                  `json:"approved_by,omitempty"`
+	ApprovedAt           *time.Time              `json:"approved_at,omitempty"`
+	RejectedBy           string                  `json:"rejected_by,omitempty"`
+	RejectedAt           *time.Time              `json:"rejected_at,omitempty"`
+	RejectionReason      string                  `json:"rejection_reason,omitempty"`
+	Approval             *ApprovalView           `json:"approval,omitempty"`
+	Source               Source                  `json:"source"`
+	Scenario             Scenario                `json:"scenario"`
+	Version              int64                   `json:"version"`
+	CreatedBy            string                  `json:"created_by"`
+	CreatedAt            time.Time               `json:"created_at"`
+	UpdatedAt            time.Time               `json:"updated_at"`
 }
 
 type RejectChangeSetRequest struct {
@@ -406,6 +422,15 @@ func (s Service) createPlan(ctx context.Context, actor contract.ActorContext, pr
 		return DeliveryPlan{}, err
 	}
 	now := s.now()
+	if request.usesPlatformRuntime() {
+		version, err := newPlatformPlanVersion(id, actor, projectID, 1, *request.Intent, *request.PlatformConfiguration, now)
+		if err != nil {
+			return DeliveryPlan{}, err
+		}
+		plan := planProjectionFromPlatformVersion(id, actor, projectID, version, now)
+		plan.TourRunID, plan.TourOwnerID, plan.TourCase = tourRunID, tourOwnerID, tourCase
+		return s.Repository.CreatePlan(ctx, plan, version)
+	}
 	draft, pkg, err := s.createDraftAndPackage(ctx, actor, projectID, request)
 	if err != nil {
 		return DeliveryPlan{}, err
@@ -505,7 +530,7 @@ func (s Service) UpdatePlan(ctx context.Context, actor contract.ActorContext, pr
 	if err := s.ready(actor, projectID, ScopeWrite); err != nil {
 		return DeliveryPlan{}, err
 	}
-	if err := request.Validate(); err != nil || strings.TrimSpace(planID) == "" {
+	if strings.TrimSpace(planID) == "" {
 		return DeliveryPlan{}, ErrInvalidRequest
 	}
 	if _, err := s.Projects.RequireActiveContext(ctx, actor, projectID); err != nil {
@@ -517,6 +542,22 @@ func (s Service) UpdatePlan(ctx context.Context, actor contract.ActorContext, pr
 	}
 	if plan.Status != DeliveryPlanDraft {
 		return DeliveryPlan{}, ErrInvalidState
+	}
+	if plan.CurrentVersion.ReadOnly {
+		return DeliveryPlan{}, ErrLegacyConfigurationUnsupported
+	}
+	if plan.CurrentVersion.IsPlatformConfigurationV2() {
+		if request.Intent == nil || request.PlatformConfiguration == nil || request.ExpectedVersion < 1 {
+			return DeliveryPlan{}, ErrInvalidRequest
+		}
+		version, err := newPlatformPlanVersion(plan.ID, actor, projectID, request.ExpectedVersion+1, *request.Intent, *request.PlatformConfiguration, s.now())
+		if err != nil {
+			return DeliveryPlan{}, err
+		}
+		return s.Repository.UpdatePlan(ctx, actor.OrganizationID, projectID, planID, request.ExpectedVersion, version)
+	}
+	if err := request.Validate(); err != nil {
+		return DeliveryPlan{}, ErrInvalidRequest
 	}
 	resolvedDraft, err := s.resolvePlanReferences(ctx, actor, projectID, request.PlanDraft)
 	if err != nil {
@@ -584,6 +625,9 @@ func (s Service) RunPlanPreflight(ctx context.Context, actor contract.ActorConte
 	if err != nil {
 		return PreflightResult{}, err
 	}
+	if plan.CurrentVersion.ReadOnly {
+		return PreflightResult{}, ErrLegacyConfigurationUnsupported
+	}
 	checks := RunPreflight(plan.CurrentVersion)
 	return preflightResult(plan.ID, plan.CurrentVersion, checks, s.now()), nil
 }
@@ -644,10 +688,16 @@ func (s Service) hydrateChangeSet(ctx context.Context, organizationID contract.O
 	value.PlanName = version.Name
 	value.Source, value.Scenario = version.Source, version.Scenario
 	if value.TargetSnapshot != nil {
-		value.Source, value.Scenario = value.TargetSnapshot.Source, Scenario(value.TargetSnapshot.Scenario)
+		value.Scenario = ScenarioPlatformConfiguration
+		if value.TargetSnapshot.Platform == DeliveryPlatformMagneticEngine {
+			value.Scenario = ScenarioCapabilityPending
+		}
+	} else if value.LegacyTargetSnapshot != nil {
+		value.Source, value.Scenario = value.LegacyTargetSnapshot.Source, Scenario(value.LegacyTargetSnapshot.Scenario)
 	}
+	value.PlanName = versionName(version)
 	value.PlanCanonicalHash = version.CanonicalHash
-	value.BudgetLimit = version.Budget
+	value.BudgetLimit = versionBudget(version)
 	approval, err := s.Repository.GetApproval(ctx, organizationID, projectID, value.ID)
 	if errors.Is(err, ErrNotFound) {
 		value.Approval = nil
@@ -678,6 +728,9 @@ func (s Service) approvalView(changeSet ChangeSet, plan DeliveryPlan, version De
 		HashSummary:      hashSummary(approval.PlanCanonicalHash),
 		BudgetLimit:      Budget{TotalMinor: approval.BudgetLimitMinor, Currency: approval.Currency},
 	}
+	if version.IsPlatformConfigurationV2() {
+		view.BudgetLimit = versionBudget(version)
+	}
 	if !s.now().Before(approval.ExpiresAt) {
 		view.Valid, view.InvalidReason = false, ApprovalInvalidExpired
 		return view, nil
@@ -695,6 +748,7 @@ func (s Service) approvalView(changeSet ChangeSet, plan DeliveryPlan, version De
 		!validLifecycleState ||
 		approval.ChangeSetVersion != approvedChangeSetVersion ||
 		approval.PlanCanonicalHash != version.CanonicalHash ||
+		approval.TargetSnapshotHash != changeSet.TargetSnapshotHash ||
 		approval.Source != SourceMock ||
 		approval.Scenario != version.Scenario {
 		view.Valid, view.InvalidReason = false, ApprovalInvalidContentMismatch
@@ -714,9 +768,22 @@ func (s Service) approvalView(changeSet ChangeSet, plan DeliveryPlan, version De
 	}
 	if approval.Action != ApprovalActionExecute ||
 		approval.Scope != ApprovalScopeExecuteMock ||
-		version.Budget.TotalMinor > approval.BudgetLimitMinor ||
-		version.Budget.Currency != approval.Currency {
+		versionBudget(version).TotalMinor > approval.BudgetLimitMinor ||
+		versionBudget(version).Currency != approval.Currency {
 		view.Valid, view.InvalidReason = false, ApprovalInvalidScopeExceeded
+	}
+	if version.IsPlatformConfigurationV2() {
+		configuration, intent := version.PlatformConfiguration, version.DeliveryIntent
+		if changeSet.TargetSnapshot != nil {
+			configuration = changeSet.TargetSnapshot
+		}
+		if approval.ConfigurationSchemaVersion != configuration.SchemaVersion || approval.ConfigurationID != configuration.ConfigurationID ||
+			approval.ConfigurationVersion != configuration.VersionNumber || approval.ConfigurationPlatform != configuration.Platform ||
+			approval.ConfigurationProfileVersion != configuration.ProfileVersion || approval.ConfigurationCanonicalHash != configuration.CanonicalHash ||
+			approval.IntentSchemaVersion != intent.SchemaVersion || approval.IntentID != intent.IntentID || approval.IntentVersion != intent.VersionNumber ||
+			approval.IntentCanonicalHash != intent.CanonicalHash {
+			view.Valid, view.InvalidReason = false, ApprovalInvalidContentMismatch
+		}
 	}
 	return view, nil
 }
@@ -765,6 +832,9 @@ func (s Service) CreateChangeSet(ctx context.Context, actor contract.ActorContex
 	if plan.Version != expectedPlanVersion {
 		return ChangeSet{}, ErrVersionConflict
 	}
+	if plan.CurrentVersion.ReadOnly {
+		return ChangeSet{}, ErrLegacyConfigurationUnsupported
+	}
 	if err := validatePlanCanonicalHash(plan.CurrentVersion); err != nil {
 		return ChangeSet{}, err
 	}
@@ -773,13 +843,18 @@ func (s Service) CreateChangeSet(ctx context.Context, actor contract.ActorContex
 		return ChangeSet{}, err
 	}
 	now := s.now()
-	return s.Repository.CreateChangeSet(ctx, ChangeSet{
+	changeSet := ChangeSet{
 		ID: id, OrganizationID: actor.OrganizationID, ProjectID: projectID, PlanID: plan.ID,
-		PlanName: plan.CurrentVersion.Name, PlanVersion: plan.Version, PlanCanonicalHash: plan.CurrentVersion.CanonicalHash,
-		BudgetLimit: plan.CurrentVersion.Budget, Status: ChangeSetDraft, RiskLevel: "low",
+		PlanName: versionName(plan.CurrentVersion), PlanVersion: plan.Version, PlanCanonicalHash: plan.CurrentVersion.CanonicalHash,
+		BudgetLimit: versionBudget(plan.CurrentVersion), Status: ChangeSetDraft, RiskLevel: "low",
 		PreflightNotes: []string{}, Source: plan.Source, Scenario: plan.Scenario,
 		Version: 1, CreatedBy: actor.Principal.ID, CreatedAt: now, UpdatedAt: now,
-	})
+	}
+	if plan.CurrentVersion.IsPlatformConfigurationV2() {
+		changeSet.TargetSnapshot = cloneJSONPointer(plan.CurrentVersion.PlatformConfiguration)
+		changeSet.TargetSnapshotHash = plan.CurrentVersion.PlatformConfiguration.CanonicalHash
+	}
+	return s.Repository.CreateChangeSet(ctx, changeSet)
 }
 
 func (s Service) Preflight(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, changeSetID string, expectedVersion int64) (ChangeSet, error) {
@@ -796,6 +871,9 @@ func (s Service) Preflight(ctx context.Context, actor contract.ActorContext, pro
 	if value.Status != ChangeSetDraft {
 		return ChangeSet{}, ErrInvalidState
 	}
+	if value.LegacyTargetSnapshot != nil {
+		return ChangeSet{}, ErrLegacyConfigurationUnsupported
+	}
 	plan, err := s.Repository.GetPlan(ctx, actor.OrganizationID, projectID, value.PlanID)
 	if err != nil {
 		return ChangeSet{}, err
@@ -806,6 +884,9 @@ func (s Service) Preflight(ctx context.Context, actor contract.ActorContext, pro
 	version, err := s.Repository.GetPlanVersion(ctx, actor.OrganizationID, projectID, value.PlanID, int(value.PlanVersion))
 	if err != nil {
 		return ChangeSet{}, err
+	}
+	if version.ReadOnly {
+		return ChangeSet{}, ErrLegacyConfigurationUnsupported
 	}
 	preflightVersion, err := changeSetPreflightVersion(version, value)
 	if err != nil {
@@ -853,6 +934,9 @@ func (s Service) Approve(ctx context.Context, actor contract.ActorContext, proje
 	if err != nil {
 		return ChangeSet{}, err
 	}
+	if version.ReadOnly {
+		return ChangeSet{}, ErrLegacyConfigurationUnsupported
+	}
 	if err := validatePlanCanonicalHash(version); err != nil {
 		return ChangeSet{}, err
 	}
@@ -870,6 +954,7 @@ func (s Service) Approve(ctx context.Context, actor contract.ActorContext, proje
 		return ChangeSet{}, err
 	}
 	now := s.now()
+	budget := versionBudget(version)
 	approval := DeliveryApproval{
 		ApprovalID: approvalID, OrganizationID: actor.OrganizationID, ProjectID: projectID,
 		PlanID: value.PlanID, PlanVersion: value.PlanVersion,
@@ -877,9 +962,17 @@ func (s Service) Approve(ctx context.Context, actor contract.ActorContext, proje
 		PlanCanonicalHash:  version.CanonicalHash,
 		TargetSnapshotHash: value.TargetSnapshotHash,
 		Action:             ApprovalActionExecute, Scope: ApprovalScopeExecuteMock,
-		BudgetLimitMinor: version.Budget.TotalMinor, Currency: version.Budget.Currency,
+		BudgetLimitMinor: budget.TotalMinor, Currency: budget.Currency,
 		ApprovedBy: actor.Principal.ID, ApprovedAt: now, ExpiresAt: now.Add(ApprovalTTL),
 		Source: SourceMock, Scenario: preflightVersion.Scenario,
+	}
+	if preflightVersion.IsPlatformConfigurationV2() {
+		configuration, intent := preflightVersion.PlatformConfiguration, preflightVersion.DeliveryIntent
+		approval.ConfigurationSchemaVersion, approval.ConfigurationID = configuration.SchemaVersion, configuration.ConfigurationID
+		approval.ConfigurationVersion, approval.ConfigurationPlatform = configuration.VersionNumber, configuration.Platform
+		approval.ConfigurationProfileVersion, approval.ConfigurationCanonicalHash = configuration.ProfileVersion, configuration.CanonicalHash
+		approval.IntentSchemaVersion, approval.IntentID = intent.SchemaVersion, intent.IntentID
+		approval.IntentVersion, approval.IntentCanonicalHash = intent.VersionNumber, intent.CanonicalHash
 	}
 	approval.ActionHash, err = ApprovalActionHash(approval)
 	if err != nil {

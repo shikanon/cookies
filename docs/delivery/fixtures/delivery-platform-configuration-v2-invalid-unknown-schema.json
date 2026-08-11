@@ -1,0 +1,7 @@
+{
+  "fixture": "delivery-platform-configuration-v2-oceanengine-valid.json",
+  "expected_error": "must be equal to constant",
+  "mutations": [
+    { "path": "schema_version", "value": "delivery-platform-configuration/v999" }
+  ]
+}

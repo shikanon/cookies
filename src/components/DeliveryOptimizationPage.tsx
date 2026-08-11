@@ -249,7 +249,7 @@ export function DeliveryOptimizationPage({ state, activeView, tourRunId, tourCas
         <div className="delivery-optimization-counts"><span><b>{counts.proposed}</b>待决策</span><span><b>{counts.accepted}</b>已采纳</span><span><b>{counts.rejected}</b>已拒绝</span></div>
         <div className="delivery-optimization-toolbar-actions">
           <button className="secondary-button" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14}/>刷新</button>
-          <button className="primary-button" onClick={() => void generateRecommendation()} disabled={busy || !selectedPlan?.currentVersion.threeTierConfiguration}><Send size={14}/>生成优化建议</button>
+          <button className="primary-button" onClick={() => void generateRecommendation()} disabled={busy || !selectedPlan?.currentVersion.platformConfiguration || selectedPlan.currentVersion.runtimeStatus !== 'active'}><Send size={14}/>生成优化建议</button>
         </div>
       </section>
 
@@ -263,7 +263,7 @@ export function DeliveryOptimizationPage({ state, activeView, tourRunId, tourCas
             const plan = plans.find(candidate => candidate.id === item.planId)
             const changeSet = changeSetByRecommendation.get(item.id)
             const monitoringURL = addQuery(monitoringBaseURL, { plan_id: item.planId })
-            const configBaseURL = projectPath(projectId, 'delivery', 'three-tier', undefined, '检查与提交', undefined, tourRunId, tourCase)
+            const configBaseURL = projectPath(projectId, 'delivery', 'configuration', undefined, '检查与提交', undefined, tourRunId, tourCase)
             const draftURL = changeSet ? addQuery(configBaseURL, { plan_id: item.planId, change_set_id: changeSet.id }) : undefined
             return <RecommendationCard key={item.id} item={item} plan={plan} changeSet={changeSet} busy={busy} monitoringURL={monitoringURL} draftURL={draftURL} onAccept={acceptRecommendation} onReject={rejectRecommendation}/>
           })}

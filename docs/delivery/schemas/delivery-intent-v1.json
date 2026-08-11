@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shikanon/cookies/docs/delivery/schemas/delivery-intent-v1.json",
+  "title": "Platform-neutral DeliveryIntent v1",
+  "description": "A platform-neutral delivery intent. canonical_hash is RFC 8785 JCS + SHA-256 over payload after excluding stable-reference display/evidence metadata.",
+  "$ref": "#/$defs/DeliveryIntent",
+  "$defs": {
+    "CanonicalHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "ReferenceState": {
+      "type": "string",
+      "enum": ["resolved", "unresolved", "blocked", "redacted"]
+    },
+    "StableReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "object_kind", "scope", "state"],
+      "properties": {
+        "namespace": { "type": "string", "minLength": 1 },
+        "object_kind": { "type": "string", "minLength": 1 },
+        "scope": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "content_hash": { "type": "string", "minLength": 1 },
+        "state": { "$ref": "#/$defs/ReferenceState" },
+        "reason": { "type": "string", "minLength": 1 },
+        "display_name_snapshot": { "type": "string" },
+        "evidence_version": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "const": "resolved" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": { "id": { "type": "string", "minLength": 1 } },
+            "required": ["id"]
+          },
+          "else": {
+            "properties": { "reason": { "type": "string", "minLength": 1 } },
+            "required": ["reason"]
+          }
+        }
+      ]
+    },
+    "ConfigurationProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["manual", "rule", "decision_engine", "import"] },
+        "generator_ref": { "type": "string" },
+        "policy_version": { "type": "string" }
+      }
+    },
+    "FactProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": { "type": "string", "enum": ["mock", "replay", "connector", "page_evidence"] },
+        "snapshot_ref": { "type": "string" },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "observed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "AuditMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "created_by": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "BudgetBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "minimum_total_minor", "maximum_total_minor"],
+      "properties": {
+        "currency": { "type": "string", "minLength": 1 },
+        "minimum_total_minor": { "type": "integer", "minimum": 0 },
+        "maximum_total_minor": { "type": "integer", "minimum": 0 },
+        "minimum_daily_minor": { "type": "integer", "minimum": 0 },
+        "maximum_daily_minor": { "type": "integer", "minimum": 0 }
+      },
+      "dependentRequired": {
+        "minimum_daily_minor": ["maximum_daily_minor"],
+        "maximum_daily_minor": ["minimum_daily_minor"]
+      }
+    },
+    "ScheduleBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["earliest_start", "latest_end", "timezone"],
+      "properties": {
+        "earliest_start": { "type": "string", "format": "date-time" },
+        "latest_end": { "type": "string", "format": "date-time" },
+        "timezone": { "type": "string", "minLength": 1 }
+      }
+    },
+    "OptimizationPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "direction"],
+      "properties": {
+        "metric": { "type": "string", "minLength": 1 },
+        "direction": { "type": "string", "enum": ["minimize", "maximize"] },
+        "target_value": { "type": "number" },
+        "unit": { "type": "string" }
+      }
+    },
+    "AudienceConstraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "include_references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StableReference" }
+        },
+        "exclude_references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StableReference" }
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "DeliveryIntentPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload_schema_version",
+        "marketing_objective",
+        "budget_boundary",
+        "schedule_boundary",
+        "optimization_preferences",
+        "material_references",
+        "audience_constraints",
+        "strategy_reference"
+      ],
+      "properties": {
+        "payload_schema_version": { "const": "delivery-intent/v1" },
+        "marketing_objective": { "type": "string", "minLength": 1 },
+        "budget_boundary": { "$ref": "#/$defs/BudgetBoundary" },
+        "schedule_boundary": { "$ref": "#/$defs/ScheduleBoundary" },
+        "optimization_preferences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/OptimizationPreference" }
+        },
+        "product_references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StableReference" }
+        },
+        "landing_page_references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StableReference" }
+        },
+        "material_references": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/StableReference" }
+        },
+        "audience_constraints": { "$ref": "#/$defs/AudienceConstraints" },
+        "strategy_reference": { "$ref": "#/$defs/StableReference" }
+      }
+    },
+    "DeliveryIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "intent_id",
+        "version_number",
+        "hash_algorithm",
+        "canonical_hash",
+        "payload",
+        "configuration_provenance",
+        "fact_provenance",
+        "audit"
+      ],
+      "properties": {
+        "schema_version": { "const": "delivery-intent/v1" },
+        "intent_id": { "type": "string", "minLength": 1 },
+        "version_number": { "type": "integer", "minimum": 1 },
+        "hash_algorithm": { "const": "RFC8785-JCS-SHA256(canonical_payload)" },
+        "canonical_hash": { "$ref": "#/$defs/CanonicalHash" },
+        "payload": { "$ref": "#/$defs/DeliveryIntentPayload" },
+        "configuration_provenance": { "$ref": "#/$defs/ConfigurationProvenance" },
+        "fact_provenance": { "$ref": "#/$defs/FactProvenance" },
+        "audit": { "$ref": "#/$defs/AuditMetadata" }
+      }
+    }
+  }
+}
