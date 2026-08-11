@@ -36,9 +36,9 @@
     "timeline_duration_ms": 12000,
     "caption": "固定黄金字幕",
     "video_framemd5_sha256": "527e64690adaab7909477dd526af92182997d15ea30d9ea7c7fd575252c2e1ff",
-    "audio_framemd5_sha256": "d7ddd60f0d24036f42ebd853ad806956f076eed72d665873ff4dfb2047d68c6a",
-    "c3_visual_framemd5_sha256": "67d5fb78b5aba429e843ce39b9bb562b17e76a223dc70fe5f93dfcfa89018d2b",
-    "c7_video_framemd5_sha256": "6867b5d85290799887e68ada492ed77fc4aab21c398f22776efaf50d9883d610",
-    "c7_audio_framemd5_sha256": "e1630e9c863796efb485cb8dacb49b4f27780e3834f1a017c32c78b965b2d6f5"
+    "audio_framemd5_sha256": "59e84dc19eb19bce52ef77aa0813e3ed115de784409a0b81fc620ecf814e4264",
+    "c3_visual_framemd5_sha256": "3c86f68394225fb119552cd43487f525064d381d0773a8715ae532e91c6b8930",
+    "c7_video_framemd5_sha256": "700e3e60cd0030bd183990b4c154884e222d20dbdab02f6525514fa3c2bf6c37",
+    "c7_audio_framemd5_sha256": "8848dde4490768da7e150656678f204e3ddc1473b930e72fd7c9e26d31755c38"
   }
 }
