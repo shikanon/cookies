@@ -11,7 +11,7 @@ CREATE TABLE provider_job_usage (
   PRIMARY KEY (provider_job_id),
   KEY idx_provider_usage_project (organization_id, project_id, measured_at),
   CONSTRAINT fk_provider_usage_job FOREIGN KEY (provider_job_id) REFERENCES provider_jobs(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE provider_job_events (
   provider_job_id VARCHAR(96) NOT NULL,
@@ -25,4 +25,4 @@ CREATE TABLE provider_job_events (
   PRIMARY KEY (provider_job_id, ordinal),
   KEY idx_provider_events_project (organization_id, project_id, provider_job_id, ordinal),
   CONSTRAINT fk_provider_events_job FOREIGN KEY (provider_job_id) REFERENCES provider_jobs(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
