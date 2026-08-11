@@ -4,7 +4,7 @@ set -eu
 output_root="${1:-.tmp/video-editor-c0}"
 mkdir -p "$output_root"
 
-common_video="-an -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -r 30 -movflags +faststart -map_metadata -1"
+common_video="-an -c:v libx264 -preset medium -crf 18 -threads 1 -x264-params asm=0 -pix_fmt yuv420p -r 30 -movflags +faststart -map_metadata -1"
 
 # shellcheck disable=SC2086
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=720x1280:rate=30:duration=6" $common_video "$output_root/video-a.mp4"
@@ -15,7 +15,7 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=1280x720:rate=
 ffmpeg -hide_banner -loglevel error -y \
   -f lavfi -i "testsrc2=size=720x1280:rate=30:duration=6" \
   -f lavfi -i "sine=frequency=220:sample_rate=48000:duration=6" \
-  -map 0:v:0 -map 1:a:0 -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -r 30 \
+  -map 0:v:0 -map 1:a:0 -c:v libx264 -preset medium -crf 18 -threads 1 -x264-params asm=0 -pix_fmt yuv420p -r 30 \
   -c:a aac -b:a 128k -ar 48000 -ac 2 -shortest -movflags +faststart -map_metadata -1 \
   "$output_root/video-original-audio.mp4"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=0x2457d6:size=320x180" -frames:v 1 -map_metadata -1 "$output_root/overlay-opaque.png"

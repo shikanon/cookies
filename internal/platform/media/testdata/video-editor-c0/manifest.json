@@ -20,10 +20,10 @@
     "audio_codec": "aac"
   },
   "assets": [
-    {"id":"video-a","role":"preroll","file":"video-a.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"12a2a601622ba055904f39ac88f14c692684f808d1a7b3c0f45501c71eadd08a"},
-    {"id":"video-b","role":"original","file":"video-b.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"29be8de1e928dffecc24c476a9ebbbbca31afadac21593106fcb2743c9bddeb2"},
-    {"id":"video-landscape","role":"landscape-original","file":"video-landscape.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"9178b6d47034812fab6a11b55c157febfa026b44003163d4a0a0382ce651c6b7"},
-    {"id":"video-original-audio","role":"original-with-audio","file":"video-original-audio.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"6dadcfe91e0c15bd999e69dd029575f3e38aec29b03b8466175a0a98dd21311e"},
+    {"id":"video-a","role":"preroll","file":"video-a.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"9cbd8713173a3da8cda0bc8a48ddcc0e8314f0711325accfde4221d998c111f0"},
+    {"id":"video-b","role":"original","file":"video-b.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"a416b9d8a6bd2a94e31e9abbde80cc8e037a3ad1978f4ef13aa96703e66e69d9"},
+    {"id":"video-landscape","role":"landscape-original","file":"video-landscape.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"766ada53077bf6ba20e217b718a8aab6edf9ae79ae42b861df7c92a2b8a61c08"},
+    {"id":"video-original-audio","role":"original-with-audio","file":"video-original-audio.mp4","mime_type":"video/mp4","duration_ms":6000,"sha256":"2a75bd991d4a6ebaf440c5ed256b43d9902940739dab9a9aee6c910b7260b88c"},
     {"id":"overlay-opaque","role":"image","file":"overlay-opaque.png","mime_type":"image/png","duration_ms":0,"sha256":"bf8f5364a9e8cace7f280a805ae24d33c8fa4129c7e5032b5b8b3c21999ae9d4"},
     {"id":"overlay-alpha","role":"transparent-image","file":"overlay-alpha.png","mime_type":"image/png","duration_ms":0,"sha256":"a1812deb43712bc70ad5bd99beacd18a0426a76b7d8768e583386fbb51c8137d"},
     {"id":"voice","role":"voiceover","file":"voice.wav","mime_type":"audio/wav","duration_ms":3000,"sha256":"98d1729a8d8fc0900df26662a7de1f0ef82bcac59619b1ebd1b05c743ba68f89"},
@@ -35,10 +35,10 @@
   "golden": {
     "timeline_duration_ms": 12000,
     "caption": "固定黄金字幕",
-    "video_framemd5_sha256": "391f8001d08056388c10848174332b3dd5263d9192442cd3610c129e7a30f8e4",
+    "video_framemd5_sha256": "527e64690adaab7909477dd526af92182997d15ea30d9ea7c7fd575252c2e1ff",
     "audio_framemd5_sha256": "d7ddd60f0d24036f42ebd853ad806956f076eed72d665873ff4dfb2047d68c6a",
-    "c3_visual_framemd5_sha256": "a0080b405c784ce376445a4efe8544da2e2be2c24cae02a891b8bf1ff5be12be",
-    "c7_video_framemd5_sha256": "eaf736500d6e2cfabeab9dc45db57e98843baaa1476fcab95d657cc655061f1b",
+    "c3_visual_framemd5_sha256": "67d5fb78b5aba429e843ce39b9bb562b17e76a223dc70fe5f93dfcfa89018d2b",
+    "c7_video_framemd5_sha256": "6867b5d85290799887e68ada492ed77fc4aab21c398f22776efaf50d9883d610",
     "c7_audio_framemd5_sha256": "e1630e9c863796efb485cb8dacb49b4f27780e3834f1a017c32c78b965b2d6f5"
   }
 }
