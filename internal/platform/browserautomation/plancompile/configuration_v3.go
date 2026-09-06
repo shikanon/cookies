@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/shikanon/cookies/internal/platform/browserautomation/rparunner"
+	"github.com/shikanon/cookies/internal/platform/oceanengineconstraints"
 	"github.com/shikanon/cookies/internal/systems/delivery"
 )
 
@@ -155,6 +156,12 @@ func CompileConfigurationV3(configuration delivery.PlatformConfiguration, intent
 		return V3ConfigurationPlanSet{}, fmt.Errorf("unsupported platform configuration")
 	}
 	project := *ocean.Project
+	optimizationTarget, optimizationDisplayName := "", ""
+	if project.OptimizationTargetReference != nil {
+		optimizationTarget = referenceKey(project.OptimizationTargetReference)
+		optimizationDisplayName = project.OptimizationTargetReference.DisplayNameSnapshot
+	}
+	project.BudgetAndBidding.ChargingMode = oceanengineconstraints.ResolveChargingModeForTarget(optimizationTarget, optimizationDisplayName, project.BudgetAndBidding.ChargingMode)
 	if err := validateAccountPath(project, account); err != nil {
 		return V3ConfigurationPlanSet{}, err
 	}
@@ -177,6 +184,7 @@ func CompileConfigurationV3(configuration delivery.PlatformConfiguration, intent
 		projectKind = "project_edit"
 	}
 	projectPlan := formPlan(projectKind, account, bindings.ProjectPlatformID, "", parent, orderedProjectFields(project, parent), projectValues)
+	attachProjectBidConstraint(&projectPlan, project)
 	projectRaw, _ := json.Marshal(projectPlan)
 	forms := []V3PlannedForm{{InternalObjectKind: "project", InternalObjectID: project.ProjectDraftID, PlatformObjectID: bindings.ProjectPlatformID, Plan: projectRaw, Diff: planDiff(projectPlan)}}
 
@@ -233,7 +241,7 @@ func validateConfigurationLimits(project delivery.OceanEngineProjectDraft, promo
 	if !projectBidRequired(project) {
 		projectBudget.BidMinor = nil
 	}
-	if err := validateBid(projectBudget); err != nil {
+	if err := validateProjectBid(projectBudget); err != nil {
 		return fmt.Errorf("project: %w", err)
 	}
 	if project.Schedule.Timezone != "Asia/Shanghai" || !project.Schedule.EndAt.After(project.Schedule.StartAt) {
@@ -331,6 +339,36 @@ func validateBid(value delivery.OceanEngineBudgetAndBidding) error {
 		return fmt.Errorf("ROI coefficient must be positive")
 	}
 	return nil
+}
+
+func validateProjectBid(value delivery.OceanEngineBudgetAndBidding) error {
+	if value.BidMinor == nil {
+		return validateBid(value)
+	}
+	constraint, err := oceanengineconstraints.Resolve(value.ChargingMode, value.DailyBudgetMinor)
+	if err != nil {
+		return err
+	}
+	if err := oceanengineconstraints.ValidateBid(*value.BidMinor, constraint); err != nil {
+		return err
+	}
+	if value.ROICoefficient != nil && *value.ROICoefficient <= 0 {
+		return fmt.Errorf("ROI coefficient must be positive")
+	}
+	return nil
+}
+
+func attachProjectBidConstraint(plan *v3Plan, project delivery.OceanEngineProjectDraft) {
+	constraint, err := oceanengineconstraints.Resolve(project.BudgetAndBidding.ChargingMode, project.BudgetAndBidding.DailyBudgetMinor)
+	if err != nil {
+		return
+	}
+	for index := range plan.Steps {
+		if plan.Steps[index].FieldKey == "project.bid" {
+			plan.Steps[index].MoneyConstraint = &constraint
+			return
+		}
+	}
 }
 
 func projectPlanValues(project delivery.OceanEngineProjectDraft, intent *delivery.DeliveryIntent) (map[string]any, error) {
@@ -441,29 +479,31 @@ func projectPlanValues(project delivery.OceanEngineProjectDraft, intent *deliver
 
 func promotionPlanValues(p delivery.OceanEnginePromotionDraft, project delivery.OceanEngineProjectDraft, intent *delivery.DeliveryIntent) (map[string]any, error) {
 	values := map[string]any{"promotion.copy_materials": copyTexts(p.CopyItems), "promotion.product_selling_points": p.ProductSellingPoints, "promotion.call_to_action": p.Settings.CallToAction, "promotion.source_label": p.Settings.SourceLabel, "promotion.promotion_name": p.PromotionName}
-	directLinkMode := strings.TrimSpace(p.Settings.DirectLinkMode)
-	if directLinkMode == "" {
-		directLinkMode = "automatic"
-	}
-	switch directLinkMode {
-	case "automatic":
-		values["promotion.direct_link_mode"] = "自动生成"
-	case "manual":
-		values["promotion.direct_link_mode"] = "手动填写"
-		if p.DirectLinkReference == nil {
-			return nil, fmt.Errorf("manual direct link requires a link or an OceanEngine object")
+	if promotionDirectLinkApplicable(project) {
+		directLinkMode := strings.TrimSpace(p.Settings.DirectLinkMode)
+		if directLinkMode == "" {
+			directLinkMode = "automatic"
 		}
-		if validManualDirectLink(p.DirectLinkReference.ID) {
-			values["promotion.direct_link_reference"] = strings.TrimSpace(p.DirectLinkReference.ID)
-		} else {
-			spec, err := stableReferenceSpec(*p.DirectLinkReference, nil)
-			if err != nil {
-				return nil, fmt.Errorf("direct link: %w", err)
+		switch directLinkMode {
+		case "automatic":
+			values["promotion.direct_link_mode"] = "自动生成"
+		case "manual":
+			values["promotion.direct_link_mode"] = "手动填写"
+			if p.DirectLinkReference == nil {
+				return nil, fmt.Errorf("manual direct link requires a link or an OceanEngine object")
 			}
-			values["promotion.direct_link_reference"] = spec
+			if validManualDirectLink(p.DirectLinkReference.ID) {
+				values["promotion.direct_link_reference"] = strings.TrimSpace(p.DirectLinkReference.ID)
+			} else {
+				spec, err := stableReferenceSpec(*p.DirectLinkReference, nil)
+				if err != nil {
+					return nil, fmt.Errorf("direct link: %w", err)
+				}
+				values["promotion.direct_link_reference"] = spec
+			}
+		default:
+			return nil, fmt.Errorf("direct link mode must be automatic or manual")
 		}
-	default:
-		return nil, fmt.Errorf("direct link mode must be automatic or manual")
 	}
 	productName := strings.TrimSpace(p.ProductName)
 	if productName == "" && project.MarketingProductReference != nil {
@@ -604,7 +644,7 @@ func stableReferenceSpec(ref delivery.StableReference, allowed []delivery.Stable
 
 func validImageSourceIdentity(value string) bool {
 	value = strings.TrimSpace(value)
-	return value != "" && strings.Contains(value, "/") && !strings.Contains(value, "://") && !strings.ContainsAny(value, "?#")
+	return value != "" && strings.Contains(value, "/") && !strings.Contains(value, "://") && !strings.ContainsAny(value, "?#") && !strings.HasPrefix(value, "api/")
 }
 
 func resolvedLabel(ref delivery.StableReference) (string, error) {
@@ -780,6 +820,10 @@ func orderedPromotionFields(project delivery.OceanEngineProjectDraft, promotion 
 	if slices.Contains([]string{"click", "impression"}, parent.OptimizationTarget) {
 		keys = removeKey(keys, "promotion.native_anchor_reference")
 	}
+	if !promotionDirectLinkApplicable(project) {
+		keys = removeKey(keys, "promotion.direct_link_mode")
+		keys = removeKey(keys, "promotion.direct_link_reference")
+	}
 	if !slices.Contains([]string{"orange_landing_page", "orange_landing_page_and_im", "owned_landing_page"}, project.Carrier) {
 		keys = removeKey(keys, "promotion.landing_page_reference")
 	}
@@ -815,6 +859,11 @@ func orderedPromotionFields(project delivery.OceanEngineProjectDraft, promotion 
 		}
 	}
 	return fields
+}
+
+func promotionDirectLinkApplicable(project delivery.OceanEngineProjectDraft) bool {
+	parent, _ := parentContext(project)
+	return parent.OptimizationTarget != "impression"
 }
 
 func placementMediaLabels(values []string) []string {

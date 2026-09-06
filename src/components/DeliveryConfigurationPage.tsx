@@ -14,8 +14,9 @@ import { ApiRequestError, api, type ApiAssetVersionPointer, type ApiConnectorAcc
 import { oceanEngineCalibrationDispositions, visibleOceanEngineManifestFields, type CalibrationDisposition, type VisibleManifestField } from '../lib/oceanengineCalibrationManifest'
 import { fromShanghaiEndDate, fromShanghaiStartDate, toShanghaiDateInput } from '../lib/deliverySchedule'
 import { carrierUsesOrangeLandingPage, changeOceanEngineCarrier, normalizeOceanEngineLandingPages } from '../lib/deliveryCarrier'
-import { oceanEngineImageSourceIdentity } from '../lib/oceanengine-product-image'
+import { isOceanEngineImageSourceIdentity, oceanEngineImageSourceIdentity } from '../lib/oceanengine-product-image'
 import { oceanEngineLeadCaptureMode, oceanEngineOptimizationTargetContext, optimizationCapabilitySelectionMatches } from '../lib/oceanengineBranchConstraints'
+import { formatOceanEngineMoneyRange, resolveOceanEngineBidConstraint, resolveOceanEngineChargingMode } from '../lib/oceanengineBidConstraints'
 import { projectPath } from '../lib/router'
 import type { DataState } from '../types'
 import { StateBoundary } from './StateBoundary'
@@ -213,6 +214,8 @@ function normalizeProjectExecutionDefaults(configuration: PlatformConfiguration)
   project.deep_optimization_mode ||= 'disabled'
   if (project.marketing_purpose === 'lead_generation') project.delivery_mode = 'ubmax'
   if (project.delivery_mode === 'manual' && (!project.placement_strategy || project.placement_strategy === 'smart')) project.placement_strategy = 'automatic'
+  const chargingMode = resolveOceanEngineChargingMode(project.optimization_target_reference, project.budget_and_bidding.charging_mode)
+  if (chargingMode) project.budget_and_bidding.charging_mode = chargingMode
   return next
 }
 
@@ -222,7 +225,7 @@ type PlatformObjectLoader = (query: string, cursor: string | undefined, sortBy: 
 
 async function addProductImagePickerEvidence(configuration: PlatformConfiguration, loadProductImages: PlatformObjectLoader): Promise<PlatformConfiguration> {
   const ocean = configuration.payload.ocean_engine
-  const needsEvidence = ocean?.promotions.some(promotion => promotion.product_image_references?.some(reference => !reference.audit_attributes?.image_src_identity))
+  const needsEvidence = ocean?.promotions.some(promotion => promotion.product_image_references?.some(reference => !isOceanEngineImageSourceIdentity(reference.audit_attributes?.image_src_identity)))
   if (!ocean || !needsEvidence) return configuration
 
   const selectedReferences = ocean.promotions.flatMap(promotion => promotion.product_image_references ?? [])
@@ -823,10 +826,22 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
   if (optimizationTargetMissing) projectExecutionIssues.push('请选择当前分支允许的优化目标。')
   const projectBidMinor = ocean.project.budget_and_bidding.bid_minor
   const projectBidRequired = ['stable_cost', 'cost_cap'].includes(ocean.project.budget_and_bidding.bidding_strategy) && !['conversion_roi', 'net_roi'].includes(ocean.project.deep_optimization_mode ?? 'disabled')
+  const projectChargingMode = resolveOceanEngineChargingMode(ocean.project.optimization_target_reference, ocean.project.budget_and_bidding.charging_mode)
+  const projectBidConstraint = projectChargingMode
+    ? resolveOceanEngineBidConstraint(projectChargingMode, ocean.project.budget_and_bidding.daily_budget_minor)
+    : undefined
   if (ocean.project.marketing_purpose === 'lead_generation' && (ocean.project.budget_and_bidding.budget_mode === 'unlimited' || ocean.project.budget_and_bidding.daily_budget_minor < 30000)) projectExecutionIssues.push('销售线索项目必须设置日预算，且不能低于 300 元。')
-  if (projectBidRequired && projectBidMinor != null && (projectBidMinor < 1 || (ocean.project.budget_and_bidding.daily_budget_minor > 0 && projectBidMinor > ocean.project.budget_and_bidding.daily_budget_minor))) projectExecutionIssues.push('项目出价必须不少于 0.01 元，且不能超过项目日预算。')
+  if (!projectChargingMode || !projectBidConstraint) projectExecutionIssues.push('当前优化目标无法解析计费方式。')
+  if (projectBidRequired && projectBidMinor != null && projectBidConstraint && (projectBidMinor < projectBidConstraint.minimumMinor || projectBidMinor > projectBidConstraint.maximumMinor)) projectExecutionIssues.push(`项目出价必须在 ${formatOceanEngineMoneyRange(projectBidConstraint)}之间。`)
   const updateOcean = (next: OceanConfiguration) => onChange({ ...value, payload: { ...value.payload, ocean_engine: next } })
   const updateProject = (patch: Partial<OceanConfiguration['project']>) => updateOcean({ ...ocean, project: { ...ocean.project, ...patch } })
+  const updateOptimizationTarget = (optimizationTargetReference?: StableReference) => {
+    const chargingMode = resolveOceanEngineChargingMode(optimizationTargetReference, ocean.project.budget_and_bidding.charging_mode)
+    updateProject({
+      optimization_target_reference: optimizationTargetReference,
+      ...(chargingMode ? { budget_and_bidding: { ...ocean.project.budget_and_bidding, charging_mode: chargingMode } } : {}),
+    })
+  }
   const updateMarketingPurpose = (marketingPurpose: string) => updateProject({
     marketing_purpose: marketingPurpose,
     ...(marketingPurpose === 'lead_generation' ? {
@@ -921,9 +936,9 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
         <label><span>深度优化方式</span><select value={ocean.project.deep_optimization_mode ?? 'disabled'} onChange={event => updateProject({ deep_optimization_mode: event.target.value })}><option value="disabled">不启用</option><option value="conversion_roi">成交 ROI</option><option value="net_order">净成交下单</option><option value="net_roi">净成交 ROI</option></select><small>平台会按当前场景限制可用选项。</small></label>
         {['lead_generation', 'ecommerce'].includes(ocean.project.marketing_purpose) ? <ToggleField label="AIGC 动态创意" checked={ocean.project.aigc_dynamic_creative ?? false} onChange={aigc_dynamic_creative => updateProject({ aigc_dynamic_creative })}/> : null}
         <label><span>竞价策略</span><select value={ocean.project.budget_and_bidding.bidding_strategy} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, bidding_strategy: event.target.value } })}><option value="stable_cost">稳定成本 · 成本稳定在出价附近</option><option value="cost_cap">最优成本 · 均匀消耗预算，成本不超过出价</option><option value="maximum_conversion">最大转化 · 花完预算，拿到最大转化（价值）</option></select></label>
-        <label><span>付费方式</span><select value={ocean.project.budget_and_bidding.charging_mode} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, charging_mode: event.target.value } })}><option value="CPC">按点击付费</option><option value="CPM">按展示付费</option><option value="OCPM">按目标转化出价</option></select></label>
+        <label><span>付费方式</span><input value={projectChargingMode ? ({ CPC: '按点击付费（CPC）', CPM: '按展示付费（CPM）', OCPC: '按目标转化出价（oCPC）', OCPM: '按目标转化出价（oCPM）' }[projectChargingMode]) : '等待优化目标'} readOnly/><small>由当前优化目标决定，不能单独修改。</small></label>
         <label><span>项目日预算</span>{ocean.project.marketing_purpose !== 'lead_generation' ? <select value={ocean.project.budget_and_bidding.budget_mode ?? (ocean.project.budget_and_bidding.daily_budget_minor === 0 ? 'unlimited' : 'daily')} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, budget_mode: event.target.value as 'daily' | 'unlimited', daily_budget_minor: event.target.value === 'unlimited' ? 0 : Math.max(ocean.project.budget_and_bidding.daily_budget_minor, 30000) } })}><option value="daily">设置日预算</option><option value="unlimited">不限</option></select> : <small>销售线索页面要求设置日预算。</small>}{ocean.project.marketing_purpose === 'lead_generation' || (ocean.project.budget_and_bidding.budget_mode ?? 'daily') !== 'unlimited' ? <div className="delivery-config-money-input"><input type="number" inputMode="decimal" min="300" value={ocean.project.budget_and_bidding.daily_budget_minor / 100} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, budget_mode: 'daily', daily_budget_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元 / 天 · 最低 300 元</small></div> : <small>预算不设上限</small>}</label>
-        {projectBidRequired ? <label><span>项目出价</span><div className="delivery-config-money-input"><input type="number" inputMode="decimal" min="0.01" max={ocean.project.budget_and_bidding.daily_budget_minor > 0 ? ocean.project.budget_and_bidding.daily_budget_minor / 100 : undefined} step="0.01" value={(ocean.project.budget_and_bidding.bid_minor ?? 0) / 100} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, bid_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元 · 最低 0.01 元，不得超过项目日预算</small></div></label> : null}
+        {projectBidRequired ? <label><span>项目出价</span><div className="delivery-config-money-input"><input type="number" inputMode="decimal" min={projectBidConstraint ? projectBidConstraint.minimumMinor / 100 : undefined} max={projectBidConstraint ? projectBidConstraint.maximumMinor / 100 : undefined} step="0.01" value={(ocean.project.budget_and_bidding.bid_minor ?? 0) / 100} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, bid_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元{projectBidConstraint ? ` · 当前范围 ${formatOceanEngineMoneyRange(projectBidConstraint)}` : ' · 等待计费方式'}</small></div></label> : null}
         <label><span>投放周期</span><select value={ocean.project.schedule.mode ?? 'fixed_range'} onChange={event => updateProject({ schedule: { ...ocean.project.schedule, mode: event.target.value as 'long_term' | 'fixed_range' } })}><option value="long_term">从今天起长期投放</option><option value="fixed_range">设置开始和结束日期</option></select></label>
         <label><span>开始日期</span><input type="date" value={toShanghaiDateInput(ocean.project.schedule.start_at)} onChange={event => updateProject({ schedule: { ...ocean.project.schedule, start_at: fromShanghaiStartDate(event.target.value) } })}/></label>
         {ocean.project.schedule.mode !== 'long_term' ? <label><span>结束日期</span><input type="date" value={toShanghaiDateInput(ocean.project.schedule.end_at)} onChange={event => updateProject({ schedule: { ...ocean.project.schedule, end_at: fromShanghaiEndDate(event.target.value) } })}/></label> : null}
@@ -939,8 +954,8 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
       <div className="delivery-config-editor-fields delivery-config-editor-fields--wide">
         <label><span>投放载体</span><select value={ocean.project.carrier} onChange={event => updateCarrier(event.target.value)}><option value="orange_landing_page">橙子落地页</option>{ocean.project.marketing_purpose === 'lead_generation' && leadCaptureMode === 'smart_lead' ? <option value="orange_landing_page_and_im">橙子落地页 + 抖音私信页</option> : null}{ocean.project.marketing_purpose !== 'lead_generation' || leadCaptureMode === 'custom_lead' ? <><option value="owned_landing_page">自研落地页</option><option value="im">抖音私信页（原抖音主页）</option></> : null}<option value="byte_miniapp" disabled>字节小程序（暂不支持）</option><option value="wechat_miniapp" disabled>微信小程序（暂不支持）</option></select></label>
         {optimizationContext
-          ? <OptimizationTargetCapabilityField accountID={accountID ?? ''} value={ocean.project.optimization_target_reference} snapshot={optimizationSnapshot} loading={optimizationLoading} error={optimizationError} onChange={optimization_target_reference => updateProject({ optimization_target_reference })}/>
-          : <ReferenceObjectPicker label={`优化目标 · ${optimizationTargetMissing ? '必填 · 待补' : '必填'}`} pickerTitle="选择优化目标" value={ocean.project.optimization_target_reference} objectKind="optimization_target" loadPlatformObjects={loadOptimizationTargets} requiredContext={ocean.project.carrier === 'owned_landing_page' ? 'owned_landing_page' : 'orange_landing_page'} onChange={optimization_target_reference => updateProject({ optimization_target_reference })}/>}
+          ? <OptimizationTargetCapabilityField accountID={accountID ?? ''} value={ocean.project.optimization_target_reference} snapshot={optimizationSnapshot} loading={optimizationLoading} error={optimizationError} onChange={updateOptimizationTarget}/>
+          : <ReferenceObjectPicker label={`优化目标 · ${optimizationTargetMissing ? '必填 · 待补' : '必填'}`} pickerTitle="选择优化目标" value={ocean.project.optimization_target_reference} objectKind="optimization_target" loadPlatformObjects={loadOptimizationTargets} requiredContext={ocean.project.carrier === 'owned_landing_page' ? 'owned_landing_page' : 'orange_landing_page'} onChange={updateOptimizationTarget}/>}
 
         {ocean.project.marketing_purpose === 'product_catalog' ? <fieldset className="delivery-config-inline-fieldset"><legend>商品定向</legend>
           <ToggleField label="RTA 重定向" checked={ocean.project.product_targeting?.rta_redirect ?? false} onChange={rta_redirect => updateProject({ product_targeting: { ...ocean.project.product_targeting, rta_redirect } })}/>

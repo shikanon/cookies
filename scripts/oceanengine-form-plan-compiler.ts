@@ -67,6 +67,13 @@ export type OceanEngineFormPlan = {
     value?: unknown;
     value_state?: "provided" | "missing";
     required?: boolean;
+    money_constraint?: {
+      schema_version: "oceanengine-bid-constraints/v1";
+      charging_mode: "CPC" | "CPM" | "OCPC" | "OCPM";
+      minimum_minor: number;
+      maximum_minor: number;
+      maximum_source: "static" | "daily_budget";
+    };
     remote_write: boolean;
     blocked: boolean;
     block_reason?: string;

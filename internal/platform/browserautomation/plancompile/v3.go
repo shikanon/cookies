@@ -13,7 +13,9 @@ import (
 
 	"github.com/shikanon/cookies/internal/platform/browserautomation"
 	"github.com/shikanon/cookies/internal/platform/browserautomation/rparunner"
+	"github.com/shikanon/cookies/internal/platform/connector"
 	"github.com/shikanon/cookies/internal/platform/contract"
+	"github.com/shikanon/cookies/internal/platform/oceanengineconstraints"
 	"github.com/shikanon/cookies/internal/systems/delivery"
 )
 
@@ -35,12 +37,17 @@ type V3AccountResolver interface {
 	ResolveExternalAccountID(context.Context, string, string, string) (string, error)
 }
 
+type V3PlatformObjectSource interface {
+	ListPlatformObjects(context.Context, connector.PlatformObjectQuery) ([]connector.PlatformObject, error)
+}
+
 // V3Compiler converts one immutable Cookies run into one Runner v3 form plan.
 // The first controlled path is promotion budget edit. Other actions fail
 // closed until Runner v3 has an equivalent one-form contract.
 type V3Compiler struct {
 	Source          V3ConfigurationSource
 	AccountResolver V3AccountResolver
+	PlatformObjects V3PlatformObjectSource
 	Now             func() time.Time
 }
 
@@ -58,19 +65,20 @@ type v3ParentContext struct {
 }
 
 type v3Step struct {
-	ID          string `json:"id"`
-	Kind        string `json:"kind"`
-	PageKind    string `json:"page_kind"`
-	FieldKey    string `json:"field_key,omitempty"`
-	Operation   string `json:"operation,omitempty"`
-	Scope       string `json:"scope,omitempty"`
-	Target      string `json:"target,omitempty"`
-	Value       any    `json:"value,omitempty"`
-	ValueState  string `json:"value_state,omitempty"`
-	Required    *bool  `json:"required,omitempty"`
-	RemoteWrite bool   `json:"remote_write"`
-	Blocked     bool   `json:"blocked"`
-	BlockReason string `json:"block_reason,omitempty"`
+	ID              string                                `json:"id"`
+	Kind            string                                `json:"kind"`
+	PageKind        string                                `json:"page_kind"`
+	FieldKey        string                                `json:"field_key,omitempty"`
+	Operation       string                                `json:"operation,omitempty"`
+	Scope           string                                `json:"scope,omitempty"`
+	Target          string                                `json:"target,omitempty"`
+	Value           any                                   `json:"value,omitempty"`
+	ValueState      string                                `json:"value_state,omitempty"`
+	Required        *bool                                 `json:"required,omitempty"`
+	RemoteWrite     bool                                  `json:"remote_write"`
+	Blocked         bool                                  `json:"blocked"`
+	BlockReason     string                                `json:"block_reason,omitempty"`
+	MoneyConstraint *oceanengineconstraints.BidConstraint `json:"money_constraint,omitempty"`
 }
 
 type v3ExecutionAuthority struct {
@@ -185,6 +193,15 @@ func (c V3Compiler) preparePlan(ctx context.Context, run browserautomation.Brows
 		return v3Plan{}, fmt.Errorf("configuration account path does not match the authorized account")
 	}
 	compiledConfiguration := *version.PlatformConfiguration
+	compiledConfiguration, err = c.hydrateProductImageEvidence(ctx, run, compiledConfiguration)
+	if err != nil {
+		return v3Plan{}, err
+	}
+	compiledConfiguration, err = c.hydrateOptimizationTargetEvidence(ctx, run, compiledConfiguration)
+	if err != nil {
+		return v3Plan{}, err
+	}
+	configuration = compiledConfiguration.Payload.OceanEngine
 	if configuration.Project.AccountReference.ID != run.AccountID {
 		if c.AccountResolver == nil {
 			return v3Plan{}, fmt.Errorf("configuration account path does not match the authorized account")
@@ -292,6 +309,129 @@ func (c V3Compiler) preparePlan(ctx context.Context, run browserautomation.Brows
 	}, nil
 }
 
+func (c V3Compiler) hydrateProductImageEvidence(ctx context.Context, run browserautomation.BrowserRpaRun, configuration delivery.PlatformConfiguration) (delivery.PlatformConfiguration, error) {
+	ocean := configuration.Payload.OceanEngine
+	if ocean == nil {
+		return configuration, nil
+	}
+	needsHydration := false
+	for _, promotion := range ocean.Promotions {
+		for _, reference := range promotion.ProductImageReferences {
+			if !validImageSourceIdentity(reference.AuditAttributes["image_src_identity"]) {
+				needsHydration = true
+			}
+		}
+	}
+	if !needsHydration {
+		return configuration, nil
+	}
+	if c.PlatformObjects == nil {
+		return configuration, fmt.Errorf("product image Collector evidence is unavailable")
+	}
+
+	oceanCopy := *ocean
+	oceanCopy.Promotions = append([]delivery.OceanEnginePromotionDraft(nil), ocean.Promotions...)
+	for promotionIndex := range oceanCopy.Promotions {
+		promotion := &oceanCopy.Promotions[promotionIndex]
+		promotion.ProductImageReferences = append([]delivery.StableReference(nil), promotion.ProductImageReferences...)
+		for referenceIndex := range promotion.ProductImageReferences {
+			reference := &promotion.ProductImageReferences[referenceIndex]
+			if validImageSourceIdentity(reference.AuditAttributes["image_src_identity"]) {
+				continue
+			}
+			accountID := strings.TrimPrefix(reference.Scope, "account:")
+			if accountID == reference.Scope || strings.TrimSpace(accountID) == "" {
+				return configuration, fmt.Errorf("product image %s has no Collector account scope", reference.ID)
+			}
+			objects, loadErr := c.PlatformObjects.ListPlatformObjects(ctx, connector.PlatformObjectQuery{
+				OrganizationID: string(run.OrganizationID), ProjectID: string(run.ProjectID), AccountID: accountID,
+				Kind: connector.PlatformObjectProductImage, Status: "active", Search: reference.ID, Limit: 20,
+			})
+			if loadErr != nil {
+				return configuration, fmt.Errorf("load product image %s from Collector: %w", reference.ID, loadErr)
+			}
+			connectorID := reference.AuditAttributes["connector_platform_object_id"]
+			var matched *connector.PlatformObject
+			for objectIndex := range objects {
+				candidate := &objects[objectIndex]
+				if candidate.PlatformObjectID == reference.ID || (connectorID != "" && candidate.ID == connectorID) {
+					if matched != nil {
+						return configuration, fmt.Errorf("product image %s matched multiple Collector objects", reference.ID)
+					}
+					matched = candidate
+				}
+			}
+			if matched == nil {
+				return configuration, fmt.Errorf("product image %s was not found in the Collector", reference.ID)
+			}
+			identity, _ := matched.Metadata["web_uri"].(string)
+			if !validImageSourceIdentity(identity) {
+				return configuration, fmt.Errorf("product image %s has no stable Collector web_uri", reference.ID)
+			}
+			audit := make(map[string]string, len(reference.AuditAttributes)+1)
+			for key, value := range reference.AuditAttributes {
+				audit[key] = value
+			}
+			audit["image_src_identity"] = strings.TrimSpace(identity)
+			reference.AuditAttributes = audit
+		}
+	}
+	configuration.Payload.OceanEngine = &oceanCopy
+	return configuration, nil
+}
+
+func (c V3Compiler) hydrateOptimizationTargetEvidence(ctx context.Context, run browserautomation.BrowserRpaRun, configuration delivery.PlatformConfiguration) (delivery.PlatformConfiguration, error) {
+	ocean := configuration.Payload.OceanEngine
+	if ocean == nil || ocean.Project == nil || ocean.Project.OptimizationTargetReference == nil {
+		return configuration, nil
+	}
+	reference := ocean.Project.OptimizationTargetReference
+	if !strings.HasPrefix(reference.SemanticKey, "external_action:") {
+		return configuration, nil
+	}
+	if c.PlatformObjects == nil {
+		return configuration, fmt.Errorf("optimization target Collector evidence is unavailable")
+	}
+	accountID := strings.TrimPrefix(reference.Scope, "account:")
+	if accountID == reference.Scope || strings.TrimSpace(accountID) == "" {
+		return configuration, fmt.Errorf("optimization target %s has no Collector account scope", reference.ID)
+	}
+	objects, err := c.PlatformObjects.ListPlatformObjects(ctx, connector.PlatformObjectQuery{
+		OrganizationID: string(run.OrganizationID), ProjectID: string(run.ProjectID), AccountID: accountID,
+		Kind: connector.PlatformObjectOptimizationTarget, Status: "active", Search: reference.ID, Limit: 20,
+	})
+	if err != nil {
+		return configuration, fmt.Errorf("load optimization target %s from Collector: %w", reference.ID, err)
+	}
+	semantic := ""
+	displayName := ""
+	for _, candidate := range objects {
+		if candidate.PlatformObjectID != reference.ID {
+			continue
+		}
+		inferred := optimizationTargetFromDisplayName(candidate.DisplayName)
+		if inferred == "" {
+			continue
+		}
+		if semantic != "" {
+			return configuration, fmt.Errorf("optimization target %s matched multiple Collector objects", reference.ID)
+		}
+		semantic, displayName = inferred, candidate.DisplayName
+	}
+	if semantic == "" {
+		return configuration, fmt.Errorf("optimization target %s has no calibrated Collector label", reference.ID)
+	}
+	oceanCopy := *ocean
+	projectCopy := *ocean.Project
+	referenceCopy := *reference
+	referenceCopy.SemanticKey = semantic
+	referenceCopy.DisplayNameSnapshot = displayName
+	projectCopy.OptimizationTargetReference = &referenceCopy
+	oceanCopy.Project = &projectCopy
+	configuration.Payload.OceanEngine = &oceanCopy
+	return configuration, nil
+}
+
 func blockedConfigurationPlan(run browserautomation.BrowserRpaRun, planKind, parentProjectReference string, availability []V3ObjectAvailability, issue error) v3Plan {
 	required := true
 	return v3Plan{
@@ -353,7 +493,10 @@ func parentContext(project delivery.OceanEngineProjectDraft) (v3ParentContext, e
 		externalAction = strings.TrimSpace(project.OptimizationTargetReference.ID)
 		optimization = strings.TrimSpace(project.OptimizationTargetReference.SemanticKey)
 		if optimization == "" {
-			optimization = strings.TrimSpace(project.OptimizationTargetReference.ID)
+			optimization = optimizationTargetFromDisplayName(project.OptimizationTargetReference.DisplayNameSnapshot)
+		}
+		if optimization == "" {
+			optimization = externalAction
 		}
 	}
 	optimization = normalizedOptimizationTarget(optimization)
@@ -393,6 +536,17 @@ func parentContext(project delivery.OceanEngineProjectDraft) (v3ParentContext, e
 		DeliveryMode: deliveryMode, PlacementMode: placementMode,
 		SearchTargetingExpansion: searchExpansion, ParentReferences: parentReferences,
 	}, nil
+}
+
+func optimizationTargetFromDisplayName(value string) string {
+	return map[string]string{
+		"按钮跳转":   "button_jump",
+		"app内下单": "in_app_order",
+		"点击量":    "click",
+		"展示量":    "impression",
+		"门店电话拨打": "store_call",
+		"门店停留":   "store_stay",
+	}[strings.TrimSpace(value)]
 }
 
 func normalizedOptimizationTarget(value string) string {

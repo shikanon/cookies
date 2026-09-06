@@ -92,6 +92,10 @@ test('explains other configuration requirements with direct repair instructions'
   )
   assert.equal(
     presentConfigurationIssue('project: bid is outside the calibrated limit'),
+    '项目出价超出当前 Runner 的校准范围。请返回平台配置页检查当前计费方式和出价范围。',
+  )
+  assert.equal(
+    presentConfigurationIssue('project: bid is outside the calibrated limit for CPM: expected CNY 4.00 to 100.00'),
     '项目出价超出当前 Runner 的校准范围。CPM 出价必须是 4 至 100 元。',
   )
   assert.equal(

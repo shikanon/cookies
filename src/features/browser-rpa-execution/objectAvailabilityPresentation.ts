@@ -115,8 +115,12 @@ export function presentConfigurationIssue(issue: string): string {
   if (/unsupported account path: marketing purpose .* is not calibrated/i.test(issue)) {
     return '当前营销目的不在校准清单中。请返回平台配置页并选择已校准的营销目的。'
   }
+  const bidLimit = issue.match(/project: bid is outside the calibrated limit for (CPC|CPM|OCPC|OCPM): expected CNY ([0-9.]+) to ([0-9.]+)/i)
+  if (bidLimit) {
+    return `项目出价超出当前 Runner 的校准范围。${bidLimit[1].toUpperCase()} 出价必须是 ${Number(bidLimit[2])} 至 ${Number(bidLimit[3])} 元。`
+  }
   if (/project: bid is outside the calibrated limit/i.test(issue)) {
-    return '项目出价超出当前 Runner 的校准范围。CPM 出价必须是 4 至 100 元。'
+    return '项目出价超出当前 Runner 的校准范围。请返回平台配置页检查当前计费方式和出价范围。'
   }
   if (/configuration has no calibrated optimization target key/i.test(issue)) {
     return '优化目标不在当前 Runner 的校准范围内。请返回平台配置页并重新选择优化目标。'

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/shikanon/cookies/internal/platform/browserautomation"
+	"github.com/shikanon/cookies/internal/platform/connector"
 	"github.com/shikanon/cookies/internal/platform/contract"
 	"github.com/shikanon/cookies/internal/systems/delivery"
 )
@@ -22,6 +23,16 @@ type v3AccountResolverStub struct {
 	externalID string
 }
 
+type v3PlatformObjectSourceStub struct {
+	objects []connector.PlatformObject
+	query   connector.PlatformObjectQuery
+}
+
+func (s *v3PlatformObjectSourceStub) ListPlatformObjects(_ context.Context, query connector.PlatformObjectQuery) ([]connector.PlatformObject, error) {
+	s.query = query
+	return s.objects, nil
+}
+
 func (s v3AccountResolverStub) ResolveExternalAccountID(context.Context, string, string, string) (string, error) {
 	return s.externalID, nil
 }
@@ -32,6 +43,83 @@ func (s v3SourceStub) GetPlanVersion(context.Context, contract.OrganizationID, c
 
 func (s v3SourceStub) ListPlatformEntityMappings(context.Context, contract.OrganizationID, contract.ProjectID, string) ([]delivery.PlatformEntityMapping, error) {
 	return s.mappings, nil
+}
+
+func TestV3CompilerHydratesStaleProductImageIdentityFromCollector(t *testing.T) {
+	now := time.Date(2026, 8, 25, 6, 0, 0, 0, time.UTC)
+	configuration, _ := executableConfigurationFixture(now)
+	reference := &configuration.Payload.OceanEngine.Promotions[0].ProductImageReferences[0]
+	reference.Scope = "account:account_internal"
+	reference.AuditAttributes["image_src_identity"] = "api/connector/v1/projects/project-1/platform-objects/image-1/preview"
+	reference.AuditAttributes["connector_platform_object_id"] = "connector-image-1"
+	source := &v3PlatformObjectSourceStub{objects: []connector.PlatformObject{{
+		ID: "connector-image-1", Kind: connector.PlatformObjectProductImage, PlatformObjectID: reference.ID,
+		Metadata: map[string]any{"web_uri": "tos-cn-i-example/stable-image"},
+	}}}
+	compiler := V3Compiler{PlatformObjects: source}
+	run := browserautomation.BrowserRpaRun{OrganizationID: "org_1", ProjectID: "project_1"}
+
+	hydrated, err := compiler.hydrateProductImageEvidence(context.Background(), run, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := hydrated.Payload.OceanEngine.Promotions[0].ProductImageReferences[0].AuditAttributes["image_src_identity"]
+	if identity != "tos-cn-i-example/stable-image" {
+		t.Fatalf("hydrated identity = %q", identity)
+	}
+	if configuration.Payload.OceanEngine.Promotions[0].ProductImageReferences[0].AuditAttributes["image_src_identity"] == identity {
+		t.Fatal("hydration mutated the immutable configuration")
+	}
+	if source.query.AccountID != "account_internal" || source.query.Kind != connector.PlatformObjectProductImage || source.query.Search != reference.ID {
+		t.Fatalf("Collector query = %#v", source.query)
+	}
+}
+
+func TestV3CompilerHydratesGenericOptimizationTargetFromCollector(t *testing.T) {
+	now := time.Date(2026, 8, 25, 6, 0, 0, 0, time.UTC)
+	configuration, _ := executableConfigurationFixture(now)
+	reference := configuration.Payload.OceanEngine.Project.OptimizationTargetReference
+	reference.ID = "-1"
+	reference.Scope = "account:account_internal"
+	reference.SemanticKey = "external_action:-1"
+	reference.DisplayNameSnapshot = ""
+	source := &v3PlatformObjectSourceStub{objects: []connector.PlatformObject{{
+		Kind: connector.PlatformObjectOptimizationTarget, PlatformObjectID: "-1", DisplayName: "展示量",
+	}}}
+	compiler := V3Compiler{PlatformObjects: source}
+	run := browserautomation.BrowserRpaRun{OrganizationID: "org_1", ProjectID: "project_1"}
+
+	hydrated, err := compiler.hydrateOptimizationTargetEvidence(context.Background(), run, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hydratedReference := hydrated.Payload.OceanEngine.Project.OptimizationTargetReference
+	if hydratedReference.SemanticKey != "impression" || hydratedReference.DisplayNameSnapshot != "展示量" {
+		t.Fatalf("hydrated reference = %#v", hydratedReference)
+	}
+	if reference.SemanticKey != "external_action:-1" || reference.DisplayNameSnapshot != "" {
+		t.Fatal("hydration mutated the immutable configuration")
+	}
+	if source.query.AccountID != "account_internal" || source.query.Kind != connector.PlatformObjectOptimizationTarget || source.query.Search != "-1" {
+		t.Fatalf("Collector query = %#v", source.query)
+	}
+}
+
+func TestParentContextInfersKnownOptimizationTargetFromDisplayName(t *testing.T) {
+	project := delivery.OceanEngineProjectDraft{
+		MarketingPurpose: "lead_generation", DeliveryMode: "ubmax", PlacementStrategy: "preferred_media",
+		OptimizationTargetReference: &delivery.StableReference{
+			ID: "-1", DisplayNameSnapshot: "展示量",
+			AuditAttributes: map[string]string{"capability_snapshot_id": "snapshot-1", "capability_context_hash": strings.Repeat("a", 64)},
+		},
+	}
+	parent, err := parentContext(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parent.OptimizationTarget != "impression" || parent.OptimizationTargetExternalAction != "-1" {
+		t.Fatalf("parent context = %#v", parent)
+	}
 }
 
 func TestV3CompilerConvertsBoundBudgetRunAndIssuesOneTimeAuthority(t *testing.T) {

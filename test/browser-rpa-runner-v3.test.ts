@@ -9,8 +9,10 @@ import Ajv2020 from "ajv/dist/2020.js";
 
 import {
   canonicalImageSourceIdentity,
+  isStablePlatformImageSourceIdentity,
   executePlan,
   executePreparePlan,
+  parseOceanEngineMoneyConstraint,
   type PageOperations,
   type ReconciliationResult,
   type SubmitObservation,
@@ -46,6 +48,7 @@ class FakePage implements PageOperations {
   finalClicks = 0;
   submitObservation: SubmitObservation = { outcome: "success" };
   reconciliation: ReconciliationResult = { status: "matched", created_object_id: "7677604041052405801" };
+  moneyConstraint: { minimum_minor: number; maximum_minor: number } | undefined;
 
   async identifyPage() {
     this.identified += 1;
@@ -57,6 +60,10 @@ class FakePage implements PageOperations {
 
   async readField(step: OceanEngineFormPlan["steps"][number]) {
     return step.value;
+  }
+
+  async readMoneyConstraint() {
+    return this.moneyConstraint;
   }
 
   async assertFinalReady() {}
@@ -147,6 +154,32 @@ test("runner v3 keeps complex field values in readback", async () => {
   assert.deepEqual(copyStep?.readback, ["校准文案"]);
 });
 
+test("runner v3 stops when the visible bid constraint differs from the plan", async () => {
+  const plan = compilePromotionPlan();
+  const bid = plan.steps.find((step) => step.field_key === "promotion.bid");
+  assert.ok(bid);
+  bid.money_constraint = {
+    schema_version: "oceanengine-bid-constraints/v1",
+    charging_mode: "CPM",
+    minimum_minor: 400,
+    maximum_minor: 10000,
+    maximum_source: "static",
+  };
+  const page = new FakePage();
+  page.moneyConstraint = { minimum_minor: 1, maximum_minor: 1000000 };
+  const result = await executePreparePlan(plan, page);
+  assert.equal(result.outcome, "failed");
+  assert.equal(result.error_code, "page_drift");
+  assert.equal(result.final_click_performed, false);
+});
+
+test("parses visible OceanEngine money ranges", () => {
+  assert.deepEqual(parseOceanEngineMoneyConstraint(["请输入", "出价范围 4～100 元"]), {
+    minimum_minor: 400,
+    maximum_minor: 10000,
+  });
+});
+
 test("runner v3 retains the live promotion adapters", () => {
 	assert.match(runnerSource, /createad_nativetype_0/);
 	assert.match(runnerSource, /label === "账户信息"/);
@@ -194,6 +227,8 @@ test("product image matching ignores signed URL hosts, queries, and transform su
   const signed = "https://p0-adplatform-private.oceanengine.com/tos-cn-i-sd07hgqsbj/26d59f497e2540a3a377554cd94e4706~tplv-iq460dd072-origin.image?sign_for=ad_platform&x-orig-sign=changed";
   assert.equal(canonicalImageSourceIdentity(webURI), webURI);
   assert.equal(canonicalImageSourceIdentity(signed), webURI);
+  assert.equal(isStablePlatformImageSourceIdentity(webURI), true);
+  assert.equal(isStablePlatformImageSourceIdentity("api/connector/v1/projects/project-1/platform-objects/image-1/preview"), false);
 });
 
 test("runner v3 enters the project form from the management page", () => {

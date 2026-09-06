@@ -50,6 +50,18 @@
           "value": {},
           "value_state": {"enum": ["provided", "missing"]},
           "required": {"type": "boolean"},
+          "money_constraint": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["schema_version", "charging_mode", "minimum_minor", "maximum_minor", "maximum_source"],
+            "properties": {
+              "schema_version": {"const": "oceanengine-bid-constraints/v1"},
+              "charging_mode": {"enum": ["CPC", "CPM", "OCPC", "OCPM"]},
+              "minimum_minor": {"type": "integer", "minimum": 0},
+              "maximum_minor": {"type": "integer", "minimum": 1},
+              "maximum_source": {"enum": ["static", "daily_budget"]}
+            }
+          },
           "remote_write": {"type": "boolean"},
           "blocked": {"type": "boolean"},
           "block_reason": {"type": "string", "minLength": 1}

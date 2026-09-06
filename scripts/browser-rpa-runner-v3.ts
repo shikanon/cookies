@@ -87,10 +87,33 @@ export interface PageOperations {
   identifyPage(plan: OceanEngineFormPlan): Promise<void>;
   applyField(step: PlanStep): Promise<void>;
   readField(step: PlanStep): Promise<unknown>;
+  readMoneyConstraint?(step: PlanStep): Promise<{ minimum_minor: number; maximum_minor: number } | undefined>;
   assertFinalReady(step: PlanStep): Promise<void>;
   clickFinal(step: PlanStep): Promise<void>;
   observeSubmit(plan: OceanEngineFormPlan): Promise<SubmitObservation>;
   reconcileSubmit(plan: OceanEngineFormPlan, observation: SubmitObservation): Promise<ReconciliationResult>;
+}
+
+export function isStablePlatformImageSourceIdentity(value: string) {
+  const identity = canonicalImageSourceIdentity(value);
+  return Boolean(identity) && !identity.startsWith("api/");
+}
+
+export function parseOceanEngineMoneyConstraint(values: readonly string[]) {
+  let minimum: number | undefined;
+  let maximum: number | undefined;
+  for (const value of values) {
+    const match = value.match(/(\d+(?:\.\d+)?)\s*(?:-|~|～|至|到)\s*(\d+(?:\.\d+)?)/);
+    if (!match) continue;
+    minimum = Math.round(Number(match[1]) * 100);
+    maximum = Math.round(Number(match[2]) * 100);
+    if (Number.isFinite(minimum) && Number.isFinite(maximum) && maximum >= minimum) break;
+    minimum = undefined;
+    maximum = undefined;
+  }
+  return minimum !== undefined && maximum !== undefined
+    ? { minimum_minor: minimum, maximum_minor: maximum }
+    : undefined;
 }
 
 class RunnerV3Error extends Error {
@@ -186,6 +209,21 @@ export async function executePlan(
           continue;
         }
         await page.applyField(step);
+        if (step.money_constraint) {
+          const observed = await page.readMoneyConstraint?.(step);
+          if (!observed) {
+            throw new RunnerV3Error("page_drift", `${step.id}: the visible bid constraint is unavailable`);
+          }
+          if (
+            observed.minimum_minor !== step.money_constraint.minimum_minor
+            || observed.maximum_minor !== step.money_constraint.maximum_minor
+          ) {
+            throw new RunnerV3Error(
+              "page_drift",
+              `${step.id}: bid constraint drift; expected ${step.money_constraint.minimum_minor}-${step.money_constraint.maximum_minor} minor, observed ${observed.minimum_minor}-${observed.maximum_minor} minor`,
+            );
+          }
+        }
         fieldSteps.push(step);
         results.push({ id: step.id, status: "succeeded", readback: await page.readField(step) });
       } else if (step.kind === "readback") {
@@ -724,8 +762,8 @@ export class PlaywrightPageOperations implements PageOperations {
       }
     }
     if (step.field_key === "promotion.product_image_references") {
-      if (!this.isReferenceSelectionSpec(step.value) || !step.value.image_src_identity) {
-        throw new RunnerV3Error("invalid_plan", `${step.id}: product image source identity is required`);
+      if (!this.isReferenceSelectionSpec(step.value) || !isStablePlatformImageSourceIdentity(step.value.image_src_identity ?? "")) {
+        throw new RunnerV3Error("invalid_plan", `${step.id}: stable product image source identity is required`);
       }
       const productImageScope = this.page.getByText("产品主图", { exact: true }).first();
       const productImageRow = productImageScope.locator(
@@ -733,7 +771,7 @@ export class PlaywrightPageOperations implements PageOperations {
       );
       const selectedCount = productImageRow.getByText(/已添加：\s*[1-9]\d*\/\d+/);
       if ((await selectedCount.count()) === 1 && await selectedCount.isVisible()) {
-        const matching = await this.imagesMatchingSourceIdentity(productImageRow.locator("img:visible"), step.value.image_src_identity);
+        const matching = await this.imagesMatchingSourceIdentity(productImageRow.locator("img:visible"), step.value.image_src_identity!);
         if (matching.length !== 1) {
           throw new RunnerV3Error(matching.length > 1 ? "locator_not_unique" : "object_mismatch", `${step.id}: selected product image does not uniquely match the plan`);
         }
@@ -1330,8 +1368,8 @@ export class PlaywrightPageOperations implements PageOperations {
     }
 
     if (step.field_key === "promotion.product_image_references" && spec.selection_kind === "image_card") {
-      if (!spec.image_src_identity) throw new RunnerV3Error("invalid_plan", `${step.id}: product image source identity is required`);
-      const matched = await this.waitForStableProductImage(root, spec.image_src_identity, step.id);
+      if (!isStablePlatformImageSourceIdentity(spec.image_src_identity ?? "")) throw new RunnerV3Error("invalid_plan", `${step.id}: stable product image source identity is required`);
+      const matched = await this.waitForStableProductImage(root, spec.image_src_identity!, step.id);
       if (matched.visibleCount < (spec.minimum_visible ?? 1)) throw new RunnerV3Error("async_load_timeout", `${step.id}: product image inventory did not load`);
       await matched.image.click();
       await this.stableVisibleCount(root.getByText(/已选择\s*1\s*\/\s*10/), 1, step.id);
@@ -1488,6 +1526,41 @@ export class PlaywrightPageOperations implements PageOperations {
       }
     });
     await button.click({ noWaitAfter: true });
+  }
+
+  async readMoneyConstraint(step: PlanStep) {
+    const target = await this.targetLocator(step);
+    const attributeValues = await Promise.all([
+      target.getAttribute("min"),
+      target.getAttribute("max"),
+      target.getAttribute("aria-valuemin"),
+      target.getAttribute("aria-valuemax"),
+    ]);
+    const minimumAttribute = attributeValues[0] ?? attributeValues[2];
+    const maximumAttribute = attributeValues[1] ?? attributeValues[3];
+    const attributeMinimum = minimumAttribute === null ? Number.NaN : Number(minimumAttribute);
+    const attributeMaximum = maximumAttribute === null ? Number.NaN : Number(maximumAttribute);
+    if (Number.isFinite(attributeMinimum) && Number.isFinite(attributeMaximum) && attributeMaximum >= attributeMinimum) {
+      return {
+        minimum_minor: Math.round(attributeMinimum * 100),
+        maximum_minor: Math.round(attributeMaximum * 100),
+      };
+    }
+    await target.blur();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const textValues = [
+        await target.getAttribute("placeholder") ?? "",
+        await target.getAttribute("aria-label") ?? "",
+      ];
+      for (const depth of [1, 2, 3]) {
+        const ancestor = target.locator(`xpath=ancestor::*[${depth}]`);
+        if ((await ancestor.count()) === 1 && await ancestor.isVisible()) textValues.push(await ancestor.innerText());
+      }
+      const parsed = parseOceanEngineMoneyConstraint(textValues);
+      if (parsed) return parsed;
+      await this.page.waitForTimeout(100);
+    }
+    return undefined;
   }
 
   async assertFinalReady(step: PlanStep) {

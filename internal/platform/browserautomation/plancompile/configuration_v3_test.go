@@ -160,6 +160,13 @@ func TestCompileConfigurationV3UsesEnumeratedLeadGenerationPath(t *testing.T) {
 	if provided["project.daily_budget"] != "300.00" || provided["project.bid"] != "0.01" {
 		t.Fatalf("lead-generation budget values = %#v", provided)
 	}
+	for _, step := range projectPlan.Steps {
+		if step.FieldKey == "project.bid" {
+			if step.MoneyConstraint == nil || step.MoneyConstraint.ChargingMode != "OCPM" || step.MoneyConstraint.MinimumMinor != 1 || step.MoneyConstraint.MaximumMinor != 30000 {
+				t.Fatalf("lead-generation bid constraint = %#v", step.MoneyConstraint)
+			}
+		}
+	}
 	if _, ok := provided["project.marketing_product_reference"]; !ok {
 		t.Fatalf("lead-generation plan has no marketing product: %#v", provided)
 	}
@@ -395,6 +402,29 @@ func TestCompileConfigurationV3KeepsPromotionMaterialFieldStructure(t *testing.T
 	}
 }
 
+func TestImpressionPromotionOmitsUnavailableDirectLinkControls(t *testing.T) {
+	now := time.Date(2026, 8, 25, 6, 0, 0, 0, time.UTC)
+	configuration, intent := executableConfigurationFixture(now)
+	project := configuration.Payload.OceanEngine.Project
+	promotion := configuration.Payload.OceanEngine.Promotions[0]
+	project.OptimizationTargetReference.SemanticKey = "impression"
+	promotion.Settings.DirectLinkMode = "manual"
+	promotion.DirectLinkReference = nil
+
+	values, err := promotionPlanValues(promotion, *project, &intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["promotion.direct_link_mode"] != nil || values["promotion.direct_link_reference"] != nil {
+		t.Fatalf("impression promotion direct-link values = %#v", values)
+	}
+	for _, field := range orderedPromotionFields(*project, promotion) {
+		if field.Key == "promotion.direct_link_mode" || field.Key == "promotion.direct_link_reference" {
+			t.Fatalf("impression promotion contains unavailable field %q", field.Key)
+		}
+	}
+}
+
 func TestV3BindingsFromMappingsUsesConfirmedObjectsAndSkipsPendingStages(t *testing.T) {
 	now := time.Date(2026, 8, 25, 6, 0, 0, 0, time.UTC)
 	configuration, _ := executableConfigurationFixture(now)
@@ -444,6 +474,13 @@ func TestCompileConfigurationV3RejectsLimitsReferencesAndAccountPaths(t *testing
 			c.Payload.OceanEngine.Project.BudgetAndBidding.ChargingMode = "CPM"
 			c.Payload.OceanEngine.Project.BudgetAndBidding.BidMinor = &value
 		}, "1855554434276391", "project: bid is outside"},
+		{"impression project bid", func(c *delivery.PlatformConfiguration, _ *delivery.DeliveryIntent) {
+			value := int64(1)
+			c.Payload.OceanEngine.Project.OptimizationTargetReference.SemanticKey = ""
+			c.Payload.OceanEngine.Project.OptimizationTargetReference.DisplayNameSnapshot = "展示量"
+			c.Payload.OceanEngine.Project.BudgetAndBidding.BiddingStrategy = "cost_cap"
+			c.Payload.OceanEngine.Project.BudgetAndBidding.BidMinor = &value
+		}, "1855554434276391", "expected CNY 4.00 to 100.00"},
 		{"date", func(c *delivery.PlatformConfiguration, _ *delivery.DeliveryIntent) {
 			c.Payload.OceanEngine.Project.Schedule.StartAt = now
 		}, "1855554434276391", "must be no earlier than"},

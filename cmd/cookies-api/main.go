@@ -489,7 +489,7 @@ func main() {
 	}
 	deliveryService.BrowserRpaLauncher = deliveryBrowserRpaLauncher{service: browserRpaService, executionDriver: browserautomation.ExecutionDriverOceanEngineWebAPI}
 	browserRpaServer := browserautomationhttp.NewTakeoverOnly(browserRpaService, projectStore)
-	v3Compiler := plancompile.V3Compiler{Source: delivery.MySQLRepository{DB: db}, AccountResolver: connectorRepository}
+	v3Compiler := plancompile.V3Compiler{Source: delivery.MySQLRepository{DB: db}, AccountResolver: connectorRepository, PlatformObjects: connectorRepository}
 	var oceanEngineWriterFactory oceanEngineConnectorWriterFactory
 	if cfg.OceanEngine.Enabled {
 		oceanEngineCipher, cipherErr := insights.NewAESGCMSecretCipher(cfg.OceanEngine.MasterKey, cfg.OceanEngine.MasterKeyVersion)
