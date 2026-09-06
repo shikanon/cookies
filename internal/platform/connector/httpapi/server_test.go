@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shikanon/cookies/internal/integrations/oceanengine"
 	"github.com/shikanon/cookies/internal/platform/connector"
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
@@ -56,10 +57,12 @@ func (r *readerStub) ListPlatformObjects(_ context.Context, query connector.Plat
 }
 
 type syncerStub struct {
-	mu               sync.Mutex
-	request          connector.SyncRequest
-	refreshQuery     connector.PlatformObjectPreviewQuery
-	refreshedPreview connector.PlatformObjectPreview
+	mu                       sync.Mutex
+	request                  connector.SyncRequest
+	refreshQuery             connector.PlatformObjectPreviewQuery
+	refreshedPreview         connector.PlatformObjectPreview
+	capabilityRequest        connector.OptimizationTargetCapabilityRequest
+	accountCapabilityRequest connector.AccountCapabilityRequest
 }
 type authorizerStub struct{ err error }
 type sessionManagerStub struct{ plaintext string }
@@ -103,6 +106,16 @@ func (s *syncerStub) Sync(_ context.Context, r connector.SyncRequest) (connector
 	return connector.SyncResult{RunID: "sync_opaque"}, nil
 }
 
+func (s *syncerStub) ReadOptimizationTargetCapabilities(_ context.Context, request connector.OptimizationTargetCapabilityRequest) (connector.OptimizationTargetCapabilitySnapshot, error) {
+	s.capabilityRequest = request
+	return connector.OptimizationTargetCapabilitySnapshot{SchemaVersion: connector.OptimizationTargetCapabilitySchemaV1, SnapshotID: "oecap_safe", AccountID: request.AccountRef, Context: request.Context, Options: []connector.OptimizationTargetCapability{{ExternalAction: "2", SemanticKey: "form", DisplayName: "表单提交"}}}, nil
+}
+
+func (s *syncerStub) ReadAccountCapabilities(_ context.Context, request connector.AccountCapabilityRequest) (connector.OceanEngineAccountCapabilitySnapshot, error) {
+	s.accountCapabilityRequest = request
+	return connector.OceanEngineAccountCapabilitySnapshot{SchemaVersion: connector.OceanEngineAccountCapabilitySchemaV1, SnapshotID: "oeaccountcap_safe", AccountID: request.AccountRef, ExternalActions: []connector.AccountCapabilityValue{{Key: "form", DisplayName: "表单提交", Value: "2"}}}, nil
+}
+
 func (s *syncerStub) RefreshPlatformObjectPreview(_ context.Context, query connector.PlatformObjectPreviewQuery) (connector.PlatformObjectPreview, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -134,6 +147,35 @@ func TestCanonicalSnapshotRequiresCutoffAndScopesAccount(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "raw-account") || strings.Contains(strings.ToLower(response.Body.String()), "cookie") {
 		t.Fatalf("sensitive response=%s", response.Body.String())
+	}
+}
+
+func TestOptimizationTargetCapabilitiesUseExactProjectAccountBranch(t *testing.T) {
+	syncer := &syncerStub{}
+	accounts := accountManagerStub{accounts: []connector.PlatformAccount{{ID: "oeacct_safe", ProjectID: "project_1", Status: "verified"}}}
+	server := New(nil, syncer, authorizerStub{}, accounts)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request(http.MethodPost, "/api/connector/v1/projects/project_1/accounts/oeacct_safe/optimization-target-capabilities", `{"context":{"campaign_type":1,"landing_type":1,"asset_type":2,"micro_app_id":"","cdp_marketing_goal":1,"dpa_ad_type":0,"micro_promotion_type":2,"micro_app_instance_id":"","multi_asset_types":[2,1002],"need_assets":false}}`, connector.ScopeRead))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "表单提交") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	want := oceanengine.OptimizationTargetContext{CampaignType: 1, LandingType: 1, AssetType: 2, CDPMarketingGoal: 1, MicroPromotionType: 2, MultiAssetTypes: []int{2, 1002}}
+	if syncer.capabilityRequest.OrganizationID != "org_1" || syncer.capabilityRequest.ProjectID != "project_1" || syncer.capabilityRequest.AccountRef != "oeacct_safe" || syncer.capabilityRequest.Context.AssetType != want.AssetType || len(syncer.capabilityRequest.Context.MultiAssetTypes) != 2 {
+		t.Fatalf("request=%#v", syncer.capabilityRequest)
+	}
+}
+
+func TestAccountCapabilitiesUseExactProjectAccountSession(t *testing.T) {
+	syncer := &syncerStub{}
+	accounts := accountManagerStub{accounts: []connector.PlatformAccount{{ID: "oeacct_safe", ProjectID: "project_1", Status: "verified"}}}
+	server := New(nil, syncer, authorizerStub{}, accounts)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request(http.MethodGet, "/api/connector/v1/projects/project_1/accounts/oeacct_safe/capabilities", "", connector.ScopeRead))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "表单提交") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if syncer.accountCapabilityRequest.OrganizationID != "org_1" || syncer.accountCapabilityRequest.ProjectID != "project_1" || syncer.accountCapabilityRequest.AccountRef != "oeacct_safe" {
+		t.Fatalf("request=%#v", syncer.accountCapabilityRequest)
 	}
 }
 func TestOrganizationSnapshotRequiresNoBusinessProject(t *testing.T) {

@@ -16,7 +16,7 @@
     "promotion.copy_materials": ["校准文案"],
     "promotion.product_image_references": {
       "selection_kind": "image_card",
-      "index": 0,
+      "image_src_identity": "tos-cn-i-redacted/redacted-product-image",
       "minimum_visible": 1,
       "confirm_button": "确定"
     },

@@ -1165,6 +1165,37 @@ paths:
         '400': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         default: { $ref: '#/components/responses/Problem' }
+  /api/delivery/v1/projects/{project_id}/plans/{plan_id}/browser-rpa-runs:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - $ref: '#/components/parameters/PlanID'
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 160 }
+    post:
+      operationId: startDeliveryPlanBrowserRpaExecution
+      summary: Create a real controlled Browser RPA execution for one immutable plan version
+      description: Runs the blocking preflight, resolves the Connector account to its OceanEngine aadvid, creates the controlled authority chain, and creates a BrowserRpaRun. It does not perform the final platform click.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_version]
+              properties:
+                expected_version: { type: integer, minimum: 1 }
+      responses:
+        '201':
+          description: Real controlled run created. The client can open the execution center with browser_rpa_run.run_id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StartBrowserRpaExecutionResult' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
   /api/delivery/v1/projects/{project_id}/plans/{plan_id}/versions/{version}/mechanistic-simulation-run:
     parameters:
       - $ref: '#/components/parameters/ProjectID'
@@ -1578,8 +1609,15 @@ components:
     ControlledAuthorityBinding:
       type: object
       additionalProperties: false
-      required: [selection_id, observatory_run_id, observatory_run_canonical_hash, operator_feedback_id, operator_feedback_canonical_hash, operator_feedback_disposition, plan_id, plan_version, plan_canonical_hash, intent_id, intent_version, intent_canonical_hash, decision_id, decision_canonical_hash, configuration_id, configuration_version, configuration_canonical_hash, workflow_id, workflow_canonical_hash, account_reference_id, object_fingerprint]
+      required: [plan_id, plan_version, plan_canonical_hash, intent_id, intent_version, intent_canonical_hash, configuration_id, configuration_version, configuration_canonical_hash, workflow_id, workflow_canonical_hash, account_reference_id, object_fingerprint]
+      anyOf:
+        - required: [authority_origin, preflight_canonical_hash]
+          properties:
+            authority_origin: { const: plan_execution }
+        - required: [selection_id, observatory_run_id, observatory_run_canonical_hash, operator_feedback_id, operator_feedback_canonical_hash, operator_feedback_disposition, decision_id, decision_canonical_hash]
       properties:
+        authority_origin: { type: string, const: plan_execution }
+        preflight_canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
         selection_id: { type: string }
         observatory_run_id: { type: string }
         observatory_run_canonical_hash: { $ref: '#/components/schemas/CanonicalHash' }
@@ -1785,6 +1823,20 @@ components:
         created_by: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    BrowserRpaLaunchResult:
+      type: object
+      additionalProperties: false
+      required: [run_id]
+      properties:
+        run_id: { type: string, minLength: 1 }
+    StartBrowserRpaExecutionResult:
+      type: object
+      additionalProperties: false
+      required: [controlled_change_set, controlled_execution, browser_rpa_run]
+      properties:
+        controlled_change_set: { $ref: '#/components/schemas/ControlledChangeSet' }
+        controlled_execution: { $ref: '#/components/schemas/ControlledExecution' }
+        browser_rpa_run: { $ref: '#/components/schemas/BrowserRpaLaunchResult' }
     CreatePlatformEntityMappingRequest:
       type: object
       additionalProperties: false

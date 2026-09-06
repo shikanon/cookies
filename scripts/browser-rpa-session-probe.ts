@@ -43,6 +43,32 @@ export function inspectOceanEnginePages(pageURLs: string[], expectedAccountID: s
   }
 }
 
+async function readCDPPageURLs(endpoint: string): Promise<string[]> {
+  const url = new URL(endpoint)
+  if (url.protocol !== 'ws:' || url.hostname !== '127.0.0.1') throw new Error('Invalid CDP endpoint')
+  return await new Promise<string[]>((resolvePromise, rejectPromise) => {
+    const socket = new WebSocket(endpoint)
+    const timer = setTimeout(() => {
+      socket.close()
+      rejectPromise(new Error('CDP target query timed out'))
+    }, 5_000)
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify({ id: 1, method: 'Target.getTargets' }))
+    })
+    socket.addEventListener('message', event => {
+      const message = JSON.parse(String(event.data)) as { id?: number; result?: { targetInfos?: Array<{ type?: string; url?: string }> } }
+      if (message.id !== 1) return
+      clearTimeout(timer)
+      socket.close()
+      resolvePromise((message.result?.targetInfos ?? []).flatMap(target => target.type === 'page' && typeof target.url === 'string' ? [target.url] : []))
+    })
+    socket.addEventListener('error', () => {
+      clearTimeout(timer)
+      rejectPromise(new Error('CDP target query failed'))
+    })
+  })
+}
+
 function readArgument(name: string) {
   const index = process.argv.indexOf(name)
   return index >= 0 ? process.argv[index + 1] : undefined
@@ -62,8 +88,9 @@ export async function probeEdgeSession(sessionFile: string, expectedAccountID: s
     const endpoint = await resolveSessionPlaywrightEndpoint(sessionFile)
     const browser = await chromium.connectOverCDP(endpoint)
     const deadline = Date.now() + 10_000
-    let inspected = inspectOceanEnginePages([], expectedAccountID)
+    let inspected = inspectOceanEnginePages(await readCDPPageURLs(endpoint), expectedAccountID)
     do {
+      if (inspected.status === 'ready') break
       inspected = inspectOceanEnginePages(
         browser.contexts().flatMap(context => context.pages()).filter(page => !page.isClosed()).map(page => page.url()),
         expectedAccountID,
@@ -73,6 +100,9 @@ export async function probeEdgeSession(sessionFile: string, expectedAccountID: s
       if (inspected.status === 'ready') break
       await new Promise(resolveTimer => setTimeout(resolveTimer, 250))
     } while (Date.now() < deadline)
+    if (inspected.status !== 'ready') {
+      inspected = inspectOceanEnginePages(await readCDPPageURLs(endpoint), expectedAccountID)
+    }
     return { schema_version: sessionProbeSchema, checked_at: checkedAt, ...inspected }
   } catch {
     return {

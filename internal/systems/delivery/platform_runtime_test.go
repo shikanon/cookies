@@ -163,10 +163,55 @@ func TestDecodedLegacyPlanIsReadOnlyAndKeepsCanonicalHash(t *testing.T) {
 	}
 }
 
+func TestDecodePlanVersionAcceptsStoredCarrierLandingPageConflict(t *testing.T) {
+	intent := validDeliveryIntent(t)
+	configuration := validOceanEnginePlatformConfiguration(t, intent, 1)
+	configuration.Payload.OceanEngine.Project.Carrier = "im"
+	hash, err := configuration.ComputeCanonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration.CanonicalHash = hash
+	version := DeliveryPlanVersion{
+		SchemaVersion:         DeliveryPlanVersionSchemaV2,
+		PlanID:                "stored-plan",
+		VersionNumber:         1,
+		CanonicalHash:         hash,
+		DeliveryIntent:        &intent,
+		PlatformConfiguration: &configuration,
+	}
+	payload, err := json.Marshal(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodePlanVersion(payload, hash)
+	if err != nil {
+		t.Fatalf("decode stored version: %v", err)
+	}
+	if decoded.PlatformConfiguration.Payload.OceanEngine.Project.Carrier != "im" {
+		t.Fatalf("stored carrier changed during read: %#v", decoded.PlatformConfiguration.Payload.OceanEngine.Project)
+	}
+	if err := decoded.PlatformConfiguration.validateStructure(); err == nil {
+		t.Fatal("strict validation accepted the stored carrier and landing-page conflict")
+	}
+}
+
 func readyOceanRuntimeInputs(t *testing.T, promotionCount int) (DeliveryIntent, PlatformConfiguration) {
 	t.Helper()
 	intent := validDeliveryIntent(t)
+	landingPage := resolvedReference("oceanengine", "landing_page", "account:6391", "landing-page-1")
+	intent.Payload.LandingPageReferences = []StableReference{landingPage}
+	intent.CanonicalHash = ""
+	var err error
+	intent, err = FinalizeDeliveryIntent(intent)
+	if err != nil {
+		t.Fatalf("finalize ready OceanEngine intent: %v", err)
+	}
 	configuration := validOceanEnginePlatformConfiguration(t, intent, promotionCount)
+	configuration.Payload.OceanEngine.Project.OptimizationTargetReference = referencePointer(resolvedReference("oceanengine", "optimization_target", "account:6391", "optimization-target-1"))
+	for index := range configuration.Payload.OceanEngine.Promotions {
+		configuration.Payload.OceanEngine.Promotions[index].LandingPageReference = referencePointer(landingPage)
+	}
 	configuration.CompilationMetadata.FieldEvidence = []PlatformFieldEvidence{{Field: "project.carrier", State: PlatformEvidenceObserved}}
 	configuration.CanonicalHash = ""
 	finalized, err := FinalizePlatformConfiguration(configuration)

@@ -24,8 +24,11 @@ func (r sessionProbeRunner) Run(ctx context.Context, accountID string) (browsera
 		return browserautomation.EdgeSessionProbe{}, fmt.Errorf("%w: Edge session probe is not configured", browserautomation.ErrEnvironmentUnavailable)
 	}
 	timeout := r.Timeout
-	if timeout <= 0 || timeout > 30*time.Second {
+	if timeout <= 0 {
 		timeout = 15 * time.Second
+	}
+	if timeout > 30*time.Second {
+		timeout = 30 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

@@ -19,6 +19,7 @@ type controlledAuthorityRepository interface {
 	AttachBrowserRpaRun(context.Context, contract.OrganizationID, contract.ProjectID, string, int64, string, time.Time) (ControlledExecution, error)
 	CreatePlatformEntityMapping(context.Context, PlatformEntityMapping) (PlatformEntityMapping, error)
 	GetPlatformEntityMapping(context.Context, contract.OrganizationID, contract.ProjectID, string) (PlatformEntityMapping, error)
+	ListPlatformEntityMappings(context.Context, contract.OrganizationID, contract.ProjectID, string) ([]PlatformEntityMapping, error)
 	ConfirmPlatformEntityMapping(context.Context, contract.OrganizationID, contract.ProjectID, string, int64, string, string) (PlatformEntityMapping, error)
 	ConfirmPlatformEntityMappingMutation(context.Context, contract.OrganizationID, contract.ProjectID, string, int64, string, string, string) (PlatformEntityMapping, PlatformEntityMappingRevision, error)
 	ValidateControlledMaterialReferences(context.Context, contract.OrganizationID, contract.ProjectID, string, []ControlledMaterialReference) error
@@ -120,6 +121,28 @@ func (s Service) GetPlatformEntityMapping(ctx context.Context, actor contract.Ac
 		return PlatformEntityMapping{}, ErrUnsupportedConfigurationWorkflow
 	}
 	return repo.GetPlatformEntityMapping(ctx, actor.OrganizationID, projectID, id)
+}
+
+func (s Service) ListPlatformEntityMappings(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, accountReferenceID string) ([]PlatformEntityMapping, error) {
+	if err := s.ready(actor, projectID, ScopeRead); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(accountReferenceID) == "" {
+		return nil, ErrInvalidRequest
+	}
+	resolvedAccountID := strings.TrimSpace(accountReferenceID)
+	if s.ExternalAccountIDs != nil {
+		value, err := s.ExternalAccountIDs.ResolveExternalAccountID(ctx, string(actor.OrganizationID), string(projectID), resolvedAccountID)
+		if err != nil || strings.TrimSpace(value) == "" {
+			return nil, ErrInvalidState
+		}
+		resolvedAccountID = strings.TrimSpace(value)
+	}
+	repo, ok := s.Repository.(controlledAuthorityRepository)
+	if !ok {
+		return nil, ErrUnsupportedConfigurationWorkflow
+	}
+	return repo.ListPlatformEntityMappings(ctx, actor.OrganizationID, projectID, resolvedAccountID)
 }
 
 func (s Service) GetControlledChangeSet(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, id string) (ControlledChangeSet, error) {

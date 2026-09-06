@@ -161,3 +161,19 @@ func (r MySQLRepository) MarkAccountSessionVerified(ctx context.Context, organiz
 	}
 	return r.GetAccountSession(ctx, organizationID, accountID)
 }
+
+func (r MySQLRepository) MarkAccountSessionAuthRequired(ctx context.Context, organizationID, accountID string, expectedVersion int64, now time.Time) (OceanEngineAccountSession, error) {
+	db, err := r.db()
+	if err != nil {
+		return OceanEngineAccountSession{}, err
+	}
+	result, err := db.ExecContext(ctx, `UPDATE connector_ocean_engine_account_sessions SET status='auth_required',last_verified_at=NULL,version=version+1,updated_at=? WHERE organization_id=? AND account_id=? AND version=? AND status<>'disabled'`, now, organizationID, accountID, expectedVersion)
+	if err != nil {
+		return OceanEngineAccountSession{}, err
+	}
+	count, _ := result.RowsAffected()
+	if count != 1 {
+		return OceanEngineAccountSession{}, ErrImmutableConflict
+	}
+	return r.GetAccountSession(ctx, organizationID, accountID)
+}

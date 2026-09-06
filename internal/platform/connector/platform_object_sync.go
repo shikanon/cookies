@@ -17,10 +17,12 @@ import (
 
 type platformObjectReader interface {
 	ImageMaterialsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
+	ProductImagesPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
 	VideoMaterialsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
 	AwemePhotoMaterialsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
 	MarketingProductsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
 	OrangeLandingPagesPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
+	FilteredOrangeLandingPagesPage(context.Context, oceanengine.AssetPageRequest, oceanengine.OrangeLandingPageFilter) (map[string]any, error)
 	OptimizationTargets(context.Context, int, bool) (map[string]any, error)
 	BrandIndustries(context.Context) (map[string]any, error)
 	Brands(context.Context) (map[string]any, error)
@@ -60,6 +62,20 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 		parse    func(map[string]any) platformObjectPage
 		convert  func(map[string]any) (PlatformObjectCandidate, bool)
 	}
+	multiLeadLandingActions, err := s.readMultiLeadOrangeLandingPageActions(ctx, request, runID, objectReader, limit, maxPages)
+	if err != nil {
+		return nil, err
+	}
+	landingCandidate := func(item map[string]any) (PlatformObjectCandidate, bool) {
+		candidate, valid := orangeLandingCandidate(item)
+		if !valid {
+			return candidate, false
+		}
+		actions := multiLeadLandingActions[candidate.PlatformObjectID]
+		candidate.Metadata["multi_lead_external_actions"] = actions
+		candidate.Metadata["multi_conversion_eligible"] = containsString(actions, "100")
+		return candidate, true
+	}
 	sources := []source{
 		{PlatformObjectIndustryCategory, "industry_category_list", func(ctx context.Context, _ oceanengine.AssetPageRequest) (map[string]any, error) {
 			return objectReader.BrandIndustries(ctx)
@@ -68,11 +84,14 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 			return objectReader.Brands(ctx)
 		}, brandPage, brandCandidate},
 		{PlatformObjectAuthorizedIdentity, "authorized_identity_list", objectReader.AuthorizedIdentitiesPage, authorizedIdentityPage, authorizedIdentityCandidate},
+		// Qualify landing pages before large material catalogs. A later material
+		// read failure must not leave stale landing-page eligibility in Cookies.
+		{PlatformObjectOrangeLandingPage, "orange_landing_page_list", objectReader.OrangeLandingPagesPage, orangeLandingPage, landingCandidate},
 		{PlatformObjectImageMaterial, "image_material_list", objectReader.ImageMaterialsPage, imageMaterialPage, imageMaterialCandidate},
+		{PlatformObjectProductImage, "product_image_list", objectReader.ProductImagesPage, imageMaterialPage, productImageCandidate},
 		{PlatformObjectVideoMaterial, "video_material_list", objectReader.VideoMaterialsPage, videoMaterialPage, videoMaterialCandidate},
 		{PlatformObjectAwemePhotoMaterial, "aweme_photo_material_list", objectReader.AwemePhotoMaterialsPage, awemePhotoMaterialPage, awemePhotoMaterialCandidate},
 		{PlatformObjectMarketingProduct, "marketing_product_list", objectReader.MarketingProductsPage, marketingProductPage, marketingProductCandidate},
-		{PlatformObjectOrangeLandingPage, "orange_landing_page_list", objectReader.OrangeLandingPagesPage, orangeLandingPage, orangeLandingCandidate},
 	}
 	result := make(map[PlatformObjectKind]PlatformObjectSyncStats, len(sources)+2)
 	optimizationStats, err := s.syncOptimizationObjects(ctx, request, runID, objectReader, catalog)
@@ -131,6 +150,61 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 		result[current.kind] = stats
 	}
 	return result, nil
+}
+
+func (s Synchronizer) readMultiLeadOrangeLandingPageActions(ctx context.Context, request SyncRequest, runID string, reader platformObjectReader, limit, maxPages int) (map[string][]string, error) {
+	result := map[string][]string{}
+	for _, externalAction := range []int{2, 100} {
+		for page := 1; page <= maxPages; page++ {
+			if err := s.Writer.UpdateSyncCursor(ctx, runID, fmt.Sprintf("platform_objects:orange_landing_page:multi_lead:action:%d:page:%d", externalAction, page)); err != nil {
+				return nil, err
+			}
+			filter := oceanengine.OrangeLandingPageFilter{
+				MultiAssetTypes:       []int{2},
+				ExternalAction:        externalAction,
+				FilterDPA:             true,
+				CheckConversionTarget: true,
+				ConvertTargetForCheck: externalAction,
+			}
+			payload, err := reader.FilteredOrangeLandingPagesPage(ctx, oceanengine.AssetPageRequest{Page: page, Limit: limit}, filter)
+			if err != nil {
+				return nil, platformObjectReadError{stage: fmt.Sprintf("orange_landing_page:multi_lead:%d", externalAction), err: err}
+			}
+			queryEvidence := map[string]any{
+				"page": page, "limit": limit, "search": "", "order_mode": 1, "search_mode": 3,
+				"need_uba": false, "audit_status_list": []int{0, 9, 1, 10}, "multi_asset_types": []int{2},
+				"external_action": externalAction, "status": []int{0, 5, 8}, "filter_dpa": 1, "convert_target_for_check": externalAction,
+			}
+			if _, _, err = s.storeRaw(ctx, request, runID, "orange_landing_page_multi_lead", queryEvidence, payload); err != nil {
+				return nil, err
+			}
+			parsed := orangeLandingPage(payload)
+			for _, item := range parsed.Items {
+				if candidate, valid := orangeLandingCandidate(item); valid {
+					result[candidate.PlatformObjectID] = appendUniqueString(result[candidate.PlatformObjectID], strconv.Itoa(externalAction))
+				}
+			}
+			if (parsed.TotalPages > 0 && page >= parsed.TotalPages) || (parsed.TotalPages == 0 && len(parsed.Items) < limit) {
+				break
+			}
+			if page == maxPages {
+				return nil, fmt.Errorf("%w: orange_landing_page multi-lead action %d exceeds page limit", ErrInvalidFact, externalAction)
+			}
+		}
+	}
+	for id := range result {
+		sort.Strings(result[id])
+	}
+	return result, nil
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func (s Synchronizer) syncOptimizationObjects(ctx context.Context, request SyncRequest, runID string, reader platformObjectReader, catalog PlatformObjectCatalog) (map[PlatformObjectKind]PlatformObjectSyncStats, error) {
@@ -351,9 +425,17 @@ func imageMaterialCandidate(item map[string]any) (PlatformObjectCandidate, bool)
 	return PlatformObjectCandidate{
 		Kind: PlatformObjectImageMaterial, PlatformObjectID: id,
 		DisplayName: firstString(item, "file_name"),
-		Metadata:    scalarMetadata(item, "width", "height", "size", "image_mode", "ratio", "create_time"),
+		Metadata:    scalarMetadata(item, "width", "height", "size", "image_mode", "ratio", "create_time", "web_uri"),
 		PreviewURL:  previewURL, PreviewKind: previewKind(previewURL, "image"), PreviewExpiresAt: expiresAt,
 	}, true
+}
+
+func productImageCandidate(item map[string]any) (PlatformObjectCandidate, bool) {
+	candidate, valid := imageMaterialCandidate(item)
+	if valid {
+		candidate.Kind = PlatformObjectProductImage
+	}
+	return candidate, valid
 }
 
 func videoMaterialCandidate(item map[string]any) (PlatformObjectCandidate, bool) {
@@ -386,11 +468,11 @@ func awemePhotoMaterialCandidate(item map[string]any) (PlatformObjectCandidate, 
 }
 
 func marketingProductCandidate(item map[string]any) (PlatformObjectCandidate, bool) {
-	id := firstString(item, "product_id")
+	id := firstString(item, "unique_product_id")
 	if !numericPlatformObjectID(id) {
 		return PlatformObjectCandidate{}, false
 	}
-	metadata := scalarMetadata(item, "unique_product_id", "platform_product_id", "category_id", "brand_name", "audit_status", "online_status", "status", "type", "create_time", "modify_time", "online_time")
+	metadata := scalarMetadata(item, "unique_product_id", "product_id", "platform_product_id", "category_id", "brand_name", "audit_status", "online_status", "status", "type", "create_time", "modify_time", "online_time")
 	if category, ok := item["clue_product_category"].(map[string]any); ok {
 		if name := firstString(category, "category_name"); name != "" {
 			metadata["category_name"] = name

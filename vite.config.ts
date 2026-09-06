@@ -23,6 +23,7 @@ export default defineConfig({
       '/api/connector/v1': platformProxyTarget,
       '/api/insights/v1': platformProxyTarget,
       '/api/media/v1': platformProxyTarget,
+      '/api/platform/v1': platformProxyTarget,
       '/api': compatibilityApiProxyTarget,
       '/platform': platformProxyTarget,
     },

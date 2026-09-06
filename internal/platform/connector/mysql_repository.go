@@ -24,6 +24,16 @@ func (r MySQLRepository) ResolveExternalAccountID(ctx context.Context, organizat
 	return externalID, err
 }
 
+func (r MySQLRepository) ResolveAccountIDByExternalID(ctx context.Context, organizationID, projectID, externalID string) (string, error) {
+	db, err := r.db()
+	if err != nil {
+		return "", err
+	}
+	var accountID string
+	err = db.QueryRowContext(ctx, `SELECT a.id FROM platform_accounts a JOIN platform_account_connections c ON c.organization_id=a.organization_id AND c.account_id=a.id WHERE a.organization_id=? AND c.project_id=? AND a.external_id=? AND a.platform='ocean_engine' AND a.status='verified' AND c.status='verified'`, organizationID, projectID, externalID).Scan(&accountID)
+	return accountID, err
+}
+
 func (r MySQLRepository) db() (*sql.DB, error) {
 	if r.DB == nil {
 		return nil, fmt.Errorf("connector database is not configured")

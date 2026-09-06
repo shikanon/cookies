@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -28,6 +29,21 @@ type Service struct {
 	AuthorityProvider AuthorityProvider
 	NewID             IDGenerator
 	Now               func() time.Time
+}
+
+type runListRepository interface {
+	ListRuns(context.Context, contract.OrganizationID, contract.ProjectID) ([]BrowserRpaRun, error)
+}
+
+func (s Service) ListRuns(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID) ([]BrowserRpaRun, error) {
+	if s.Repository == nil || organizationID == "" || projectID == "" {
+		return nil, ErrInvalidContract
+	}
+	repository, ok := s.Repository.(runListRepository)
+	if !ok {
+		return nil, ErrInvalidContract
+	}
+	return repository.ListRuns(ctx, organizationID, projectID)
 }
 
 type AuthorityProvider interface {
@@ -113,20 +129,32 @@ func (s Service) SetKillSwitch(ctx context.Context, actor contract.ActorContext,
 }
 
 type CreateBoundRunRequest struct {
-	OrganizationID contract.OrganizationID
-	ProjectID      contract.ProjectID
-	Platform       Platform
-	AccountID      string
-	ExecutionID    string
-	EnvironmentID  string
-	ProfileID      string
-	PolicyID       string
-	IdempotencyKey string
-	CreatedBy      string
+	OrganizationID  contract.OrganizationID
+	ProjectID       contract.ProjectID
+	Platform        Platform
+	AccountID       string
+	ExecutionDriver ExecutionDriver
+	ExecutionID     string
+	EnvironmentID   string
+	ProfileID       string
+	PolicyID        string
+	IdempotencyKey  string
+	CreatedBy       string
 }
 
+const (
+	browserRpaLeaseIDPrefix        = "brpalease"
+	browserRpaEvidenceIDPrefix     = "brpaevidence"
+	browserRpaEventIDPrefix        = "brpaevent"
+	browserRpaConfirmationIDPrefix = "brpaconfirmation"
+	browserRpaAttemptIDPrefix      = "brpaattempt"
+)
+
 func (s Service) CreateBoundRun(ctx context.Context, request CreateBoundRunRequest) (BrowserRpaRun, bool, error) {
-	if s.Repository == nil || s.AuthorityProvider == nil || request.OrganizationID == "" || request.ProjectID == "" || request.Platform != PlatformOceanEngine || strings.TrimSpace(request.AccountID) == "" || strings.TrimSpace(request.ExecutionID) == "" || strings.TrimSpace(request.EnvironmentID) == "" || strings.TrimSpace(request.ProfileID) == "" || strings.TrimSpace(request.PolicyID) == "" || strings.TrimSpace(request.IdempotencyKey) == "" || len(request.IdempotencyKey) > 160 || strings.TrimSpace(request.CreatedBy) == "" {
+	if request.ExecutionDriver == "" {
+		request.ExecutionDriver = ExecutionDriverPlaywrightEdgeV3
+	}
+	if s.Repository == nil || s.AuthorityProvider == nil || request.OrganizationID == "" || request.ProjectID == "" || request.Platform != PlatformOceanEngine || strings.TrimSpace(request.AccountID) == "" || strings.TrimSpace(request.ExecutionID) == "" || strings.TrimSpace(request.EnvironmentID) == "" || strings.TrimSpace(request.ProfileID) == "" || strings.TrimSpace(request.PolicyID) == "" || strings.TrimSpace(request.IdempotencyKey) == "" || len(request.IdempotencyKey) > 160 || strings.TrimSpace(request.CreatedBy) == "" || request.ExecutionDriver != ExecutionDriverPlaywrightEdgeV3 && request.ExecutionDriver != ExecutionDriverOceanEngineWebAPI {
 		return BrowserRpaRun{}, false, ErrInvalidContract
 	}
 	now := s.now()
@@ -136,6 +164,9 @@ func (s Service) CreateBoundRun(ctx context.Context, request CreateBoundRunReque
 	}
 	authority := resolution.Binding
 	if err := authority.Validate(); err != nil || authority.OrganizationID != request.OrganizationID || authority.ProjectID != request.ProjectID || authority.BusinessExecutionID != request.ExecutionID || authority.AccountReferenceID != request.AccountID {
+		return BrowserRpaRun{}, false, ErrInvalidContract
+	}
+	if authority.ExecutionDriver != "" && authority.ExecutionDriver != request.ExecutionDriver {
 		return BrowserRpaRun{}, false, ErrInvalidContract
 	}
 	if authority.OperatorPrincipalID != "" && request.CreatedBy != authority.OperatorPrincipalID {
@@ -153,22 +184,27 @@ func (s Service) CreateBoundRun(ctx context.Context, request CreateBoundRunReque
 	if err != nil {
 		return BrowserRpaRun{}, false, err
 	}
-	if environment.Platform != request.Platform || environment.AccountID != request.AccountID || environment.Mode != "local_visible" || !environment.Healthy || environment.Version < 1 || profile.EnvironmentID != environment.ID || profile.Platform != request.Platform || profile.AccountID != request.AccountID || profile.State != "ready" || profile.Version < 1 || policy.Platform != request.Platform || policy.AccountID != request.AccountID || policy.Version < 1 {
+	expectedMode := "local_visible"
+	if request.ExecutionDriver == ExecutionDriverOceanEngineWebAPI {
+		expectedMode = "remote_api"
+	}
+	if environment.Platform != request.Platform || environment.AccountID != request.AccountID || environment.Mode != expectedMode || !environment.Healthy || environment.Version < 1 || profile.EnvironmentID != environment.ID || profile.Platform != request.Platform || profile.AccountID != request.AccountID || profile.State != "ready" || profile.Version < 1 || policy.Platform != request.Platform || policy.AccountID != request.AccountID || policy.Version < 1 {
 		return BrowserRpaRun{}, false, ErrInvalidContract
 	}
 	if actionRequiresBoundPlatformProject(authority.Action) && !slices.Contains(policy.AllowedPlatformProjects, authority.ParentPlatformProjectID) {
 		return BrowserRpaRun{}, false, ErrInvalidContract
 	}
 	hashInput, err := json.Marshal(struct {
-		OrganizationID contract.OrganizationID `json:"organization_id"`
-		ProjectID      contract.ProjectID      `json:"project_id"`
-		Platform       Platform                `json:"platform"`
-		AccountID      string                  `json:"account_id"`
-		ExecutionID    string                  `json:"business_execution_id"`
-		EnvironmentID  string                  `json:"environment_id"`
-		ProfileID      string                  `json:"profile_id"`
-		PolicyID       string                  `json:"policy_id"`
-	}{OrganizationID: request.OrganizationID, ProjectID: request.ProjectID, Platform: request.Platform, AccountID: request.AccountID, ExecutionID: request.ExecutionID, EnvironmentID: request.EnvironmentID, ProfileID: request.ProfileID, PolicyID: request.PolicyID})
+		OrganizationID  contract.OrganizationID `json:"organization_id"`
+		ProjectID       contract.ProjectID      `json:"project_id"`
+		Platform        Platform                `json:"platform"`
+		AccountID       string                  `json:"account_id"`
+		ExecutionDriver ExecutionDriver         `json:"execution_driver"`
+		ExecutionID     string                  `json:"business_execution_id"`
+		EnvironmentID   string                  `json:"environment_id"`
+		ProfileID       string                  `json:"profile_id"`
+		PolicyID        string                  `json:"policy_id"`
+	}{OrganizationID: request.OrganizationID, ProjectID: request.ProjectID, Platform: request.Platform, AccountID: request.AccountID, ExecutionDriver: request.ExecutionDriver, ExecutionID: request.ExecutionID, EnvironmentID: request.EnvironmentID, ProfileID: request.ProfileID, PolicyID: request.PolicyID})
 	if err != nil {
 		return BrowserRpaRun{}, false, err
 	}
@@ -179,16 +215,39 @@ func (s Service) CreateBoundRun(ctx context.Context, request CreateBoundRunReque
 		if err != nil {
 			return BrowserRpaRun{}, false, err
 		}
-		if existing.IdempotencyKey != request.IdempotencyKey || existing.RequestHash != requestHash || !reflect.DeepEqual(existing.Authority, authority) {
+		allowReloadRecovery := authority.AuthorityOrigin == "plan_execution"
+		if (!allowReloadRecovery && existing.IdempotencyKey != request.IdempotencyKey) || existing.RequestHash != requestHash || !reflect.DeepEqual(existing.Authority, authority) {
 			return BrowserRpaRun{}, false, ErrIdempotencyConflict
+		}
+		// A prior request can persist and attach the run before staged object
+		// mappings finish. Retry the server-owned binding work on replay.
+		if err := s.AuthorityProvider.BindRun(ctx, existing.Authority, existing.ID, now); err != nil {
+			return BrowserRpaRun{}, false, err
 		}
 		return existing, true, nil
 	}
 	id := boundRunID(request.OrganizationID, request.ProjectID, request.ExecutionID)
-	run := BrowserRpaRun{SchemaVersion: RunSchemaV1, ID: id, OrganizationID: request.OrganizationID, ProjectID: request.ProjectID, Platform: request.Platform, AccountID: request.AccountID, Authority: authority, EnvironmentID: request.EnvironmentID, ProfileID: request.ProfileID, PolicyID: request.PolicyID, State: RunQueued, Version: 1, IdempotencyKey: request.IdempotencyKey, RequestHash: requestHash, CreatedBy: request.CreatedBy, CreatedAt: now, UpdatedAt: now}
-	created, replayed, err := s.CreateRun(ctx, CreateRunRequest{Run: run})
-	if err != nil {
-		return BrowserRpaRun{}, false, err
+	if prior, priorErr := s.Repository.GetRun(ctx, request.OrganizationID, request.ProjectID, id); priorErr == nil && prior.State == RunFailed {
+		// Delivery releases the execution binding only after it proves that the
+		// failed run had no controlled action. Keep that run immutable and give
+		// the retry a distinct audit identity.
+		id = retryBoundRunID(request.OrganizationID, request.ProjectID, request.ExecutionID, request.IdempotencyKey)
+	}
+	run := BrowserRpaRun{SchemaVersion: RunSchemaV1, ID: id, OrganizationID: request.OrganizationID, ProjectID: request.ProjectID, Platform: request.Platform, AccountID: request.AccountID, ExecutionDriver: request.ExecutionDriver, Authority: authority, EnvironmentID: request.EnvironmentID, ProfileID: request.ProfileID, PolicyID: request.PolicyID, State: RunQueued, Version: 1, IdempotencyKey: request.IdempotencyKey, RequestHash: requestHash, CreatedBy: request.CreatedBy, CreatedAt: now, UpdatedAt: now}
+	created, existingErr := s.Repository.GetRun(ctx, request.OrganizationID, request.ProjectID, id)
+	replayed := existingErr == nil
+	if replayed {
+		if authority.AuthorityOrigin != "plan_execution" || created.RequestHash != requestHash || !reflect.DeepEqual(created.Authority, authority) {
+			return BrowserRpaRun{}, false, ErrIdempotencyConflict
+		}
+	} else {
+		if !errors.Is(existingErr, ErrNotFound) {
+			return BrowserRpaRun{}, false, existingErr
+		}
+		created, replayed, err = s.CreateRun(ctx, CreateRunRequest{Run: run})
+		if err != nil {
+			return BrowserRpaRun{}, false, err
+		}
 	}
 	if !replayed {
 		if err := s.recordEvent(ctx, created, "run_created", "controlled visible-browser run created", request.CreatedBy); err != nil {
@@ -203,6 +262,11 @@ func (s Service) CreateBoundRun(ctx context.Context, request CreateBoundRunReque
 
 func boundRunID(organizationID contract.OrganizationID, projectID contract.ProjectID, executionID string) string {
 	digest := sha256.Sum256([]byte(string(organizationID) + "\x00" + string(projectID) + "\x00" + executionID))
+	return "curun_" + hex.EncodeToString(digest[:])
+}
+
+func retryBoundRunID(organizationID contract.OrganizationID, projectID contract.ProjectID, executionID, idempotencyKey string) string {
+	digest := sha256.Sum256([]byte(string(organizationID) + "\x00" + string(projectID) + "\x00" + executionID + "\x00retry\x00" + idempotencyKey))
 	return "curun_" + hex.EncodeToString(digest[:])
 }
 
@@ -251,14 +315,29 @@ func (s Service) AcquireRunLease(ctx context.Context, organizationID contract.Or
 	if run.Version != expectedVersion {
 		return AcquireRunLeaseResult{}, ErrVersionConflict
 	}
-	if terminalState(run.State) || run.LeaseID != "" {
+	if terminalState(run.State) {
 		return AcquireRunLeaseResult{}, ErrInvalidTransition
 	}
-	id, err := s.newID("brpa_lease")
+	now := s.now()
+	if run.LeaseID != "" {
+		currentLease, leaseErr := s.Repository.GetLease(ctx, organizationID, projectID, run.LeaseID)
+		if leaseErr != nil {
+			return AcquireRunLeaseResult{}, leaseErr
+		}
+		if currentLease.ValidAt(now) {
+			return AcquireRunLeaseResult{}, ErrInvalidTransition
+		}
+		released, _, releaseErr := s.Repository.ReleaseRunLease(ctx, run, expectedVersion, currentLease, currentLease.Version, currentLease.FencingToken, now)
+		if releaseErr != nil {
+			return AcquireRunLeaseResult{}, releaseErr
+		}
+		run = released
+		expectedVersion = run.Version
+	}
+	id, err := s.newID(browserRpaLeaseIDPrefix)
 	if err != nil {
 		return AcquireRunLeaseResult{}, err
 	}
-	now := s.now()
 	lease := SessionLease{ID: id, OrganizationID: run.OrganizationID, ProjectID: run.ProjectID, RunID: run.ID, EnvironmentID: run.EnvironmentID, ProfileID: run.ProfileID, Platform: run.Platform, AccountID: run.AccountID, Holder: holder, FencingToken: 1, Version: 1, ExpiresAt: now.Add(SessionLeaseTTL), HeartbeatDeadline: now.Add(SessionHeartbeatTTL)}
 	updated, lease, err := s.Repository.AcquireRunLease(ctx, run, expectedVersion, lease, now)
 	if err != nil {
@@ -300,12 +379,12 @@ func (s Service) RecordTakeoverEvidence(ctx context.Context, request RecordTakeo
 		return TakeoverEvidenceResult{}, ErrInvalidContract
 	}
 	step := RunStep{ID: request.StepID, RunID: run.ID, Sequence: request.Sequence, WorkflowStepID: run.Authority.WorkflowStepID, Action: string(request.Action), Status: request.Status, Attempt: 1, Version: 1}
-	evidenceID, err := s.newID("brpa_evidence")
+	evidenceID, err := s.newID(browserRpaEvidenceIDPrefix)
 	if err != nil {
 		return TakeoverEvidenceResult{}, err
 	}
 	evidence := RedactEvidence(Evidence{SchemaVersion: EvidenceSchemaV1, ID: evidenceID, OrganizationID: run.OrganizationID, ProjectID: run.ProjectID, RunID: run.ID, StepID: step.ID, BeforePageFacts: request.BeforePageFacts, AfterPageFacts: request.AfterPageFacts, FieldReadback: request.FieldReadback, DiffKeys: request.DiffKeys, PageReference: request.PageReference, ObjectFingerprint: run.Authority.ObjectFingerprint, SkillVersion: run.Authority.SkillVersion, SelectorVersion: request.SelectorVersion, ActionVersion: request.ActionVersion, CreatedAt: now})
-	eventID, err := s.newID("brpa_event")
+	eventID, err := s.newID(browserRpaEventIDPrefix)
 	if err != nil {
 		return TakeoverEvidenceResult{}, err
 	}
@@ -391,7 +470,7 @@ func (s Service) IssueFinalConfirmation(ctx context.Context, organizationID cont
 	}
 	token := hex.EncodeToString(tokenBytes)
 	digest := sha256.Sum256([]byte(token))
-	id, err := s.newID("brpa_confirmation")
+	id, err := s.newID(browserRpaConfirmationIDPrefix)
 	if err != nil {
 		return IssuedConfirmation{}, err
 	}
@@ -474,15 +553,15 @@ func (s Service) AuthorizeTakeoverAction(ctx context.Context, request AuthorizeT
 		return TakeoverActionAuthorization{}, ErrInvalidContract
 	}
 	digest := sha256.Sum256([]byte(request.Token))
-	attemptID, err := s.newID("brpa_attempt")
+	attemptID, err := s.newID(browserRpaAttemptIDPrefix)
 	if err != nil {
 		return TakeoverActionAuthorization{}, err
 	}
-	evidenceID, err := s.newID("brpa_evidence")
+	evidenceID, err := s.newID(browserRpaEvidenceIDPrefix)
 	if err != nil {
 		return TakeoverActionAuthorization{}, err
 	}
-	eventID, err := s.newID("brpa_event")
+	eventID, err := s.newID(browserRpaEventIDPrefix)
 	if err != nil {
 		return TakeoverActionAuthorization{}, err
 	}
@@ -612,12 +691,12 @@ func (s Service) RecordTakeoverOutcome(ctx context.Context, request RecordTakeov
 		return TakeoverEvidenceResult{}, ErrInvalidContract
 	}
 	step := RunStep{ID: request.StepID, RunID: run.ID, Sequence: request.Sequence, WorkflowStepID: run.Authority.WorkflowStepID, Action: string(request.Outcome), Status: status, BlockingReason: reason, Attempt: 1, Version: 1}
-	evidenceID, err := s.newID("brpa_evidence")
+	evidenceID, err := s.newID(browserRpaEvidenceIDPrefix)
 	if err != nil {
 		return TakeoverEvidenceResult{}, err
 	}
 	evidence := RedactEvidence(Evidence{SchemaVersion: EvidenceSchemaV1, ID: evidenceID, OrganizationID: run.OrganizationID, ProjectID: run.ProjectID, RunID: run.ID, StepID: step.ID, BeforePageFacts: request.BeforePageFacts, AfterPageFacts: request.AfterPageFacts, FieldReadback: request.FieldReadback, PageReference: request.PageReference, ObjectFingerprint: run.Authority.ObjectFingerprint, SkillVersion: run.Authority.SkillVersion, SelectorVersion: request.SelectorVersion, ActionVersion: request.ActionVersion, CreatedAt: now})
-	eventID, err := s.newID("brpa_event")
+	eventID, err := s.newID(browserRpaEventIDPrefix)
 	if err != nil {
 		return TakeoverEvidenceResult{}, err
 	}
@@ -670,7 +749,7 @@ func (s Service) AuthorizeAction(ctx context.Context, request AuthorizeActionReq
 		return ControlledActionAttempt{}, ErrLeaseUnavailable
 	}
 	digest := sha256.Sum256([]byte(request.Token))
-	attemptID, err := s.newID("brpa_attempt")
+	attemptID, err := s.newID(browserRpaAttemptIDPrefix)
 	if err != nil {
 		return ControlledActionAttempt{}, err
 	}
@@ -757,7 +836,7 @@ func (s Service) newID(prefix string) (string, error) {
 }
 
 func (s Service) recordEvent(ctx context.Context, run BrowserRpaRun, kind, summary, actor string) error {
-	id, err := s.newID("brpa_event")
+	id, err := s.newID(browserRpaEventIDPrefix)
 	if err != nil {
 		return err
 	}

@@ -76,3 +76,14 @@ func TestDeliveryBrowserRpaRunReferenceRenameIsMetadataOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutionDriverMigrationDefaultsHistoricalRunsToPlaywright(t *testing.T) {
+	payload, err := os.ReadFile("../../../migrations/platform/20260831110000_browser_rpa_execution_driver.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(payload)
+	if !strings.Contains(sql, "ADD COLUMN execution_driver") || !strings.Contains(sql, "DEFAULT 'playwright-rpa/edge/v3'") {
+		t.Fatalf("execution driver migration does not preserve historical runs: %s", sql)
+	}
+}

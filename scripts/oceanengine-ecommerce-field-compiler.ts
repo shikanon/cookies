@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 export type EcommerceParentContext = {
   carrier: string;
   optimization_target: string;
+  optimization_target_external_action?: string;
   deep_optimization: string;
   delivery_mode: string;
   placement_mode: string;

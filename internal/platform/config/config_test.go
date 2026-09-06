@@ -71,6 +71,26 @@ func TestBrowserRPALegacyRunnerIsAnExplicitRollbackMode(t *testing.T) {
 	}
 }
 
+func TestOceanEngineWebAPIWriteDefaultsOff(t *testing.T) {
+	value, err := FromLookup(mapLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.OceanEngine.WebAPIWriteEnabled || len(value.OceanEngine.WebAPIWriteAccounts) != 0 {
+		t.Fatalf("unexpected Ocean Engine Web API defaults: %#v", value.OceanEngine)
+	}
+}
+
+func TestOceanEngineWebAPIWriteRequiresAllowlist(t *testing.T) {
+	values := map[string]string{
+		"COOKIES_OCEAN_ENGINE_WEB_API_WRITE_ENABLED": "true",
+	}
+	_, err := FromLookup(mapLookup(values))
+	if err == nil || !strings.Contains(err.Error(), "account allowlist") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestVolcengineSpeechConfigurationRequiresIndependentAPIKeyAndVoice(t *testing.T) {
 	_, err := FromLookup(mapLookup(map[string]string{"COOKIES_PROVIDER_SPEECH_ADAPTER": "volcengine_speech"}))
 	if err == nil {

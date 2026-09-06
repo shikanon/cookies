@@ -5722,7 +5722,50 @@ export type ApiConnectorSyncStatus = {
   status: 'queued' | 'running' | 'completed' | 'failed'; cursor?: string
   attempt: number; started_at: string; completed_at?: string
 }
-export type ApiConnectorPlatformObjectKind = 'image_material' | 'video_material' | 'aweme_photo_material' | 'marketing_product' | 'orange_landing_page' | 'optimization_target' | 'conversion_event_asset' | 'industry_category' | 'brand' | 'authorized_identity'
+export type ApiOptimizationTargetContext = {
+  campaign_type: number; landing_type: number; asset_type: number
+  micro_app_id: string; cdp_marketing_goal: number; dpa_ad_type: number
+  micro_promotion_type: number; micro_app_instance_id: string
+  multi_asset_types?: number[]; need_assets: boolean
+}
+export type ApiOptimizationTargetCapability = {
+  external_action: string; semantic_key: string; display_name: string
+  optimization_event_type?: string; asset_types?: string[]; track_types?: string[]
+  is_gray: boolean; deep_goal_required: boolean; need_assets: boolean
+  limits: { delivery_modes?: number[]; auto_ad_types?: number[]; delivery_packages?: number[] }
+  event_assets?: Array<{ asset_id: string; asset_name?: string; role?: string }>
+}
+export type ApiOptimizationTargetCapabilitySnapshot = {
+  schema_version: 'oceanengine-optimization-target-capability/v1'
+  snapshot_id: string; account_id: string; context: ApiOptimizationTargetContext; context_hash: string
+  options: ApiOptimizationTargetCapability[]; asset_ids?: string[]; show_other: boolean; observed_at: string
+}
+
+export type ApiOceanEngineAccountCapabilitySnapshot = {
+  schema_version: 'oceanengine-account-capability/v1'
+  snapshot_id: string
+  account_id: string
+  external_actions: Array<{ key: string; display_name: string; value: string; step?: string; default?: boolean }>
+  deep_external_actions: Array<{ key: string; display_name: string; value: string; step?: string; default?: boolean }>
+  creative_components: Array<{
+    component_type_ids: string[]
+    access_flags?: string[]
+    landing_types?: string[]
+    campaign_types?: string[]
+    inventory_types?: string[]
+    inventory_catalogs?: string[]
+    image_modes?: string[]
+    content_types?: string[]
+  }>
+  budget_rules?: Record<string, unknown>
+  bid_constraints?: Record<string, unknown>
+  quotas?: Record<string, unknown>
+  feature_rules?: Record<string, unknown>
+  orange_site_domains?: string[]
+  interfaces?: Array<{ method?: string; path: string; description?: string; empty_events?: string[] }>
+  observed_at: string
+}
+export type ApiConnectorPlatformObjectKind = 'image_material' | 'product_image' | 'video_material' | 'aweme_photo_material' | 'marketing_product' | 'orange_landing_page' | 'optimization_target' | 'conversion_event_asset' | 'industry_category' | 'brand' | 'authorized_identity'
 export type ApiConnectorPlatformObject = {
   id: string; organization_id: string; account_id: string
   object_kind: ApiConnectorPlatformObjectKind; platform_object_id: string
@@ -5734,6 +5777,23 @@ export type ApiConnectorPlatformObject = {
     available: boolean; spend_minor: number; impressions: number; clicks: number
     conversions: number; ctr: number; data_through?: string
   }
+}
+
+export type ApiConnectorObjectSnapshot = {
+  id: string
+  object_kind: 'account' | 'project' | 'campaign' | 'promotion' | 'product' | 'material' | string
+  object_ref: string
+  parent_ref?: string
+  state: Record<string, unknown>
+  available_at: string
+  data_through: string
+  quality_status: string
+}
+
+export type ApiConnectorCanonicalSnapshot = {
+  dataset_version: string
+  prediction_cutoff: string
+  objects: ApiConnectorObjectSnapshot[]
 }
 export type ApiLaunchBatchMetricDistribution = { metric: string; p10: number; p50: number; p90: number }
 export type ApiLaunchBatchCalibration = {
@@ -6625,6 +6685,7 @@ export const api = {
   verifyProjectConnectorAccount: (projectId: string, accountId: string) => request<ApiConnectorAccount>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/verify`, 'POST'),
   syncProjectConnectorAccount: (projectId: string, accountId: string, body: { start: string; end: string; time_zone: string; currency: string; sync_mode?: 'full' | 'metrics_only' | 'inventory_only' }, idempotencyKey: string) => request<ApiConnectorSyncResult>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/syncs`, 'POST', body, { 'Idempotency-Key': idempotencyKey }),
   getProjectConnectorSync: (projectId: string, accountId: string, syncId: string) => request<ApiConnectorSyncStatus>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/syncs/${encodeURIComponent(syncId)}`),
+  getProjectConnectorSnapshot: (projectId: string, accountId: string, predictionCutoff = new Date().toISOString()) => request<ApiConnectorCanonicalSnapshot>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/canonical-snapshots?prediction_cutoff=${encodeURIComponent(predictionCutoff)}`),
   listProjectConnectorPlatformObjects: (projectId: string, accountId: string, filter: { objectKind?: ApiConnectorPlatformObjectKind; status?: 'active' | 'unavailable'; q?: string; cursor?: string; limit?: number; sortBy?: 'created_at' | 'ctr' | 'conversions'; sortOrder?: 'asc' | 'desc' } = {}) => {
     const search = new URLSearchParams({ limit: String(filter.limit ?? 100) })
     if (filter.objectKind) search.set('object_kind', filter.objectKind)
@@ -6635,6 +6696,8 @@ export const api = {
     if (filter.sortOrder) search.set('sort_order', filter.sortOrder)
     return request<{ items: ApiConnectorPlatformObject[]; next_cursor: string }>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/platform-objects?${search.toString()}`)
   },
+  readProjectOptimizationTargetCapabilities: (projectId: string, accountId: string, context: ApiOptimizationTargetContext) => request<ApiOptimizationTargetCapabilitySnapshot>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/optimization-target-capabilities`, 'POST', { context }),
+  readProjectOceanEngineAccountCapabilities: (projectId: string, accountId: string) => request<ApiOceanEngineAccountCapabilitySnapshot>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/capabilities`),
   getProjectConnectorLaunchBatchCalibration: (projectId: string, accountId: string) => request<ApiLaunchBatchCalibration>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/launch-batch-calibration`),
   getMiyunConnection: (projectId: string) => request<ApiMiyunConnection>(`${miyunProjectPath(projectId)}/connection`),
   updateMiyunConnection: (projectId: string, body: { session: string; session_expires_at?: string; expected_version?: number }) => request<ApiMiyunConnection>(`${miyunProjectPath(projectId)}/connection`, 'PUT', body),

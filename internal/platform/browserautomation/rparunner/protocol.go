@@ -1,5 +1,7 @@
 package rparunner
 
+import "encoding/json"
+
 // Wire protocol between the Go control plane and the Playwright RPA runner
 // subprocess. The plan is written to the subprocess stdin; the subprocess
 // answers with exactly one JSON result document on stdout. Exit codes only
@@ -64,10 +66,33 @@ type StepResult struct {
 	ID             string            `json:"id"`
 	Status         string            `json:"status"`
 	BeforeFacts    map[string]string `json:"before_facts,omitempty"`
-	Readback       map[string]any    `json:"readback,omitempty"`
+	Readback       FlexibleReadback  `json:"readback,omitempty"`
 	DiffKeys       []string          `json:"diff_keys,omitempty"`
 	PageReference  string            `json:"page_reference,omitempty"`
 	ScreenshotPath string            `json:"screenshot_path,omitempty"`
+}
+
+// FlexibleReadback accepts both aggregate readback objects and scalar field
+// values. Runner v3 emits one scalar for field steps and one object for its
+// aggregate readback step.
+type FlexibleReadback map[string]any
+
+func (r *FlexibleReadback) UnmarshalJSON(payload []byte) error {
+	if string(payload) == "null" {
+		*r = nil
+		return nil
+	}
+	var object map[string]any
+	if err := json.Unmarshal(payload, &object); err == nil {
+		*r = object
+		return nil
+	}
+	var scalar any
+	if err := json.Unmarshal(payload, &scalar); err != nil {
+		return err
+	}
+	*r = FlexibleReadback{"value": scalar}
+	return nil
 }
 
 type RpaResult struct {

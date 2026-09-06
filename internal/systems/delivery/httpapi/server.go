@@ -26,6 +26,7 @@ type Application interface {
 	RunPlanPreflight(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.PreflightResult, error)
 	GetPlanDetail(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.PlanDetail, error)
 	ExecutePlan(context.Context, contract.ActorContext, contract.ProjectID, string, string, delivery.ExecutePlanRequest) (delivery.ExecutionResult, bool, error)
+	StartBrowserRpaExecution(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.StartBrowserRpaExecutionRequest) (delivery.StartBrowserRpaExecutionResult, error)
 	ListChangeSets(context.Context, contract.ActorContext, contract.ProjectID, int) ([]delivery.ChangeSet, error)
 	GetChangeSet(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.ChangeSet, error)
 	CreateChangeSet(context.Context, contract.ActorContext, contract.ProjectID, string, int64) (delivery.ChangeSet, error)
@@ -92,6 +93,7 @@ type controlledAuthorityApplication interface {
 type platformEntityMappingApplication interface {
 	CreatePendingPlatformEntityMapping(context.Context, contract.ActorContext, delivery.PlatformEntityMapping) (delivery.PlatformEntityMapping, error)
 	GetPlatformEntityMapping(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.PlatformEntityMapping, error)
+	ListPlatformEntityMappings(context.Context, contract.ActorContext, contract.ProjectID, string) ([]delivery.PlatformEntityMapping, error)
 	ConfirmPlatformEntityMapping(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.ConfirmPlatformEntityMappingRequest) (delivery.PlatformEntityMapping, error)
 	ConfirmPlatformEntityMappingMutation(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.ConfirmPlatformEntityMappingMutationRequest) (delivery.PlatformEntityMapping, delivery.PlatformEntityMappingRevision, error)
 	ConfirmPlatformEntityMappingChange(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.ConfirmPlatformEntityMappingChangeRequest) (delivery.PlatformEntityMapping, delivery.PlatformEntityMappingRevision, error)
@@ -116,6 +118,7 @@ func New(app Application) *Server {
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/preflight", server.planPreflight)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/plans/{plan_id}/detail", server.getPlanDetail)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/execute", server.executePlan)
+	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/browser-rpa-runs", server.startBrowserRpaExecution)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/configuration:compile", server.compileConfiguration)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/configuration:override", server.overrideConfiguration)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/recommendations:generate", server.generateRecommendation)
@@ -146,6 +149,7 @@ func New(app Application) *Server {
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/controlled-change-sets/{controlled_change_set_action}", server.controlledChangeSetAction)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/controlled-executions/{execution_id}", server.getControlledExecution)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/platform-entity-mappings", server.createPlatformEntityMapping)
+	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/platform-entity-mappings", server.listPlatformEntityMappings)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/platform-entity-mappings/{mapping_id}", server.getPlatformEntityMapping)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/platform-entity-mappings/{mapping_action}", server.platformEntityMappingAction)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/executions", server.listExecutions)
@@ -744,6 +748,24 @@ func (s *Server) executePlan(writer http.ResponseWriter, request *http.Request) 
 	} else {
 		writeJSON(writer, http.StatusCreated, result)
 	}
+}
+
+func (s *Server) startBrowserRpaExecution(writer http.ResponseWriter, request *http.Request) {
+	var body delivery.StartBrowserRpaExecutionRequest
+	if !decode(writer, request, &body) {
+		return
+	}
+	body.IdempotencyKey = strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if body.IdempotencyKey == "" {
+		writeError(writer, request, delivery.ErrInvalidRequest)
+		return
+	}
+	result, err := s.app.StartBrowserRpaExecution(request.Context(), mustActor(request), projectID(request), request.PathValue("plan_id"), body)
+	if err != nil {
+		writeError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, result)
 }
 
 func (s *Server) createChangeSet(writer http.ResponseWriter, request *http.Request) {

@@ -1,0 +1,232 @@
+{
+  "schema_version": "oceanengine-web-api-contract/v1",
+  "observed_at": "2026-08-31T00:00:00Z",
+  "secsdk_version": "1.2.22",
+  "token_path": null,
+  "status": "create_contracts_confirmed",
+  "write_enabled": false,
+  "csrf": {
+    "method": "HEAD",
+    "request_headers": {
+      "x-secsdk-csrf-request": "1",
+      "x-secsdk-csrf-version": "1.2.22"
+    },
+    "response_header": "x-ware-csrf-token",
+    "write_header": "x-secsdk-csrf-token",
+    "observed_browser_write_value_class": "DOWNGRADE"
+  },
+  "endpoints": {
+    "project_create": {
+      "method": "POST",
+      "path": "/superior/api/v2/project/create",
+      "observed_query_names": ["_signature", "aadvid"]
+    },
+    "project_detail": {
+      "method": "GET",
+      "path": "/superior/api/v2/project/detail",
+      "observed_query_names": ["aadvid", "project_ids"]
+    },
+    "promotion_create": {
+      "method": "POST",
+      "path": "/superior/api/v2/promotion/create_promotion",
+      "observed_query_names": ["_signature", "aadvid"]
+    },
+    "promotion_detail": {
+      "method": "GET",
+      "path": "/superior/api/ad/promotion/detail",
+      "observed_query_names": ["aadvid", "promotion_ids"]
+    }
+  },
+  "observed_optional_fields": {
+    "query_names": ["_signature", "aadvid"],
+    "header_names": ["x-csrftoken", "x-secsdk-csrf-token", "x-sessionid"],
+    "necessity": {
+      "_signature": "unknown",
+      "x-sessionid": "unknown"
+    },
+    "observed_sources": {
+      "_signature": "@byted/acrawler@1.6.8_sign_url_normalized_body_and_module_load_time",
+      "x-sessionid": "window_sessionId_from_uuid@8.3.2_v4"
+    },
+    "x_sessionid_observation": {
+      "value_class": "uuid_v4",
+      "same_across_captured_writes": false,
+      "current_management_page_present": false,
+      "account_or_device_binding_observed": false
+    },
+    "evidence": "existing_connector_reads_succeed_without_both_fields",
+    "policy": "omit_by_default_and_test_each_field_independently"
+  },
+  "capture": {
+    "source": "sanitized_har_schema_only",
+    "request_bodies_present": true,
+    "response_bodies_present": false,
+    "raw_har_committed": false,
+    "request_shape_fixture": "web-api-request-shapes-v1.json"
+  },
+  "direct_http_probe": {
+    "date": "2026-08-31",
+    "optional_fields": "omitted",
+    "post_sent": false,
+    "head_http_status": 200,
+    "token_header_present": false,
+    "exact_name_reconciliation_count": 0,
+    "result": "csrf_preflight_failed"
+  },
+  "browser_same_origin_head_probe": {
+    "date": "2026-08-31",
+    "http_status": 200,
+    "token_header_present": false,
+    "post_sent": false,
+    "secsdk_cache_present": false,
+    "secsdk_native_result": "DOWNGRADE",
+    "result": "same_as_connector_http"
+  },
+  "captured_browser_writes": {
+    "project_csrf_value_class": "DOWNGRADE",
+    "promotion_csrf_value_class": "DOWNGRADE",
+    "project_http_status": 200,
+    "promotion_http_status": 200
+  },
+  "downgrade_direct_http_probe": {
+    "date": "2026-08-31",
+    "post_count": 1,
+    "optional_fields": "omitted",
+    "http_status": 200,
+    "business_code": 50100,
+    "business_code_name": "INTERNAL_SERVICE_ERROR",
+    "exact_name_reconciliation_count": 0,
+    "result": "deterministic_rejection"
+  },
+  "session_id_direct_http_probe": {
+    "date": "2026-08-31",
+    "post_count": 1,
+    "optional_fields": "x-sessionid_only",
+    "session_id_value_class": "uuid_v4",
+    "http_status": 200,
+    "business_code": 50100,
+    "business_code_name": "INTERNAL_SERVICE_ERROR",
+    "exact_name_reconciliation_count": 0,
+    "result": "deterministic_rejection"
+  },
+  "signature_probe_preparation": {
+    "date": "2026-08-31",
+    "platform_request_sent": false,
+    "runtime_package": "@byted/acrawler@1.6.8",
+    "runtime_sha256": "f6cb1579cf756e234b20f4f38c59568a1e594c847d9c4102d2ba448da45014e3",
+    "signature_present": true,
+    "signature_length": 31,
+    "signature_value_stored": false,
+    "result": "isolated_probe_completed"
+  },
+  "invalid_signature_direct_http_probe": {
+    "date": "2026-08-31",
+    "post_count": 1,
+    "optional_fields": "_signature_only",
+    "signature_input": "incorrectly_included_aadvid",
+    "browser_order": "sign_then_append_aadvid",
+    "http_status": 200,
+    "business_code": 50100,
+    "exact_name_reconciliation_count": 0,
+    "result": "invalid_experiment"
+  },
+  "corrected_signature_direct_http_probe": {
+    "date": "2026-08-31",
+    "post_count": 1,
+    "optional_fields": "_signature_only",
+    "signature_input": "url_without_aadvid_and_body",
+    "browser_order": "sign_then_append_aadvid",
+    "http_status": 200,
+    "business_code": 50100,
+    "business_code_name": "INTERNAL_SERVICE_ERROR",
+    "exact_name_reconciliation_count": 0,
+    "result": "deterministic_rejection"
+  },
+  "browser_header_parity_probe": {
+    "date": "2026-08-31",
+    "post_count": 1,
+    "optional_fields": "corrected_signature_plus_session_id_plus_captured_browser_headers",
+    "header_parity": "sec_fetch_and_client_hints_and_page_referer_and_edge_153_user_agent",
+    "precheck_query_sent": true,
+    "http_status": 200,
+    "business_code": 50100,
+    "exact_name_reconciliation_count": 0,
+    "result": "deterministic_rejection",
+    "root_cause_found_later": "probe_payload_sent_literal_date_strings_instead_of_epoch_seconds"
+  },
+  "invalid_signature_discriminator_probe": {
+    "date": "2026-08-31",
+    "post_count": 1,
+    "optional_fields": "malformed_signature_plus_parity_headers",
+    "signature_value": "fixed_31_char_malformed",
+    "http_status": 200,
+    "business_code": 50100,
+    "exact_name_reconciliation_count": 0,
+    "result": "deterministic_rejection",
+    "root_cause_found_later": "same_payload_defect_poisoned_this_experiment"
+  },
+  "read_path_discrimination": {
+    "date": "2026-08-31",
+    "get_endpoint": "/superior/api/agw/project/check_project_name",
+    "transport": "go_http_client_with_connector_cookies",
+    "business_code": 0,
+    "result": "read_path_accepted"
+  },
+  "confirmed_project_create_write": {
+    "date": "2026-09-01",
+    "post_count": 1,
+    "payload_contract": "schedule_as_utc8_epoch_second_strings",
+    "optional_fields": "corrected_signature_plus_session_id_plus_captured_browser_headers",
+    "http_status": 200,
+    "business_code": 0,
+    "response_platform_id_present": true,
+    "operator_confirmed_object": true,
+    "exact_name_digest_match": true,
+    "result": "confirmed_create"
+  },
+  "confirmed_promotion_create_write": {
+    "date": "2026-09-01",
+    "post_count": 1,
+    "chain": "project_created_first_in_same_run",
+    "payload_contract": "captured_body_with_name_check_hash_and_project_id_refreshed",
+    "precheck_query": "GET /superior/api/agw/ad/check_promotion_name",
+    "check_hash_contract": "client_millisecond_timestamp_between_name_check_and_create",
+    "http_status": 200,
+    "business_code": 0,
+    "response_platform_id_present": true,
+    "query_id_match": true,
+    "exact_match_count": 1,
+    "result": "confirmed_create"
+  },
+  "reconciliation_contract": {
+    "aggregate_list_endpoint": "POST /superior/api/v2/project/list",
+    "aggregate_list_behavior": "project_promotion_join_rows_only",
+    "aggregate_list_name_fields": "project_name_and_promotion_name",
+    "by_id_read_endpoint": "GET /superior/api/project",
+    "by_id_read_params": "project_ids_comma_separated",
+    "promotion_by_id_read_endpoint": "GET /superior/api/ad/promotion/detail",
+    "promotion_by_id_read_params": "promotion_ids_comma_separated",
+    "create_confirmation_order": "response_id_then_by_id_read_then_aggregate_list"
+  },
+  "driver_wiring": {
+    "submit_implemented": true,
+    "staging": "one_pending_mapping_per_submit_fresh_confirmation_each",
+    "payload_source": "plan_version_and_pending_mappings",
+    "payload_assembly": "calibrated_local_template_plus_plan_identity_fields",
+    "reference_guard": "plan_references_outside_calibrated_template_fail_closed",
+    "reconciliation": "by_id_read_with_name_and_schedule_and_bid_checks",
+    "template_source": "local_git_ignored_file_via_environment"
+  },
+  "redaction": {
+    "account": "<ACCOUNT_ID>",
+    "cookie": "<COOKIE>",
+    "csrf_token": "<CSRF_TOKEN>",
+    "platform_id": "<PLATFORM_ID>",
+    "object_name": "<OBJECT_NAME>"
+  },
+  "enablement_blockers": [
+    "calibrated_template_file_not_in_repository",
+    "full_create_response_body_not_exported",
+    "promotion_material_reference_freshness_unverified"
+  ]
+}

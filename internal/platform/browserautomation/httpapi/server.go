@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -61,7 +62,9 @@ func (s *Server) registerRoutes(prefix string) {
 	s.mux.HandleFunc("GET "+prefix+"/projects/{project_id}/site-policies/{policy_id}", s.getSitePolicy)
 	s.mux.HandleFunc("GET "+prefix+"/projects/{project_id}/kill-switches/active", s.getActiveKillSwitch)
 	s.mux.HandleFunc("POST "+prefix+"/projects/{project_id}/runs", s.createRun)
+	s.mux.HandleFunc("GET "+prefix+"/projects/{project_id}/runs", s.listRuns)
 	s.mux.HandleFunc("GET "+prefix+"/projects/{project_id}/runs/{run_id}", s.getRun)
+	s.mux.HandleFunc("GET "+prefix+"/projects/{project_id}/runs/{run_id}/steps", s.listSteps)
 	s.mux.HandleFunc("GET "+prefix+"/projects/{project_id}/runs/{run_id}/events", s.listEvents)
 	s.mux.HandleFunc("GET "+prefix+"/projects/{project_id}/runs/{run_id}/evidence", s.listEvidence)
 	s.mux.HandleFunc("POST "+prefix+"/projects/{project_id}/runs/{run_id}/takeover-evidence", s.recordTakeoverEvidence)
@@ -107,6 +110,12 @@ func (s *Server) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.submit(w, r)
+	case "reconcile-result":
+		if !s.automatedWorker {
+			writeError(w, http.StatusNotFound, "automated worker is not mounted")
+			return
+		}
+		s.reconcileResult(w, r)
 	case "pause", "resume", "cancel", "takeover", "release_takeover":
 		s.control(w, r)
 	default:
@@ -121,6 +130,24 @@ func (s *Server) checkSession(w http.ResponseWriter, r *http.Request) {
 	}
 	value, err := s.worker.CheckSession(r.Context(), actor.OrganizationID, project, r.PathValue("run_id"))
 	writeResult(w, value, err)
+}
+
+func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
+	actor, project, ok := s.authorize(w, r, "delivery.read")
+	if !ok {
+		return
+	}
+	values, err := s.service.ListRuns(r.Context(), actor.OrganizationID, project)
+	writeResult(w, map[string]any{"items": values}, err)
+}
+
+func (s *Server) listSteps(w http.ResponseWriter, r *http.Request) {
+	actor, project, ok := s.authorize(w, r, "delivery.read")
+	if !ok {
+		return
+	}
+	values, err := s.service.Repository.ListSteps(r.Context(), actor.OrganizationID, project, r.PathValue("run_id"))
+	writeResult(w, map[string]any{"items": values}, err)
 }
 
 func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
@@ -487,7 +514,9 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	value, err := s.worker.Prepare(r.Context(), actor.OrganizationID, project, r.PathValue("run_id"))
+	// A browser action belongs to the server-side Run. It must continue when
+	// the operator leaves the page or the browser closes the HTTP request.
+	value, err := s.worker.Prepare(context.WithoutCancel(r.Context()), actor.OrganizationID, project, r.PathValue("run_id"))
 	writeResult(w, value, err)
 }
 func (s *Server) control(w http.ResponseWriter, r *http.Request) {
@@ -536,7 +565,16 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	value, err := s.worker.Submit(r.Context(), browserautomation.WorkerSubmitRequest{Authorize: browserautomation.AuthorizeActionRequest{OrganizationID: actor.OrganizationID, ProjectID: project, RunID: r.PathValue("run_id"), StepID: body.StepID, ConfirmationID: body.ConfirmationID, Token: body.Token, LeaseID: body.LeaseID, FencingToken: body.FencingToken, IdempotencyKey: body.IdempotencyKey}})
+	value, err := s.worker.Submit(context.WithoutCancel(r.Context()), browserautomation.WorkerSubmitRequest{Authorize: browserautomation.AuthorizeActionRequest{OrganizationID: actor.OrganizationID, ProjectID: project, RunID: r.PathValue("run_id"), StepID: body.StepID, ConfirmationID: body.ConfirmationID, Token: body.Token, LeaseID: body.LeaseID, FencingToken: body.FencingToken, IdempotencyKey: body.IdempotencyKey}})
+	writeResult(w, value, err)
+}
+
+func (s *Server) reconcileResult(w http.ResponseWriter, r *http.Request) {
+	actor, project, ok := s.authorize(w, r, "delivery.execute")
+	if !ok {
+		return
+	}
+	value, err := s.worker.ReconcileUnknownFromPlatform(context.WithoutCancel(r.Context()), actor.OrganizationID, project, r.PathValue("run_id"))
 	writeResult(w, value, err)
 }
 

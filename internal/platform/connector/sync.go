@@ -196,6 +196,7 @@ func (s Synchronizer) Sync(ctx context.Context, request SyncRequest) (result Syn
 		result.ObjectCount++
 		result.PlatformObjects, err = s.syncPlatformObjectCatalog(ctx, request, runID, reader, limit, maxPages)
 		if err != nil {
+			cursor = SyncErrorStage(err)
 			return result, err
 		}
 		promotions := []map[string]any{}

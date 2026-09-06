@@ -243,6 +243,25 @@ func (s *Server) getPlatformEntityMapping(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, value)
 }
 
+func (s *Server) listPlatformEntityMappings(w http.ResponseWriter, r *http.Request) {
+	app, err := s.mappingApp()
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	accountReferenceID := strings.TrimSpace(r.URL.Query().Get("account_reference_id"))
+	if accountReferenceID == "" {
+		writeError(w, r, delivery.ErrInvalidRequest)
+		return
+	}
+	values, err := app.ListPlatformEntityMappings(r.Context(), mustActor(r), projectID(r), accountReferenceID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+
 func (s *Server) platformEntityMappingAction(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(r.PathValue("mapping_action"), ":", 2)
 	if len(parts) != 2 || (parts[1] != "confirm" && parts[1] != "confirm-mutation" && parts[1] != "confirm-change") {

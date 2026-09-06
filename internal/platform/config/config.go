@@ -194,6 +194,9 @@ type Miyun struct {
 // OceanEngine controls the read-only private web API session verifier.
 type OceanEngine struct {
 	Enabled             bool
+	WebAPIWriteEnabled  bool
+	WebAPIWriteAccounts []string
+	WebAPITemplateFile  string
 	BaseURL             string
 	BusinessBaseURL     string
 	MasterKey           string
@@ -477,6 +480,10 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	oceanEngineWebAPIWriteEnabled, err := strictBoolValueOr(lookup, "COOKIES_OCEAN_ENGINE_WEB_API_WRITE_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
 	generatePromptDefault := "strategy.generate.v2"
 	conversationPromptDefault := "strategy.conversation.v3"
 	revisePromptDefault := "strategy.revise.v2"
@@ -617,6 +624,9 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		},
 		OceanEngine: OceanEngine{
 			Enabled:             oceanEngineEnabled,
+			WebAPIWriteEnabled:  oceanEngineWebAPIWriteEnabled,
+			WebAPIWriteAccounts: splitCSV(valueOr(lookup, "COOKIES_OCEAN_ENGINE_WEB_API_WRITE_ACCOUNT_ALLOWLIST", "")),
+			WebAPITemplateFile:  valueOr(lookup, "COOKIES_OCEAN_ENGINE_WEB_API_TEMPLATE_FILE", ""),
 			BaseURL:             valueOr(lookup, "COOKIES_OCEAN_ENGINE_BASE_URL", "https://ad.oceanengine.com"),
 			BusinessBaseURL:     valueOr(lookup, "COOKIES_OCEAN_ENGINE_BUSINESS_BASE_URL", "https://business.oceanengine.com"),
 			MasterKey:           valueOr(lookup, "COOKIES_OCEAN_ENGINE_MASTER_KEY", ""),
@@ -880,6 +890,9 @@ func (c Config) Validate() error {
 		if c.OceanEngine.PatrolEnabled && (c.OceanEngine.PatrolLookbackDays < 2 || c.OceanEngine.PatrolLookbackDays > 30) {
 			return fmt.Errorf("COOKIES_OCEAN_ENGINE_PATROL_LOOKBACK_DAYS must be from 2 through 30")
 		}
+	}
+	if c.OceanEngine.WebAPIWriteEnabled && (!c.OceanEngine.Enabled || len(c.OceanEngine.WebAPIWriteAccounts) == 0) {
+		return fmt.Errorf("COOKIES_OCEAN_ENGINE_WEB_API_WRITE_ENABLED requires Ocean Engine and a non-empty account allowlist")
 	}
 	if c.Provider.ImageAdapter != "fake" && c.Provider.ImageAdapter != "ark_image" && c.Provider.ImageAdapter != "openai_image" && c.Provider.ImageAdapter != "adapter_gateway" {
 		return fmt.Errorf("COOKIES_PROVIDER_IMAGE_ADAPTER must be fake, ark_image, openai_image, or adapter_gateway")

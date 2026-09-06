@@ -37,7 +37,7 @@ function syncWindow(days: number) {
 
 const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
 const objectKindCopy: Record<ApiConnectorPlatformObjectKind, string> = {
-  image_material: '图片素材', video_material: '视频素材', aweme_photo_material: '抖音图文',
+  image_material: '图片素材', product_image: '我的图片', video_material: '视频素材', aweme_photo_material: '抖音图文',
   marketing_product: '营销产品', orange_landing_page: '橙子落地页',
   optimization_target: '优化目标', conversion_event_asset: '转化事件资产',
   industry_category: '行业类目', brand: '品牌', authorized_identity: '授权身份',

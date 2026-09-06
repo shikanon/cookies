@@ -439,6 +439,17 @@ paths:
       responses:
         '200': {description: Authoritative terminal or recovery run state., content: {application/json: {schema: {$ref: '#/components/schemas/BrowserRpaRun'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
+  /platform/v1/browser-rpa/projects/{project_id}/runs/{run_id}:reconcile-result:
+    parameters:
+    - $ref: '#/components/parameters/ProjectID'
+    - $ref: '#/components/parameters/BrowserRpaRunID'
+    post:
+      operationId: reconcileUnknownBrowserRpaResult
+      summary: Query the platform for an unknown staged-create result without another submit.
+      description: This operation uses exact-name list reads only. It does not issue a confirmation, consume a click budget, or perform a platform write.
+      responses:
+        '200': {description: Reconciled run state., content: {application/json: {schema: {$ref: '#/components/schemas/BrowserRpaRun'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
   /platform/v1/provider/capabilities:
     get:
       operationId: listProviderCapabilities
@@ -3449,9 +3460,16 @@ components:
     BrowserRpaAuthorityBinding:
       type: object
       additionalProperties: false
-      required: [schema_version, organization_id, project_id, business_execution_id, change_set_id, approval_id, approval_action_hash, account_reference_id, object_fingerprint, action, budget_limit_minor, currency, plan_canonical_hash, intent_canonical_hash, feedback_canonical_hash, decision_canonical_hash, configuration_canonical_hash, workflow_id, workflow_canonical_hash, workflow_step_id]
+      required: [schema_version, organization_id, project_id, business_execution_id, change_set_id, approval_id, approval_action_hash, account_reference_id, object_fingerprint, action, budget_limit_minor, currency, plan_canonical_hash, intent_canonical_hash, configuration_canonical_hash, workflow_id, workflow_canonical_hash, workflow_step_id]
+      anyOf:
+        - required: [authority_origin, preflight_canonical_hash]
+          properties:
+            authority_origin: {const: plan_execution}
+        - required: [feedback_canonical_hash, decision_canonical_hash]
       properties:
         schema_version: {type: string, enum: [browser-rpa-authority/v1, computer-use-authority/v1]}
+        authority_origin: {type: string, const: plan_execution}
+        preflight_canonical_hash: {$ref: '#/components/schemas/BrowserRpaHash'}
         organization_id: {type: string}
         project_id: {type: string}
         business_execution_id: {type: string}

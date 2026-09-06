@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shikanon/cookies/docs/delivery/schemas/oceanengine-account-capability-v1.json",
+  "title": "OceanEngine account capability snapshot v1",
+  "type": "object",
+  "required": ["schema_version", "snapshot_id", "account_id", "external_actions", "deep_external_actions", "creative_components", "observed_at"],
+  "properties": {
+    "schema_version": {"const": "oceanengine-account-capability/v1"},
+    "snapshot_id": {"type": "string", "pattern": "^oeaccountcap_[a-f0-9]{64}$"},
+    "account_id": {"type": "string", "minLength": 1},
+    "external_actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
+    "deep_external_actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
+    "creative_components": {"type": "array", "items": {"$ref": "#/$defs/component"}},
+    "budget_rules": {"type": "object"},
+    "bid_constraints": {"type": "object"},
+    "quotas": {"type": "object"},
+    "feature_rules": {"type": "object"},
+    "orange_site_domains": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "interfaces": {"type": "array", "items": {"$ref": "#/$defs/interface"}},
+    "observed_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "action": {
+      "type": "object",
+      "required": ["key", "display_name", "value"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "display_name": {"type": "string", "minLength": 1},
+        "value": {"type": "string", "pattern": "^-?[0-9]+$"},
+        "step": {"type": "string"},
+        "default": {"type": "boolean"}
+      }
+    },
+    "component": {
+      "type": "object",
+      "required": ["component_type_ids"],
+      "properties": {
+        "component_type_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9]+$"}},
+        "access_flags": {"$ref": "#/$defs/stringSet"},
+        "landing_types": {"$ref": "#/$defs/stringSet"},
+        "campaign_types": {"$ref": "#/$defs/stringSet"},
+        "inventory_types": {"$ref": "#/$defs/stringSet"},
+        "inventory_catalogs": {"$ref": "#/$defs/stringSet"},
+        "image_modes": {"$ref": "#/$defs/stringSet"},
+        "content_types": {"$ref": "#/$defs/stringSet"}
+      }
+    },
+    "interface": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "method": {"type": "string"},
+        "path": {"type": "string", "minLength": 1},
+        "description": {"type": "string"},
+        "empty_events": {"$ref": "#/$defs/stringSet"}
+      }
+    },
+    "stringSet": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+  }
+}

@@ -147,7 +147,19 @@ func PlanCanonicalHash(version DeliveryPlanVersion) (string, error) {
 func planCanonicalHashMatches(version DeliveryPlanVersion, expected string) (bool, error) {
 	hash, err := PlanCanonicalHash(version)
 	if err != nil {
-		return false, err
+		if !version.IsPlatformConfigurationV2() {
+			return false, err
+		}
+		// Old immutable versions can contain a landing-page reference that no
+		// longer matches the carrier. Verify all earlier rules and the stored
+		// hash. The edit and execution paths still use the strict validator.
+		if storedErr := version.PlatformConfiguration.validateStoredStructure(); storedErr != nil {
+			return false, err
+		}
+		hash, err = version.PlatformConfiguration.ComputeCanonicalHash()
+		if err != nil {
+			return false, err
+		}
 	}
 	if hash == expected {
 		return true, nil

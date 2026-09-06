@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shikanon/cookies/internal/platform/browserautomation"
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
 
@@ -272,55 +273,74 @@ func (r ControlledPromotionRestart) ValidateAt(action ControlledAction, now time
 }
 
 type ControlledAuthorityBinding struct {
-	SelectionID                     string                         `json:"selection_id"`
-	ObservatoryRunID                string                         `json:"observatory_run_id"`
-	ObservatoryRunCanonicalHash     string                         `json:"observatory_run_canonical_hash"`
-	OperatorFeedbackID              string                         `json:"operator_feedback_id"`
-	OperatorFeedbackCanonicalHash   string                         `json:"operator_feedback_canonical_hash"`
-	OperatorFeedbackDisposition     ObservatoryFeedbackDisposition `json:"operator_feedback_disposition"`
-	PlanID                          string                         `json:"plan_id"`
-	PlanVersion                     int                            `json:"plan_version"`
-	PlanCanonicalHash               string                         `json:"plan_canonical_hash"`
-	IntentID                        string                         `json:"intent_id"`
-	IntentVersion                   int                            `json:"intent_version"`
-	IntentCanonicalHash             string                         `json:"intent_canonical_hash"`
-	DecisionID                      string                         `json:"decision_id"`
-	DecisionCanonicalHash           string                         `json:"decision_canonical_hash"`
-	ConfigurationID                 string                         `json:"configuration_id"`
-	ConfigurationVersion            int                            `json:"configuration_version"`
-	ConfigurationCanonicalHash      string                         `json:"configuration_canonical_hash"`
-	WorkflowID                      string                         `json:"workflow_id"`
-	WorkflowCanonicalHash           string                         `json:"workflow_canonical_hash"`
-	AccountReferenceID              string                         `json:"account_reference_id"`
-	OperatorPrincipalID             string                         `json:"operator_principal_id,omitempty"`
-	ParentPlatformProjectID         string                         `json:"parent_platform_project_id,omitempty"`
-	TargetMappingID                 string                         `json:"target_mapping_id,omitempty"`
-	TargetMappingVersion            int64                          `json:"target_mapping_version,omitempty"`
-	TargetPlatformObjectID          string                         `json:"target_platform_object_id,omitempty"`
-	TargetPlatformObjectKind        string                         `json:"target_platform_object_kind,omitempty"`
-	SupersedesControlledChangeSetID string                         `json:"supersedes_controlled_change_set_id,omitempty"`
-	ProjectBudgetMode               string                         `json:"project_budget_mode,omitempty"`
-	ProjectBudgetLimitMinor         int64                          `json:"project_budget_limit_minor"`
-	PromotionBudgetLimitMinor       int64                          `json:"promotion_budget_limit_minor"`
-	ObjectFingerprint               string                         `json:"object_fingerprint"`
-	SkillID                         string                         `json:"skill_id,omitempty"`
-	SkillVersion                    string                         `json:"skill_version,omitempty"`
-	PromotionMutation               *ControlledPromotionMutation   `json:"promotion_mutation,omitempty"`
-	PromotionControl                *ControlledPromotionControl    `json:"promotion_control,omitempty"`
-	PromotionRestart                *ControlledPromotionRestart    `json:"promotion_restart,omitempty"`
+	AuthorityOrigin                 string                            `json:"authority_origin,omitempty"`
+	PreflightCanonicalHash          string                            `json:"preflight_canonical_hash,omitempty"`
+	SelectionID                     string                            `json:"selection_id"`
+	ObservatoryRunID                string                            `json:"observatory_run_id"`
+	ObservatoryRunCanonicalHash     string                            `json:"observatory_run_canonical_hash"`
+	OperatorFeedbackID              string                            `json:"operator_feedback_id"`
+	OperatorFeedbackCanonicalHash   string                            `json:"operator_feedback_canonical_hash"`
+	OperatorFeedbackDisposition     ObservatoryFeedbackDisposition    `json:"operator_feedback_disposition"`
+	PlanID                          string                            `json:"plan_id"`
+	PlanVersion                     int                               `json:"plan_version"`
+	PlanCanonicalHash               string                            `json:"plan_canonical_hash"`
+	IntentID                        string                            `json:"intent_id"`
+	IntentVersion                   int                               `json:"intent_version"`
+	IntentCanonicalHash             string                            `json:"intent_canonical_hash"`
+	DecisionID                      string                            `json:"decision_id"`
+	DecisionCanonicalHash           string                            `json:"decision_canonical_hash"`
+	ConfigurationID                 string                            `json:"configuration_id"`
+	ConfigurationVersion            int                               `json:"configuration_version"`
+	ConfigurationCanonicalHash      string                            `json:"configuration_canonical_hash"`
+	WorkflowID                      string                            `json:"workflow_id"`
+	WorkflowCanonicalHash           string                            `json:"workflow_canonical_hash"`
+	ExecutionDriver                 browserautomation.ExecutionDriver `json:"execution_driver,omitempty"`
+	AccountReferenceID              string                            `json:"account_reference_id"`
+	OperatorPrincipalID             string                            `json:"operator_principal_id,omitempty"`
+	ParentPlatformProjectID         string                            `json:"parent_platform_project_id,omitempty"`
+	TargetMappingID                 string                            `json:"target_mapping_id,omitempty"`
+	TargetMappingVersion            int64                             `json:"target_mapping_version,omitempty"`
+	TargetPlatformObjectID          string                            `json:"target_platform_object_id,omitempty"`
+	TargetPlatformObjectKind        string                            `json:"target_platform_object_kind,omitempty"`
+	SupersedesControlledChangeSetID string                            `json:"supersedes_controlled_change_set_id,omitempty"`
+	ProjectBudgetMode               string                            `json:"project_budget_mode,omitempty"`
+	ProjectBudgetLimitMinor         int64                             `json:"project_budget_limit_minor"`
+	PromotionBudgetLimitMinor       int64                             `json:"promotion_budget_limit_minor"`
+	ObjectFingerprint               string                            `json:"object_fingerprint"`
+	SkillID                         string                            `json:"skill_id,omitempty"`
+	SkillVersion                    string                            `json:"skill_version,omitempty"`
+	PromotionMutation               *ControlledPromotionMutation      `json:"promotion_mutation,omitempty"`
+	PromotionControl                *ControlledPromotionControl       `json:"promotion_control,omitempty"`
+	PromotionRestart                *ControlledPromotionRestart       `json:"promotion_restart,omitempty"`
 }
 
 func (b ControlledAuthorityBinding) Validate() error {
-	if b.SelectionID == "" || b.ObservatoryRunID == "" || b.OperatorFeedbackID == "" || b.PlanID == "" || b.PlanVersion < 1 || b.IntentID == "" || b.IntentVersion < 1 || b.DecisionID == "" || b.ConfigurationID == "" || b.ConfigurationVersion < 1 || b.WorkflowID == "" || b.AccountReferenceID == "" || b.ObjectFingerprint == "" || b.ProjectBudgetLimitMinor < 0 || b.PromotionBudgetLimitMinor < 0 || (b.SkillID == "") != (b.SkillVersion == "") {
+	if b.PlanID == "" || b.PlanVersion < 1 || b.IntentID == "" || b.IntentVersion < 1 || b.ConfigurationID == "" || b.ConfigurationVersion < 1 || b.WorkflowID == "" || b.AccountReferenceID == "" || b.ObjectFingerprint == "" || b.ProjectBudgetLimitMinor < 0 || b.PromotionBudgetLimitMinor < 0 || (b.SkillID == "") != (b.SkillVersion == "") {
+		return ErrInvalidRequest
+	}
+	if b.AuthorityOrigin == "plan_execution" {
+		if !isLowercaseSHA256(b.PreflightCanonicalHash) || b.SelectionID != "" || b.ObservatoryRunID != "" || b.OperatorFeedbackID != "" || b.DecisionID != "" {
+			return ErrInvalidRequest
+		}
+	} else if b.AuthorityOrigin != "" {
+		return ErrInvalidRequest
+	} else if b.SelectionID == "" || b.ObservatoryRunID == "" || b.OperatorFeedbackID == "" || b.DecisionID == "" {
+		return ErrInvalidRequest
+	}
+	if b.ExecutionDriver != "" && b.ExecutionDriver != browserautomation.ExecutionDriverOceanEngineWebAPI && b.ExecutionDriver != browserautomation.ExecutionDriverPlaywrightEdgeV3 {
 		return ErrInvalidRequest
 	}
 	if b.ProjectBudgetMode != "" && b.ProjectBudgetMode != OceanEngineBudgetModeDaily && b.ProjectBudgetMode != OceanEngineBudgetModeUnlimited {
 		return ErrInvalidRequest
 	}
-	if b.OperatorFeedbackDisposition != ObservatoryFeedbackAccepted && b.OperatorFeedbackDisposition != ObservatoryFeedbackModified {
+	if b.AuthorityOrigin != "plan_execution" && b.OperatorFeedbackDisposition != ObservatoryFeedbackAccepted && b.OperatorFeedbackDisposition != ObservatoryFeedbackModified {
 		return ErrInvalidState
 	}
-	for _, hash := range []string{b.ObservatoryRunCanonicalHash, b.OperatorFeedbackCanonicalHash, b.PlanCanonicalHash, b.IntentCanonicalHash, b.DecisionCanonicalHash, b.ConfigurationCanonicalHash, b.WorkflowCanonicalHash} {
+	hashes := []string{b.PlanCanonicalHash, b.IntentCanonicalHash, b.ConfigurationCanonicalHash, b.WorkflowCanonicalHash}
+	if b.AuthorityOrigin != "plan_execution" {
+		hashes = append(hashes, b.ObservatoryRunCanonicalHash, b.OperatorFeedbackCanonicalHash, b.DecisionCanonicalHash)
+	}
+	for _, hash := range hashes {
 		if !isLowercaseSHA256(hash) {
 			return ErrApprovalContentMismatch
 		}

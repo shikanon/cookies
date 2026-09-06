@@ -51,6 +51,20 @@ test("authority converts a ready prepare plan into a schema-valid submit plan", 
   assert.doesNotThrow(() => validateSubmitAuthority(bundle.plan, bundle.confirm_token, now));
 });
 
+test("authority accepts a date range when its start date matches", () => {
+  const now = new Date("2026-08-25T01:00:00.000Z");
+  const preparePlan = prepareProjectPlan();
+  const schedule = preparePlan.steps.find((step) => step.field_key === "project.schedule");
+  assert.ok(schedule);
+  schedule.value = { start: "2026-08-26", end: "2026-08-27" };
+  const bundle = authorizeSubmitPlan(preparePlan, {
+    account_reference: preparePlan.account_reference,
+    maximum_money_cny: 300,
+    schedule_date: "2026-08-26",
+  }, now);
+  assert.doesNotThrow(() => validateSubmitAuthority(bundle.plan, bundle.confirm_token, now));
+});
+
 test("authority rejects plan changes, expiration, and money above the limit", () => {
   const now = new Date("2026-08-25T01:00:00.000Z");
   const preparePlan = prepareProjectPlan();

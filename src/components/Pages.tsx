@@ -60,6 +60,9 @@ const ProductionCenterPage = lazy(() => import('../features/production-center/Pr
 const ControlledExecutionWorkspace = lazy(() => import('../features/browser-rpa-execution/BrowserRpaExecutionWorkspace').then(module => ({
   default: module.BrowserRpaExecutionWorkspace,
 })))
+const DeliveryPlatformEntitiesPage = lazy(() => import('../features/delivery-platform-entities/DeliveryPlatformEntitiesPage').then(module => ({
+  default: module.DeliveryPlatformEntitiesPage,
+})))
 
 type OpenProject = (id: string, system?: SystemKey, navId?: string, objectId?: string, view?: string, contextId?: string, tourRunId?: string, tourCase?: string) => void
 type OpenStrategyWorkspace = (projectId: string, workspaceId: string, location: StrategyWorkspaceLocation, replace?: boolean) => void
@@ -1626,7 +1629,10 @@ export function ModulePage({
     : system.key === 'delivery' && item.id === 'configuration' ? <DeliveryConfigurationPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>
     : system.key === 'delivery' && item.id === 'approvals' ? <ApprovalCenterPage state={dataState} tourCase={tourCase} tourRunId={tourRunId} selectedChangeSetId={objectId}/>
     : system.key === 'delivery' && item.id === 'execution' ? <Suspense fallback={<div className="page-notice" role="status">正在加载受控执行中心…</div>}>
-      <ControlledExecutionWorkspace projectId={currentProject.id} runId={objectId}/>
+      <ControlledExecutionWorkspace projectId={currentProject.id} runId={objectId} activeView={activeView}/>
+    </Suspense>
+    : system.key === 'delivery' && item.id === 'platform-entities' ? <Suspense fallback={<div className="page-notice" role="status">正在加载项目与单元…</div>}>
+      <DeliveryPlatformEntitiesPage projectId={currentProject.id} activeView={activeView}/>
     </Suspense>
     : system.key === 'delivery' && item.id === 'monitoring' ? <DeliveryMonitoringPage tourCase={tourCase}/>
     : system.key === 'delivery' && item.id === 'optimization' ? <DeliveryOptimizationPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>

@@ -344,6 +344,18 @@ func TestOceanEngineConfigurationSupportsOneProjectAndMultiplePromotions(t *test
 		t.Fatalf("zero promotions should be valid: %v", err)
 	}
 
+	ownedLandingPage := configuration
+	ownedLandingPage.Payload.OceanEngine = cloneOceanConfigurationForTest(configuration.Payload.OceanEngine)
+	ownedLandingPage.Payload.OceanEngine.Project.Carrier = "owned_landing_page"
+	ownedLandingPage.Payload.OceanEngine.Promotions[0].LandingPageReference = &StableReference{
+		Namespace: "cookies", ObjectKind: "owned_landing_page", Scope: "current_project",
+		ID: "https://example.test/landing", State: ReferenceResolved,
+	}
+	ownedLandingPage.CanonicalHash, _ = ownedLandingPage.ComputeCanonicalHash()
+	if err := ownedLandingPage.Validate(); err != nil {
+		t.Fatalf("owned landing-page configuration: %v", err)
+	}
+
 	repeated, err := configuration.ComputeCanonicalHash()
 	if err != nil {
 		t.Fatal(err)
@@ -424,6 +436,15 @@ func TestPlatformConfigurationValidationErrorsAreStable(t *testing.T) {
 		{name: "invalid promotion reference", code: ContractErrorInvalidReference, edit: func(value *PlatformConfiguration) {
 			value.Payload.OceanEngine = cloneOceanConfigurationForTest(value.Payload.OceanEngine)
 			value.Payload.OceanEngine.Promotions[0].BaseMaterialReferences[0].ID = ""
+		}},
+		{name: "owned carrier with Orange landing page", code: ContractErrorInvalidPromotion, edit: func(value *PlatformConfiguration) {
+			value.Payload.OceanEngine = cloneOceanConfigurationForTest(value.Payload.OceanEngine)
+			value.Payload.OceanEngine.Project.Carrier = "owned_landing_page"
+			value.Payload.OceanEngine.Promotions[0].LandingPageReference.ObjectKind = "orange_landing_page"
+		}},
+		{name: "IM carrier with promotion landing page", code: ContractErrorInvalidPromotion, edit: func(value *PlatformConfiguration) {
+			value.Payload.OceanEngine = cloneOceanConfigurationForTest(value.Payload.OceanEngine)
+			value.Payload.OceanEngine.Project.Carrier = "im"
 		}},
 	}
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shikanon/cookies/internal/platform/browserautomation"
 	"github.com/shikanon/cookies/internal/platform/contract"
 	"github.com/shikanon/cookies/internal/platform/identity"
 	"github.com/shikanon/cookies/internal/systems/delivery"
@@ -126,6 +127,16 @@ func TestPlatformEntityMappingHTTPKeepsPlatformValuesServerOwnedAndRequiresTwoRe
 	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/platform-entity-mappings", body))
 	if response.Code != http.StatusCreated || app.created.ProjectID != "project_1" || app.created.PlatformObjectID != "" || !strings.Contains(response.Body.String(), `"status":"pending_verification"`) {
 		t.Fatalf("create status=%d created=%#v body=%s", response.Code, app.created, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, authenticatedRequest(http.MethodGet, "/api/delivery/v1/projects/project_1/platform-entity-mappings?account_reference_id=account_1", ""))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"items"`) || !strings.Contains(response.Body.String(), `"id":"mapping_1"`) {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, authenticatedRequest(http.MethodGet, "/api/delivery/v1/projects/project_1/platform-entity-mappings", ""))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("list without account status=%d body=%s", response.Code, response.Body.String())
 	}
 	injected := strings.TrimSuffix(body, "}") + `,"platform_object_id":"forged"}`
 	response = httptest.NewRecorder()
@@ -379,6 +390,18 @@ func TestObservatoryHTTPExposesReplayAndAuditableFeedback(t *testing.T) {
 	}
 }
 
+func TestStartBrowserRpaExecutionHTTPReturnsRealRunID(t *testing.T) {
+	app := &applicationStub{browserRpaExecution: delivery.StartBrowserRpaExecutionResult{BrowserRpaRun: delivery.BrowserRpaLaunchResult{RunID: "curun_real_1"}}}
+	server := New(app)
+	request := authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/plans/plan_1/browser-rpa-runs", `{"expected_version":3,"execution_driver":"playwright-rpa/edge/v3"}`)
+	request.Header.Set("Idempotency-Key", "start-real-run-1")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"run_id":"curun_real_1"`) || app.startedPlanID != "plan_1" || app.startedBrowserRpa.ExpectedVersion != 3 || app.startedBrowserRpa.ExecutionDriver != browserautomation.ExecutionDriverPlaywrightEdgeV3 || app.startedBrowserRpa.IdempotencyKey != "start-real-run-1" {
+		t.Fatalf("start Browser RPA status=%d body=%s request=%#v", response.Code, response.Body.String(), app.startedBrowserRpa)
+	}
+}
+
 func authenticatedRequest(method, target, body string) *http.Request {
 	request := httptest.NewRequest(method, target, bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -403,6 +426,15 @@ type applicationStub struct {
 	selection           delivery.DecisionSelection
 	observatoryRun      delivery.DeliveryObservatoryRun
 	observatoryFeedback delivery.DeliveryObservatoryFeedback
+	browserRpaExecution delivery.StartBrowserRpaExecutionResult
+	startedPlanID       string
+	startedBrowserRpa   delivery.StartBrowserRpaExecutionRequest
+}
+
+func (s *applicationStub) StartBrowserRpaExecution(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, planID string, request delivery.StartBrowserRpaExecutionRequest) (delivery.StartBrowserRpaExecutionResult, error) {
+	s.startedPlanID = planID
+	s.startedBrowserRpa = request
+	return s.browserRpaExecution, nil
 }
 
 type mappingApplicationStub struct {
@@ -426,6 +458,9 @@ func (s *mappingApplicationStub) CreatePendingPlatformEntityMapping(_ context.Co
 }
 func (s *mappingApplicationStub) GetPlatformEntityMapping(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.PlatformEntityMapping, error) {
 	return s.mapping, nil
+}
+func (s *mappingApplicationStub) ListPlatformEntityMappings(context.Context, contract.ActorContext, contract.ProjectID, string) ([]delivery.PlatformEntityMapping, error) {
+	return []delivery.PlatformEntityMapping{s.mapping}, nil
 }
 func (s *mappingApplicationStub) ConfirmPlatformEntityMapping(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, _ string, request delivery.ConfirmPlatformEntityMappingRequest) (delivery.PlatformEntityMapping, error) {
 	s.confirm = request

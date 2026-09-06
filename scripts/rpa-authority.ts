@@ -73,8 +73,8 @@ function moneyValues(plan: OceanEngineFormPlan) {
 function scheduleValues(plan: OceanEngineFormPlan) {
   return plan.steps.flatMap((step) => {
     if (step.field_key !== "project.schedule" || !step.value || typeof step.value !== "object") return [];
-    const value = step.value as { start?: unknown; end?: unknown };
-    return [String(value.start ?? ""), String(value.end ?? "")];
+    const value = step.value as { start?: unknown };
+    return [String(value.start ?? "")];
   });
 }
 
@@ -103,7 +103,7 @@ function assertConstraints(plan: OceanEngineFormPlan, authority: OceanEngineExec
   }
   const schedules = scheduleValues(plan);
   if (schedules.some((date) => date !== authority.schedule_date)) {
-    throw new AuthorityError("authority_schedule_mismatch", "plan schedule does not match the authority date");
+    throw new AuthorityError("authority_schedule_mismatch", "plan start date does not match the authority date");
   }
 }
 

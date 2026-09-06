@@ -73,6 +73,13 @@ func TestRunEndpointsRequireScopeAndProjectIsolation(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
+	request = httptest.NewRequest(http.MethodGet, "/api/platform/v1/browser-rpa/projects/project_1/runs", nil)
+	request = request.WithContext(contract.WithRequestContext(request.Context(), contract.RequestContext{RequestID: "req", TraceID: "trace", Actor: contract.ActorContext{OrganizationID: "org_1", Principal: contract.Principal{Kind: contract.PrincipalUser, ID: "user"}, Scopes: []contract.Scope{"delivery.read"}}}))
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"run_1"`) {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
 	request = httptest.NewRequest(http.MethodGet, "/api/platform/v1/browser-rpa/projects/project_1/runs/run_1", nil)
 	request = request.WithContext(contract.WithRequestContext(request.Context(), contract.RequestContext{RequestID: "req", TraceID: "trace", Actor: contract.ActorContext{OrganizationID: "org_2", Principal: contract.Principal{Kind: contract.PrincipalUser, ID: "user"}, Scopes: []contract.Scope{"delivery.read"}}}))
 	response = httptest.NewRecorder()
@@ -166,6 +173,21 @@ func TestPlanPreviewAndLeaseReadSupportTheFrontendExecutionFlow(t *testing.T) {
 	if plan.Code != http.StatusOK || !strings.Contains(plan.Body.String(), `"allow_remote_write":false`) {
 		t.Fatalf("plan status=%d body=%s", plan.Code, plan.Body.String())
 	}
+	environmentChecked, err := service.TransitionRun(context.Background(), run.OrganizationID, run.ProjectID, run.ID, acquired.Run.Version, browserautomation.RunEnvironmentCheck, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparing, err := service.TransitionRun(context.Background(), run.OrganizationID, run.ProjectID, run.ID, environmentChecked.Version, browserautomation.RunPreparing, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.TransitionRun(context.Background(), run.OrganizationID, run.ProjectID, run.ID, preparing.Version, browserautomation.RunFailed, browserautomation.BlockPageDrift); err != nil {
+		t.Fatal(err)
+	}
+	terminalPlan := call(http.MethodPost, "/api/platform/v1/browser-rpa/projects/project_1/runs/run_1:plan")
+	if terminalPlan.Code != http.StatusOK || !strings.Contains(terminalPlan.Body.String(), `"allow_remote_write":false`) {
+		t.Fatalf("terminal plan status=%d body=%s", terminalPlan.Code, terminalPlan.Body.String())
+	}
 	lease := call(http.MethodGet, fmt.Sprintf("/api/platform/v1/browser-rpa/projects/project_1/runs/run_1/leases/%s", acquired.Lease.ID))
 	if lease.Code != http.StatusOK || !strings.Contains(lease.Body.String(), `"fencing_token":1`) {
 		t.Fatalf("lease status=%d body=%s", lease.Code, lease.Body.String())
@@ -185,6 +207,34 @@ func TestSessionCheckUsesTheAutomatedWorkerAndReturnsSafeFacts(t *testing.T) {
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"account_matched":true`) || strings.Contains(response.Body.String(), "cdp_endpoint") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPrepareContinuesAfterTheClientRequestIsCancelled(t *testing.T) {
+	repo := browserautomation.NewMemoryRepository()
+	now := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	run := validHTTPRun(now)
+	_, _, _ = repo.CreateRun(context.Background(), run)
+	service := browserautomation.Service{Repository: repo, Now: func() time.Time { return now }}
+	server := New(service, browserautomation.Worker{Service: service, Adapter: browserautomation.DeterministicFakeAdapter{}}, projectAuthorizer{})
+
+	request := httptest.NewRequest(http.MethodPost, "/api/platform/v1/browser-rpa/projects/project_1/runs/run_1:prepare", nil)
+	request = request.WithContext(contract.WithRequestContext(request.Context(), contract.RequestContext{RequestID: "req", TraceID: "trace", Actor: contract.ActorContext{OrganizationID: "org_1", Principal: contract.Principal{Kind: contract.PrincipalUser, ID: "user"}, Scopes: []contract.Scope{"delivery.execute"}}}))
+	cancelled, cancel := context.WithCancel(request.Context())
+	cancel()
+	request = request.WithContext(cancelled)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"state":"awaiting_confirmation"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	stepsRequest := httptest.NewRequest(http.MethodGet, "/api/platform/v1/browser-rpa/projects/project_1/runs/run_1/steps", nil)
+	stepsRequest = stepsRequest.WithContext(contract.WithRequestContext(stepsRequest.Context(), contract.RequestContext{RequestID: "req-steps", TraceID: "trace", Actor: contract.ActorContext{OrganizationID: "org_1", Principal: contract.Principal{Kind: contract.PrincipalUser, ID: "user"}, Scopes: []contract.Scope{"delivery.read"}}}))
+	stepsResponse := httptest.NewRecorder()
+	server.ServeHTTP(stepsResponse, stepsRequest)
+	if stepsResponse.Code != http.StatusOK || !strings.Contains(stepsResponse.Body.String(), `"action":"prepare_and_readback"`) || !strings.Contains(stepsResponse.Body.String(), `"status":"succeeded"`) {
+		t.Fatalf("steps status=%d body=%s", stepsResponse.Code, stepsResponse.Body.String())
 	}
 }
 

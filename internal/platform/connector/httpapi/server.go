@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shikanon/cookies/internal/integrations/oceanengine"
 	"github.com/shikanon/cookies/internal/platform/connector"
 	"github.com/shikanon/cookies/internal/platform/contract"
 	"golang.org/x/sync/singleflight"
@@ -21,6 +22,12 @@ type Reader interface {
 }
 type Syncer interface {
 	Sync(context.Context, connector.SyncRequest) (connector.SyncResult, error)
+}
+type OptimizationTargetCapabilityReader interface {
+	ReadOptimizationTargetCapabilities(context.Context, connector.OptimizationTargetCapabilityRequest) (connector.OptimizationTargetCapabilitySnapshot, error)
+}
+type AccountCapabilityReader interface {
+	ReadAccountCapabilities(context.Context, connector.AccountCapabilityRequest) (connector.OceanEngineAccountCapabilitySnapshot, error)
 }
 type SyncRunReader interface {
 	GetSync(context.Context, string, string, string, string) (connector.SyncRun, error)
@@ -80,7 +87,58 @@ func New(reader Reader, syncer Syncer, authorizer ProjectAuthorizer, accounts Ac
 	server.mux.HandleFunc("GET /api/connector/v1/projects/{project_id}/accounts/{account_ref}/launch-batch-calibration", server.projectLaunchBatchCalibration)
 	server.mux.HandleFunc("GET /api/connector/v1/projects/{project_id}/accounts/{account_ref}/platform-objects", server.listPlatformObjects)
 	server.mux.HandleFunc("GET /api/connector/v1/projects/{project_id}/accounts/{account_ref}/platform-objects/{object_ref}/preview", server.platformObjectPreview)
+	server.mux.HandleFunc("POST /api/connector/v1/projects/{project_id}/accounts/{account_ref}/optimization-target-capabilities", server.optimizationTargetCapabilities)
+	server.mux.HandleFunc("GET /api/connector/v1/projects/{project_id}/accounts/{account_ref}/capabilities", server.accountCapabilities)
 	return server
+}
+
+func (s *Server) accountCapabilities(w http.ResponseWriter, r *http.Request) {
+	actor, ok := actorFor(r, connector.ScopeRead)
+	if !ok || !s.authorize(r, actor) || !s.projectAccountExists(r.Context(), string(actor.OrganizationID), r.PathValue("project_id"), r.PathValue("account_ref")) {
+		writeProblem(w, http.StatusForbidden, "PROJECT_FORBIDDEN")
+		return
+	}
+	reader, ok := s.syncer.(AccountCapabilityReader)
+	if !ok {
+		writeProblem(w, http.StatusServiceUnavailable, "CONNECTOR_UNAVAILABLE")
+		return
+	}
+	snapshot, err := reader.ReadAccountCapabilities(r.Context(), connector.AccountCapabilityRequest{
+		OrganizationID: string(actor.OrganizationID), ProjectID: r.PathValue("project_id"), AccountRef: r.PathValue("account_ref"),
+	})
+	if err != nil {
+		writeProblem(w, http.StatusBadGateway, "ACCOUNT_CAPABILITY_READ_FAILED")
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) optimizationTargetCapabilities(w http.ResponseWriter, r *http.Request) {
+	actor, ok := actorFor(r, connector.ScopeRead)
+	if !ok || !s.authorize(r, actor) || !s.projectAccountExists(r.Context(), string(actor.OrganizationID), r.PathValue("project_id"), r.PathValue("account_ref")) {
+		writeProblem(w, http.StatusForbidden, "PROJECT_FORBIDDEN")
+		return
+	}
+	reader, ok := s.syncer.(OptimizationTargetCapabilityReader)
+	if !ok {
+		writeProblem(w, http.StatusServiceUnavailable, "CONNECTOR_UNAVAILABLE")
+		return
+	}
+	var body struct {
+		Context oceanengine.OptimizationTargetContext `json:"context"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+		writeProblem(w, http.StatusBadRequest, "INVALID_REQUEST")
+		return
+	}
+	snapshot, err := reader.ReadOptimizationTargetCapabilities(r.Context(), connector.OptimizationTargetCapabilityRequest{
+		OrganizationID: string(actor.OrganizationID), ProjectID: r.PathValue("project_id"), AccountRef: r.PathValue("account_ref"), Context: body.Context,
+	})
+	if err != nil {
+		writeProblem(w, http.StatusBadGateway, "OPTIMIZATION_TARGET_CAPABILITY_READ_FAILED")
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) listPlatformObjects(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +231,7 @@ func (s *Server) platformObjectPreview(w http.ResponseWriter, r *http.Request) {
 	if preview.ExpiresAt != nil && !time.Now().Before(*preview.ExpiresAt) {
 		preview, err = s.refreshPlatformObjectPreview(string(actor.OrganizationID), r.PathValue("project_id"), r.PathValue("account_ref"), r.PathValue("object_ref"))
 		if err != nil {
+			log.Printf("platform object preview refresh failed: account=%s object=%s error=%v", r.PathValue("account_ref"), r.PathValue("object_ref"), err)
 			writeProblem(w, http.StatusBadGateway, "PLATFORM_OBJECT_PREVIEW_REFRESH_FAILED")
 			return
 		}
@@ -201,6 +260,7 @@ func (s *Server) platformObjectPreview(w http.ResponseWriter, r *http.Request) {
 				content, err = contentReader.ReadPlatformObjectPreview(r.Context(), query)
 			}
 			if err != nil || refreshErr != nil {
+				log.Printf("platform object preview read failed: account=%s object=%s read_error=%v refresh_error=%v", r.PathValue("account_ref"), r.PathValue("object_ref"), err, refreshErr)
 				writeProblem(w, http.StatusBadGateway, "PLATFORM_OBJECT_PREVIEW_READ_FAILED")
 				return
 			}

@@ -85,6 +85,13 @@ test('session check has no credential, storage, network, or page-write operation
   ]) assert.doesNotMatch(source, forbidden)
 })
 
+test('session probe falls back to the browser-level read-only target inventory', () => {
+  const source = readFileSync(resolve(import.meta.dirname, '../scripts/browser-rpa-session-probe.ts'), 'utf8')
+  assert.match(source, /Target\.getTargets/)
+  assert.match(source, /readCDPPageURLs\(endpoint\)/)
+  assert.doesNotMatch(source, /Target\.attachToTarget|Page\.navigate|Runtime\.evaluate/)
+})
+
 test('attachment disconnects CDP without closing the managed Edge browser', () => {
   const helperSource = readFileSync(resolve(import.meta.dirname, '../scripts/browser-rpa-edge-attach-once.mjs'), 'utf8')
   const sessionSource = readFileSync(resolve(import.meta.dirname, '../scripts/browser-rpa-edge-session.ts'), 'utf8')

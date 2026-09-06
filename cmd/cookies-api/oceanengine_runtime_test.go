@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shikanon/cookies/internal/integrations/oceanengine"
 	"github.com/shikanon/cookies/internal/platform/connector"
 )
 
@@ -29,6 +30,43 @@ type accountProbeCipher struct{}
 func (accountProbeCipher) Encrypt(value []byte) ([]byte, string, error) { return value, "test", nil }
 func (accountProbeCipher) Decrypt(value []byte, _ string) ([]byte, error) {
 	return append([]byte(nil), value...), nil
+}
+
+type accountExternalIDResolverStub struct{}
+
+func (accountExternalIDResolverStub) ResolveExternalAccountID(context.Context, string, string, string) (string, error) {
+	return "123", nil
+}
+
+func TestOceanEngineConnectorReaderUsesAccountSessionForProjectSync(t *testing.T) {
+	factory := oceanEngineConnectorReaderFactory{
+		accountSessions: accountProbeSessionStore{value: connector.OceanEngineAccountSession{
+			OrganizationID: "org_1", AccountID: "oeacct_safe", Status: connector.AccountSessionReady,
+			SessionCiphertext: []byte("session=organization"), SessionKeyVersion: "test", Version: 7,
+		}},
+		cipher:   accountProbeCipher{},
+		baseURL:  "https://ad.oceanengine.com",
+		accounts: accountExternalIDResolverStub{},
+	}
+	reader, cleanup, err := factory.Open(context.Background(), connector.SyncRequest{
+		OrganizationID: "org_1",
+		ProjectID:      "project_1",
+		AccountRef:     "oeacct_safe",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, ok := reader.(*oceanengine.Client)
+	if !ok {
+		t.Fatalf("reader type = %T", reader)
+	}
+	if client.Session.Cookies != "session=organization" || client.AdvertiserID != "123" {
+		t.Fatalf("reader session/account = %#v/%q", client.Session, client.AdvertiserID)
+	}
+	cleanup()
+	if client.Session.Cookies != "" {
+		t.Fatal("reader cleanup retained the account session")
+	}
 }
 
 func TestOceanEngineAccountProbeUsesOrganizationAccountSessionForProjectVerify(t *testing.T) {

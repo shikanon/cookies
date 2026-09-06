@@ -16,11 +16,16 @@ func TestPlatformObjectCandidatesKeepSafeMetadata(t *testing.T) {
 		valid     bool
 	}{
 		{"image", candidate(imageMaterialCandidate(map[string]any{"material_id": "101", "file_name": "image-a", "width": float64(1080), "sign_url": "https://example.invalid/image?x-orig-expires=1787760000"})), true},
+		{"product-image", candidate(productImageCandidate(map[string]any{"material_id": "151", "file_name": "product-image-a", "image_mode": float64(649502), "web_uri": "tos-cn-i-example/stable-image", "sign_url": "https://example.invalid/product-image?x-orig-expires=1787760000"})), true},
 		{"video", candidate(videoMaterialCandidate(map[string]any{"material_id": "202", "video_name": "video-a", "video_filmLength": float64(15), "video_url": "refid:unsafe", "video_poster": "https://example.invalid/video-poster", "sign_url": "https://example.invalid/video-sign?x-orig-expires=1787760000"})), true},
 		{"photo", candidate(awemePhotoMaterialCandidate(map[string]any{"material_id": "252", "file_name": "photo-a", "image_info": []any{map[string]any{"sign_url": "https://example.invalid/photo?x-orig-expires=1787760000"}}})), true},
-		{"product", candidate(marketingProductCandidate(map[string]any{"product_id": "262", "name": "product-a", "brand_name": "brand-a", "clue_product_category": map[string]any{"category_name": "category-a"}})), true},
+		{"product", candidate(marketingProductCandidate(map[string]any{"unique_product_id": "262", "product_id": "162", "name": "product-a", "brand_name": "brand-a", "clue_product_category": map[string]any{"category_name": "category-a"}})), true},
 		{"landing", candidate(orangeLandingCandidate(map[string]any{"site_id": "303", "name": "landing-a", "audit_status": float64(1), "preview_url": "https://example.invalid/page"})), true},
 		{"invalid-id", candidate(imageMaterialCandidate(map[string]any{"material_id": "not-numeric"})), false},
+	}
+	productImage, _ := productImageCandidate(map[string]any{"material_id": "151", "web_uri": "tos-cn-i-example/stable-image", "sign_url": "https://example.invalid/product-image"})
+	if productImage.Metadata["web_uri"] != "tos-cn-i-example/stable-image" {
+		t.Fatalf("product image stable source identity missing: %#v", productImage.Metadata)
 	}
 	for _, test := range tests {
 		if test.valid != (test.candidate.PlatformObjectID != "") {
@@ -115,8 +120,15 @@ func TestStablePictureURIRemovesPublicObjectPrefix(t *testing.T) {
 	}
 }
 
-func TestAuthorizedIdentityAvatarHostIsAllowed(t *testing.T) {
-	if !previewMediaHostAllowed("p26.douyinpic.com") || previewMediaHostAllowed("douyinpic.example.com") {
+func TestStablePictureURIAcceptsCreativeSignCDN(t *testing.T) {
+	got, err := stablePictureURI("https://lf9-creative-sign.bytetos.com/tos-cn-v-0051/poster-key~tplv-image.image?expires=1")
+	if err != nil || got != "tos-cn-v-0051/poster-key" {
+		t.Fatalf("uri=%q error=%v", got, err)
+	}
+}
+
+func TestPreviewMediaHostAllowlist(t *testing.T) {
+	if !previewMediaHostAllowed("p26.douyinpic.com") || !previewMediaHostAllowed("lf9-creative-sign.bytetos.com") || previewMediaHostAllowed("douyinpic.example.com") || previewMediaHostAllowed("bytetos.com") {
 		t.Fatal("authorized identity avatar host allowlist is incorrect")
 	}
 }
@@ -134,7 +146,7 @@ func TestPlatformObjectPaginationShapes(t *testing.T) {
 	image := imageMaterialPage(map[string]any{"data": map[string]any{"images": []any{map[string]any{"material_id": "1"}}, "pagination": map[string]any{"total_page": float64(4)}}})
 	landing := orangeLandingPage(map[string]any{"data": map[string]any{"data": []any{map[string]any{"site_id": "2"}}, "pagination": map[string]any{"total": float64(61), "size": float64(30)}}})
 	photo := awemePhotoMaterialPage(map[string]any{"data": map[string]any{"list": []any{map[string]any{"material_id": "3"}}, "pagination": map[string]any{"total_page": float64(2)}}})
-	product := marketingProductPage(map[string]any{"data": map[string]any{"list": []any{map[string]any{"product_id": "4"}}, "pagination": map[string]any{"total_count": float64(65), "limit": float64(32)}}})
+	product := marketingProductPage(map[string]any{"data": map[string]any{"list": []any{map[string]any{"unique_product_id": "4", "product_id": "14"}}, "pagination": map[string]any{"total_count": float64(65), "limit": float64(32)}}})
 	if len(image.Items) != 1 || image.TotalPages != 4 {
 		t.Fatalf("image=%#v", image)
 	}

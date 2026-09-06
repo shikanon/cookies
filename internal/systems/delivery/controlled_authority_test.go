@@ -15,6 +15,24 @@ func TestControlledAuthorityRejectsHistoricalOrRejectedFeedback(t *testing.T) {
 	}
 }
 
+func TestControlledAuthorityAcceptsPlanExecutionPreflightWithoutReplayFeedback(t *testing.T) {
+	binding := ControlledAuthorityBinding{
+		AuthorityOrigin: "plan_execution", PreflightCanonicalHash: testHash("a"),
+		PlanID: "plan_1", PlanVersion: 2, PlanCanonicalHash: testHash("b"),
+		IntentID: "intent_1", IntentVersion: 2, IntentCanonicalHash: testHash("c"),
+		ConfigurationID: "configuration_1", ConfigurationVersion: 2, ConfigurationCanonicalHash: testHash("d"),
+		WorkflowID: "runner-v3-plan_1", WorkflowCanonicalHash: testHash("e"), AccountReferenceID: "1855554434276391",
+		ObjectFingerprint: testHash("f"), ProjectBudgetMode: OceanEngineBudgetModeDaily, ProjectBudgetLimitMinor: 30000,
+	}
+	if err := binding.Validate(); err != nil {
+		t.Fatalf("plan execution authority failed: %v", err)
+	}
+	binding.PreflightCanonicalHash = ""
+	if err := binding.Validate(); err != ErrInvalidRequest {
+		t.Fatalf("missing preflight hash error = %v", err)
+	}
+}
+
 func TestRemoteWriteApprovalHashBindsEveryAuthorityIdentity(t *testing.T) {
 	now := time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC)
 	approval := RemoteWriteApproval{SchemaVersion: RemoteWriteApprovalSchemaV1, ID: "approval_1", OrganizationID: "org_1", ProjectID: "project_1", ControlledChangeSetID: "change_1", ControlledChangeSetHash: testHash("b"), Binding: validControlledBinding(), Action: ControlledActionCreateProjectAndPromotions, Scope: "controlled_remote_write", BudgetLimitMinor: 30000, Currency: "CNY", ApprovedBy: "user_1", ApprovedAt: now, ExpiresAt: now.Add(RemoteWriteApprovalTTL)}

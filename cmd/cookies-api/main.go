@@ -25,6 +25,7 @@ import (
 	"github.com/shikanon/cookies/internal/integrations/deliveryinsights"
 	"github.com/shikanon/cookies/internal/integrations/gotenberg"
 	"github.com/shikanon/cookies/internal/integrations/lasdocument"
+	"github.com/shikanon/cookies/internal/integrations/oceanengine"
 	"github.com/shikanon/cookies/internal/integrations/productsource"
 	"github.com/shikanon/cookies/internal/integrations/seedresearch"
 	"github.com/shikanon/cookies/internal/integrations/strategycreative"
@@ -34,6 +35,7 @@ import (
 	browserautomationhttp "github.com/shikanon/cookies/internal/platform/browserautomation/httpapi"
 	"github.com/shikanon/cookies/internal/platform/browserautomation/plancompile"
 	"github.com/shikanon/cookies/internal/platform/browserautomation/rparunner"
+	webapiadapter "github.com/shikanon/cookies/internal/platform/browserautomation/webapi"
 	"github.com/shikanon/cookies/internal/platform/config"
 	"github.com/shikanon/cookies/internal/platform/connector"
 	connectorhttp "github.com/shikanon/cookies/internal/platform/connector/httpapi"
@@ -469,6 +471,7 @@ func main() {
 		Projects:                projectService,
 		ConnectorSnapshots:      connectorRepository,
 		ConnectorAccounts:       connectorRepository,
+		ExternalAccountIDs:      connectorRepository,
 		LaunchBatchCalibrations: connectorRepository,
 		// The Connector is not configured in this environment. Normalize the
 		// deterministic OutcomeSimulation records through the Delivery consumer
@@ -478,14 +481,38 @@ func main() {
 	dependencies.AuthenticatedDomainMounts = append(dependencies.AuthenticatedDomainMounts,
 		httpserver.DomainMount{Pattern: "/api/delivery/v1/", Handler: deliveryhttp.New(deliveryService)})
 	browserRpaRepository := browserautomation.MySQLRepository{DB: db}
+	deliveryAuthorityProvider := delivery.BrowserRpaAuthorityProvider{Repository: delivery.MySQLRepository{DB: db}}
 	browserRpaService := browserautomation.Service{
-		Repository: browserRpaRepository,
-		AuthorityProvider: delivery.BrowserRpaAuthorityProvider{
-			Repository: delivery.MySQLRepository{DB: db},
-		},
-		NewID: func(prefix string) (string, error) { return ids.New(prefix) },
+		Repository:        browserRpaRepository,
+		AuthorityProvider: deliveryAuthorityProvider,
+		NewID:             func(prefix string) (string, error) { return ids.New(prefix) },
 	}
+	deliveryService.BrowserRpaLauncher = deliveryBrowserRpaLauncher{service: browserRpaService, executionDriver: browserautomation.ExecutionDriverOceanEngineWebAPI}
 	browserRpaServer := browserautomationhttp.NewTakeoverOnly(browserRpaService, projectStore)
+	v3Compiler := plancompile.V3Compiler{Source: delivery.MySQLRepository{DB: db}, AccountResolver: connectorRepository, PlatformObjects: connectorRepository}
+	var oceanEngineWriterFactory oceanEngineConnectorWriterFactory
+	if cfg.OceanEngine.Enabled {
+		oceanEngineCipher, cipherErr := insights.NewAESGCMSecretCipher(cfg.OceanEngine.MasterKey, cfg.OceanEngine.MasterKeyVersion)
+		if cipherErr != nil {
+			log.Fatalf("configure Ocean Engine session cipher: %v", cipherErr)
+		}
+		oceanEngineWriterFactory = oceanEngineConnectorWriterFactory{
+			accountSessions: connectorRepository, accounts: connectorRepository, cipher: oceanEngineCipher,
+			baseURL: cfg.OceanEngine.BaseURL, client: &http.Client{Timeout: 30 * time.Second},
+			tokenCache: oceanengine.NewCSRFTokenCache(),
+		}
+	}
+	driverAdapters := map[browserautomation.ExecutionDriver]browserautomation.WorkerAdapter{
+		browserautomation.ExecutionDriverOceanEngineWebAPI: webapiadapter.Adapter{
+			Compiler: v3Compiler, Policies: browserRpaRepository,
+			Sessions:     oceanEngineWebAPISessionChecker{accountSessions: connectorRepository, accounts: connectorRepository},
+			WriteEnabled: cfg.OceanEngine.WebAPIWriteEnabled, AccountAllowlist: cfg.OceanEngine.WebAPIWriteAccounts,
+			PayloadSource:  deliveryAuthorityProvider,
+			Templates:      fileTemplateSource{Path: cfg.OceanEngine.WebAPITemplateFile},
+			SessionFactory: oceanEngineWriterFactory,
+		},
+	}
+	var playwrightAdapter browserautomation.WorkerAdapter
 	if cfg.BrowserRPA.Enabled {
 		manifest, err := calibrationmanifest.Current()
 		if err != nil {
@@ -500,13 +527,17 @@ func main() {
 			EdgeSessionFile:     cfg.BrowserRPA.EdgeSessionFile,
 			SessionProbeScript:  cfg.BrowserRPA.SessionProbeScript,
 			AuthorityStateRoot:  cfg.BrowserRPA.AuthorityStateRoot,
-			V3Compiler:          plancompile.V3Compiler{Source: delivery.MySQLRepository{DB: db}},
+			V3Compiler:          v3Compiler,
 			PrepareTimeout:      time.Duration(cfg.BrowserRPA.PrepareTimeoutSeconds) * time.Second,
 			SubmitTimeout:       time.Duration(cfg.BrowserRPA.SubmitTimeoutSeconds) * time.Second,
 			FallbackCDPEndpoint: cfg.BrowserRPA.CDPEndpointFallback,
 		}, browserRpaRepository, browserRpaService, plancompile.Compiler{Manifest: manifest})
-		browserRpaServer = browserautomationhttp.New(browserRpaService, browserautomation.Worker{Service: browserRpaService, Adapter: adapter}, projectStore)
+		playwrightAdapter = adapter
+		driverAdapters[browserautomation.ExecutionDriverPlaywrightEdgeV3] = adapter
 		log.Printf("browser_rpa_automated_worker=true runner_protocol=%s", cfg.BrowserRPA.RunnerProtocol)
+	}
+	if cfg.OceanEngine.Enabled || cfg.BrowserRPA.Enabled {
+		browserRpaServer = browserautomationhttp.New(browserRpaService, browserautomation.Worker{Service: browserRpaService, Adapter: playwrightAdapter, DriverAdapters: driverAdapters}, projectStore)
 	}
 	browserRpaServer.MountLegacyAlias()
 	dependencies.AuthenticatedDomainMounts = append(dependencies.AuthenticatedDomainMounts,

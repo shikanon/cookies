@@ -20,8 +20,8 @@ func (r MySQLRepository) CreateRun(ctx context.Context, value BrowserRpaRun) (Br
 		return BrowserRpaRun{}, false, err
 	}
 	_, err = r.DB.ExecContext(ctx, `INSERT INTO browser_rpa_runs
-		(id,organization_id,project_id,platform,account_id,authority_json,environment_id,profile_id,lease_id,policy_id,state,blocking_reason,paused,takeover_active,version,idempotency_key,request_hash,created_by,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, value.ID, value.OrganizationID, value.ProjectID, value.Platform, value.AccountID, authority, value.EnvironmentID, value.ProfileID, nullableString(value.LeaseID), value.PolicyID, value.State, nullableString(string(value.BlockingReason)), value.Paused, value.TakeoverActive, value.Version, value.IdempotencyKey, value.RequestHash, value.CreatedBy, value.CreatedAt, value.UpdatedAt)
+		(id,organization_id,project_id,platform,account_id,execution_driver,authority_json,environment_id,profile_id,lease_id,policy_id,state,blocking_reason,paused,takeover_active,version,idempotency_key,request_hash,created_by,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, value.ID, value.OrganizationID, value.ProjectID, value.Platform, value.AccountID, value.EffectiveExecutionDriver(), authority, value.EnvironmentID, value.ProfileID, nullableString(value.LeaseID), value.PolicyID, value.State, nullableString(string(value.BlockingReason)), value.Paused, value.TakeoverActive, value.Version, value.IdempotencyKey, value.RequestHash, value.CreatedBy, value.CreatedAt, value.UpdatedAt)
 	if err == nil {
 		return value, false, nil
 	}
@@ -44,6 +44,23 @@ func (r MySQLRepository) CreateRun(ctx context.Context, value BrowserRpaRun) (Br
 
 func (r MySQLRepository) GetRun(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, id string) (BrowserRpaRun, error) {
 	return scanRun(r.DB.QueryRowContext(ctx, runSelect+` WHERE organization_id=? AND project_id=? AND id=?`, org, project, id))
+}
+
+func (r MySQLRepository) ListRuns(ctx context.Context, org contract.OrganizationID, project contract.ProjectID) ([]BrowserRpaRun, error) {
+	rows, err := r.DB.QueryContext(ctx, runSelect+` WHERE organization_id=? AND project_id=? ORDER BY updated_at DESC LIMIT 100`, org, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]BrowserRpaRun, 0)
+	for rows.Next() {
+		value, scanErr := scanRun(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
 }
 
 func (r MySQLRepository) CreateEnvironment(ctx context.Context, value ExecutionEnvironment) (ExecutionEnvironment, error) {
@@ -217,6 +234,10 @@ func (r MySQLRepository) AcquireRunLease(ctx context.Context, run BrowserRpaRun,
 		return BrowserRpaRun{}, SessionLease{}, err
 	}
 	lease.FencingToken = lastFencingToken + 1
+	_, err = tx.ExecContext(ctx, `UPDATE browser_rpa_session_leases SET active_lock_key=NULL,released_at=?,version=version+1 WHERE organization_id=? AND project_id=? AND active_lock_key=? AND released_at IS NULL AND (expires_at<=? OR heartbeat_deadline<=?)`, now, lease.OrganizationID, lease.ProjectID, activeKey, now, now)
+	if err != nil {
+		return BrowserRpaRun{}, SessionLease{}, err
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO browser_rpa_session_leases (id,organization_id,project_id,run_id,environment_id,profile_id,platform,account_id,holder,active_lock_key,fencing_token,version,expires_at,heartbeat_deadline,released_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, lease.ID, lease.OrganizationID, lease.ProjectID, lease.RunID, lease.EnvironmentID, lease.ProfileID, lease.Platform, lease.AccountID, lease.Holder, activeKey, lease.FencingToken, lease.Version, lease.ExpiresAt, lease.HeartbeatDeadline, lease.ReleasedAt)
 	if err != nil {
 		return BrowserRpaRun{}, SessionLease{}, ErrLeaseUnavailable
@@ -658,12 +679,12 @@ func (r MySQLRepository) ListEvidence(ctx context.Context, org contract.Organiza
 	return values, rows.Err()
 }
 
-const runSelect = `SELECT id,organization_id,project_id,platform,account_id,authority_json,environment_id,profile_id,COALESCE(lease_id,''),policy_id,state,COALESCE(blocking_reason,''),paused,takeover_active,version,idempotency_key,request_hash,created_by,created_at,updated_at FROM browser_rpa_runs`
+const runSelect = `SELECT id,organization_id,project_id,platform,account_id,execution_driver,authority_json,environment_id,profile_id,COALESCE(lease_id,''),policy_id,state,COALESCE(blocking_reason,''),paused,takeover_active,version,idempotency_key,request_hash,created_by,created_at,updated_at FROM browser_rpa_runs`
 
 func scanRun(row interface{ Scan(...any) error }) (BrowserRpaRun, error) {
 	var v BrowserRpaRun
 	var authority []byte
-	err := row.Scan(&v.ID, &v.OrganizationID, &v.ProjectID, &v.Platform, &v.AccountID, &authority, &v.EnvironmentID, &v.ProfileID, &v.LeaseID, &v.PolicyID, &v.State, &v.BlockingReason, &v.Paused, &v.TakeoverActive, &v.Version, &v.IdempotencyKey, &v.RequestHash, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt)
+	err := row.Scan(&v.ID, &v.OrganizationID, &v.ProjectID, &v.Platform, &v.AccountID, &v.ExecutionDriver, &authority, &v.EnvironmentID, &v.ProfileID, &v.LeaseID, &v.PolicyID, &v.State, &v.BlockingReason, &v.Paused, &v.TakeoverActive, &v.Version, &v.IdempotencyKey, &v.RequestHash, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BrowserRpaRun{}, ErrNotFound
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 )
 
@@ -18,6 +19,7 @@ func TestAssetLibraryReadersUseApprovedReadOnlyEndpoints(t *testing.T) {
 		{http.MethodGet, "/superior/api/v2/creative/material/aweme_photo_list"},
 		{http.MethodPost, "/superior/api/v2/ad/product/clue_product_list"},
 		{http.MethodGet, "/platform/api/v1/orange/third_part_list"},
+		{http.MethodGet, "/superior/api/v2/ad/get_orange_landing_page"},
 	}
 	index := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,8 +70,152 @@ func TestAssetLibraryReadersUseApprovedReadOnlyEndpoints(t *testing.T) {
 	if _, err = client.OrangeLandingPagesPage(ctx, request); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = client.MultiConversionOrangeLandingPagesPage(ctx, request); err != nil {
+		t.Fatal(err)
+	}
 	if index != len(requests) {
 		t.Fatalf("requests=%d", index)
+	}
+}
+
+func TestMultiConversionOrangeLandingPagesUseExactLivePickerFilter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if r.Method != http.MethodGet || r.URL.Path != "/superior/api/v2/ad/get_orange_landing_page" ||
+			query.Get("aadvid") != "123" || query.Get("multi_asset_types") != "2" ||
+			query.Get("external_action") != "100" || query.Get("convert_target_for_check") != "100" ||
+			query.Get("filter_dpa") != "1" || query.Get("status") != "0,5,8" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.RequestURI())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Delay = 0
+	if _, err = client.MultiConversionOrangeLandingPagesPage(context.Background(), AssetPageRequest{Page: 1, Limit: 30}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAccountConfigurationAndProjectDetailsUseObservedReadContracts(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Query().Get("aadvid") != "123" {
+			t.Fatalf("account query=%s", r.URL.RawQuery)
+		}
+		switch requests {
+		case 1:
+			if r.Method != http.MethodGet || r.URL.Path != "/superior/api/v2/account/conf" {
+				t.Fatalf("account capability request=%s %s", r.Method, r.URL.RequestURI())
+			}
+		case 2:
+			if r.Method != http.MethodGet || r.URL.Path != "/superior/api/v2/project/detail" || r.URL.Query().Get("project_ids") != "7681603698619908102" || r.URL.Query().Get("need_ea_conversion_status") != "true" || r.URL.Query().Get("need_product_recognition") != "true" {
+				t.Fatalf("project detail request=%s %s", r.Method, r.URL.RequestURI())
+			}
+		default:
+			t.Fatalf("unexpected request=%s", r.URL.RequestURI())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Delay = 0
+	if _, err = client.AccountConfiguration(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.ProjectDetails(context.Background(), "7681603698619908102"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFilteredOrangeLandingPagesIncludesObservedOptionalFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		checks := map[string]string{
+			"aadvid":                        "123",
+			"search":                        "site",
+			"order_mode":                    "2",
+			"search_mode":                   "4",
+			"need_uba":                      "true",
+			"audit_status_list":             "0, 1",
+			"status":                        "0,8",
+			"multi_asset_types":             "2,1002",
+			"external_action":               "100",
+			"deep_external_action":          "101",
+			"convert_target_for_check":      "100",
+			"deep_convert_target_for_check": "101",
+			"filter_dpa":                    "1",
+			"type_list":                     "172",
+			"filter_type_list":              "174",
+			"instance_id":                   "instance_1",
+			"ebp_group_ids":                 "group_1,group_2",
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/superior/api/v2/ad/get_orange_landing_page" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.RequestURI())
+		}
+		for key, want := range checks {
+			if got := query.Get(key); got != want {
+				t.Errorf("%s=%q want %q", key, got, want)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Delay = 0
+	_, err = client.FilteredOrangeLandingPagesPage(context.Background(), AssetPageRequest{Page: 1, Limit: 30}, OrangeLandingPageFilter{
+		Search: "site", OrderMode: 2, SearchMode: 4, NeedUBA: true,
+		AuditStatuses: []int{0, 1}, MultiAssetTypes: []int{2, 1002},
+		ExternalAction: 100, DeepExternalAction: 101, Statuses: []int{0, 8}, FilterDPA: true,
+		TypeList: OrangeLandingPageConsultType, FilterTypeList: OrangeLandingPageTrafficEcommerceType,
+		MicroAppInstanceID: "instance_1", EBPGroupIDs: []string{"group_1", "group_2"},
+		CheckConversionTarget: true, ConvertTargetForCheck: 100, DeepConvertTargetForCheck: 101,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFilteredOrangeLandingPagesOmitsConversionFiltersForBypassDeepTargets(t *testing.T) {
+	for _, deepTarget := range []int{OrangeLandingPageDeepTargetFirstBypass, OrangeLandingPageDeepTargetSecondBypass} {
+		t.Run(strconv.Itoa(deepTarget), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				query := r.URL.Query()
+				for _, key := range []string{"external_action", "deep_external_action", "convert_target_for_check", "deep_convert_target_for_check"} {
+					if query.Has(key) {
+						t.Errorf("unexpected %s=%q", key, query.Get(key))
+					}
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.Delay = 0
+			_, err = client.FilteredOrangeLandingPagesPage(context.Background(), AssetPageRequest{Page: 1, Limit: 30}, OrangeLandingPageFilter{
+				ExternalAction: 100, DeepExternalAction: deepTarget,
+				CheckConversionTarget: true, ConvertTargetForCheck: 100, DeepConvertTargetForCheck: deepTarget,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -94,6 +240,29 @@ func TestSignPictureURIsUsesReadOnlySigner(t *testing.T) {
 	}
 	client.Delay = 0
 	if _, err := client.SignPictureURIs(context.Background(), []string{"tos-cn/image"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductImagesPageUsesMyImagesMode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/superior/api/v2/ad/getImageList" || r.URL.Query().Get("aadvid") != "123" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.RequestURI())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["page"] != float64(1) || body["limit"] != float64(30) || body["image_mode"] != float64(649502) {
+			t.Fatalf("body=%#v err=%v", body, err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"images":[]}}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Delay = 0
+	if _, err := client.ProductImagesPage(context.Background(), AssetPageRequest{Page: 1, Limit: 50}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -168,6 +337,37 @@ func TestReferenceObjectReadersUseObservedReadOnlyRequests(t *testing.T) {
 	}
 	if requestIndex != 6 {
 		t.Fatalf("requests=%d", requestIndex)
+	}
+}
+
+func TestOptimizationTargetCapabilitiesPreserveCompleteLeadBranch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/superior/api/v2/project/get_optimization_goal_v2" || r.URL.Query().Get("aadvid") != "123" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.RequestURI())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		multi, _ := body["multi_asset_types"].([]any)
+		if body["campaign_type"] != float64(1) || body["landing_type"] != float64(1) || body["asset_type"] != float64(2) || body["need_assets"] != false || len(multi) != 2 || multi[0] != float64(2) || multi[1] != float64(1002) {
+			t.Fatalf("body=%#v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"goals":[]}}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Delay = 0
+	_, err = client.OptimizationTargetCapabilities(context.Background(), OptimizationTargetContext{
+		CampaignType: 1, LandingType: 1, AssetType: 2, CDPMarketingGoal: 1,
+		MicroPromotionType: 2, MultiAssetTypes: []int{2, 1002}, NeedAssets: false,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

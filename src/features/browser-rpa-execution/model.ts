@@ -22,12 +22,16 @@ export type BrowserRpaBlockingReason =
   | 'PROJECT_NOT_ALLOWED'
   | 'SITE_NOT_ALLOWED'
   | 'PAGE_DRIFT'
+  | 'RUNNER_FAILURE'
   | 'WORKFLOW_DRIFT'
   | 'SKILL_DRIFT'
   | 'RESULT_RECONCILIATION_REQUIRED'
+  | 'TARGET_EFFECT_NOT_OBSERVED'
 
 export type BrowserRpaAuthorityBinding = {
   schema_version: 'browser-rpa-authority/v1' | 'computer-use-authority/v1'
+  authority_origin?: 'plan_execution'
+  preflight_canonical_hash?: string
   business_execution_id: string
   change_set_id: string
   approval_id: string
@@ -67,6 +71,8 @@ export type BrowserRpaAuthorityBinding = {
   }
   object_fingerprint: string
   action: string
+  plan_id?: string
+  plan_version?: number
   project_budget_mode?: 'daily' | 'unlimited'
   project_budget_limit_minor?: number
   promotion_budget_limit_minor?: number
@@ -91,6 +97,7 @@ export type BrowserRpaRun = {
   project_id: string
   platform: 'ocean_engine'
   account_id: string
+  execution_driver?: 'oceanengine-web-api/session/v1' | 'playwright-rpa/edge/v3'
   authority: BrowserRpaAuthorityBinding
   environment_id: string
   profile_id: string
@@ -116,6 +123,18 @@ export type BrowserRpaRunEvent = {
   summary: string
   actor: string
   created_at: string
+}
+
+export type BrowserRpaRunStep = {
+  id: string
+  run_id: string
+  sequence: number
+  workflow_step_id: string
+  action: string
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'result_unknown' | 'skipped'
+  blocking_reason?: BrowserRpaBlockingReason
+  attempt: number
+  version: number
 }
 
 /** Evidence is redacted by the platform service before the UI receives it. */
@@ -212,6 +231,7 @@ export type RunnerV3Plan = {
   internal_object_kind?: 'project' | 'promotion'
   internal_object_id?: string
   blocked_reasons: string[]
+  configuration_issues?: string[]
   object_availability?: Array<{
     field_key: string
     object_kind: string
@@ -239,6 +259,7 @@ export type IssuedFinalConfirmation = {
 
 export type ControlledExecutionWorkspace = {
   run: BrowserRpaRun
+  steps: BrowserRpaRunStep[]
   events: BrowserRpaRunEvent[]
   evidence: BrowserRpaEvidence[]
   environment: BrowserRpaEnvironment
@@ -271,6 +292,9 @@ export type ControlledExecutionPresentation = {
     | 'result_unknown'
     | 'cancelled'
     | 'kill_switch_active'
+    | 'runner_failure'
+    | 'page_drift'
+    | 'target_effect_not_observed'
     | 'blocked'
   tone: 'neutral' | 'warning' | 'danger' | 'success'
   title: string

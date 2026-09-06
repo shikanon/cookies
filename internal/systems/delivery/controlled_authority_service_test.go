@@ -121,6 +121,16 @@ func (r *controlledMemoryRepository) CreatePlatformEntityMapping(_ context.Conte
 	r.mappings[repositoryKey(v.OrganizationID, v.ProjectID, v.ID)] = v
 	return v, nil
 }
+
+func (r *controlledMemoryRepository) ListPlatformEntityMappings(_ context.Context, org contract.OrganizationID, project contract.ProjectID, account string) ([]PlatformEntityMapping, error) {
+	values := make([]PlatformEntityMapping, 0)
+	for _, value := range r.mappings {
+		if value.OrganizationID == org && value.ProjectID == project && value.AccountReferenceID == account {
+			values = append(values, value)
+		}
+	}
+	return values, nil
+}
 func (r *controlledMemoryRepository) GetPlatformEntityMapping(_ context.Context, org contract.OrganizationID, project contract.ProjectID, id string) (PlatformEntityMapping, error) {
 	v, ok := r.mappings[repositoryKey(org, project, id)]
 	if !ok {
@@ -135,6 +145,23 @@ func (r *controlledMemoryRepository) GetPlatformEntityMappingByInternalObject(_ 
 		}
 	}
 	return PlatformEntityMapping{}, ErrNotFound
+}
+func (r *controlledMemoryRepository) RebindSafePendingPlatformEntityMapping(_ context.Context, request rebindPendingPlatformEntityMappingRequest) (PlatformEntityMapping, error) {
+	key := repositoryKey(request.OrganizationID, request.ProjectID, request.MappingID)
+	value, ok := r.mappings[key]
+	if !ok {
+		return PlatformEntityMapping{}, ErrNotFound
+	}
+	if value.Status != PlatformEntityMappingPending || value.Version != request.ExpectedVersion || value.PlatformObjectID != "" || value.ResultEvidenceID != "" || value.ListEvidenceID != "" {
+		return PlatformEntityMapping{}, ErrInvalidState
+	}
+	value.ConfigurationID = request.ConfigurationID
+	value.BusinessExecutionID = request.BusinessExecutionID
+	value.BrowserRpaRunID = request.BrowserRpaRunID
+	value.Version++
+	value.UpdatedAt = request.Now
+	r.mappings[key] = value
+	return value, nil
 }
 func (r *controlledMemoryRepository) ValidateControlledMaterialReferences(_ context.Context, org contract.OrganizationID, project contract.ProjectID, _ string, references []ControlledMaterialReference) error {
 	for _, reference := range references {

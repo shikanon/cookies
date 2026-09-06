@@ -271,6 +271,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/OceanEngineCopyItem" }
         },
+        "product_name": { "type": "string", "minLength": 1 },
         "product_image_references": {
           "type": "array",
           "items": { "$ref": "#/$defs/StableReference" }

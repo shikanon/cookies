@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/shikanon/cookies/internal/platform/browserautomation"
@@ -96,6 +99,7 @@ type PlaywrightRPAAdapter struct {
 var _ browserautomation.WorkerAdapter = PlaywrightRPAAdapter{}
 var _ browserautomation.WorkerPlanAdapter = PlaywrightRPAAdapter{}
 var _ browserautomation.WorkerSessionProbeAdapter = PlaywrightRPAAdapter{}
+var _ browserautomation.WorkerResultReconciliationAdapter = PlaywrightRPAAdapter{}
 
 func (a PlaywrightRPAAdapter) CheckSession(ctx context.Context, run browserautomation.BrowserRpaRun) (browserautomation.EdgeSessionProbe, error) {
 	if _, _, err := a.resolveSession(ctx, run); err != nil {
@@ -125,21 +129,49 @@ func (a PlaywrightRPAAdapter) Plan(ctx context.Context, run browserautomation.Br
 	return plan, nil
 }
 
+func (a PlaywrightRPAAdapter) ReconcileResultUnknown(ctx context.Context, run browserautomation.BrowserRpaRun) (browserautomation.PreparedPage, error) {
+	env, policy, err := a.resolveSession(ctx, run)
+	if err != nil {
+		return browserautomation.PreparedPage{}, err
+	}
+	if a.protocol() != ProtocolV3 || a.V3Compiler == nil {
+		return browserautomation.PreparedPage{}, fmt.Errorf("%w: read-only reconciliation requires Runner v3", browserautomation.ErrEnvironmentUnavailable)
+	}
+	plan, err := a.V3Compiler.CompilePrepareV3(ctx, run, policy)
+	if err != nil {
+		return browserautomation.PreparedPage{}, fmt.Errorf("%w: %v", browserautomation.ErrPageDrift, err)
+	}
+	result, err := a.sessionRunner(env).RunV3Reconcile(ctx, plan)
+	if err != nil {
+		return browserautomation.PreparedPage{}, fmt.Errorf("%w: %v", browserautomation.ErrEnvironmentUnavailable, err)
+	}
+	page := preparedPageFromResult(result)
+	attachPlannedObject(plan, &page)
+	if result.Reconciliation != "matched" && result.Reconciliation != "not_found" {
+		return browserautomation.PreparedPage{}, fmt.Errorf("%w: runner returned no stable reconciliation", browserautomation.ErrPageDrift)
+	}
+	return page, nil
+}
+
 func (a PlaywrightRPAAdapter) Prepare(ctx context.Context, run browserautomation.BrowserRpaRun) (browserautomation.PreparedPage, error) {
 	env, policy, err := a.resolveSession(ctx, run)
 	if err != nil {
 		return browserautomation.PreparedPage{}, err
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopHeartbeat := a.keepLeaseAlive(runCtx, cancel, run, 0)
+	defer stopHeartbeat()
 	var result RpaResult
 	if a.protocol() == ProtocolV3 {
 		if a.V3Compiler == nil {
 			return browserautomation.PreparedPage{}, fmt.Errorf("%w: runner v3 compiler is not configured", browserautomation.ErrEnvironmentUnavailable)
 		}
-		plan, compileErr := a.V3Compiler.CompilePrepareV3(ctx, run, policy)
+		plan, compileErr := a.V3Compiler.CompilePrepareV3(runCtx, run, policy)
 		if compileErr != nil {
 			return browserautomation.PreparedPage{}, fmt.Errorf("%w: %v", browserautomation.ErrPageDrift, compileErr)
 		}
-		result, err = a.sessionRunner(env).RunV3(ctx, plan, "", a.AuthorityStateRoot)
+		result, err = a.sessionRunner(env).RunV3(runCtx, plan, "", a.AuthorityStateRoot)
 		if err == nil && result.Outcome == OutcomeSuccess {
 			page := preparedPageFromResult(result)
 			attachPlannedObject(plan, &page)
@@ -155,9 +187,10 @@ func (a PlaywrightRPAAdapter) Prepare(ctx context.Context, run browserautomation
 			return browserautomation.PreparedPage{}, fmt.Errorf("%w: %v", browserautomation.ErrPageDrift, compileErr)
 		}
 		plan.EvidenceRoot = a.EvidenceRoot
-		result, err = a.sessionRunner(env).Run(ctx, plan)
+		result, err = a.sessionRunner(env).Run(runCtx, plan)
 	}
 	if err != nil {
+		log.Printf("browser-rpa prepare runner failed: run=%s error=%v", run.ID, err)
 		return browserautomation.PreparedPage{}, fmt.Errorf("%w: %v", browserautomation.ErrEnvironmentUnavailable, err)
 	}
 	if result.Outcome != OutcomeSuccess {
@@ -259,7 +292,7 @@ func (a PlaywrightRPAAdapter) Submit(ctx context.Context, run browserautomation.
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stopHeartbeat := a.keepLeaseAlive(runCtx, cancel, run, attempt)
+	stopHeartbeat := a.keepLeaseAlive(runCtx, cancel, run, attempt.FencingToken)
 	defer stopHeartbeat()
 
 	var result RpaResult
@@ -290,6 +323,16 @@ func (a PlaywrightRPAAdapter) Submit(ctx context.Context, run browserautomation.
 	}
 	if result.Outcome == OutcomeSuccess && !result.FinalClickPerformed {
 		return browserautomation.WorkerFailed, browserautomation.PreparedPage{}, fmt.Errorf("%w: runner reported success without performing the authorized click", browserautomation.ErrPageDrift)
+	}
+	if result.FinalClickPerformed && result.Outcome == OutcomeFailed && result.ErrorCode == "submit_no_effect_confirmed" && result.Reconciliation == "not_found" {
+		page := preparedPageFromResult(result)
+		attachPlannedObject(compiledV3Plan, &page)
+		return browserautomation.WorkerFailed, page, nil
+	}
+	if result.FinalClickPerformed && result.Outcome != OutcomeSuccess && result.Outcome != OutcomeSuccessWithDrift {
+		// A failed result after the write boundary does not prove that the
+		// platform rejected the write. Never permit an automatic second click.
+		return browserautomation.WorkerResultUnknown, preparedPageFromResult(result), nil
 	}
 	switch result.Outcome {
 	case OutcomeSuccess:
@@ -352,7 +395,7 @@ func (a PlaywrightRPAAdapter) resolveSession(ctx context.Context, run browseraut
 // deadline is one minute). A failed heartbeat cancels the subprocess
 // context; if the final click has not happened yet, the runner stops before
 // crossing the write boundary.
-func (a PlaywrightRPAAdapter) keepLeaseAlive(ctx context.Context, cancel context.CancelFunc, run browserautomation.BrowserRpaRun, attempt browserautomation.ControlledActionAttempt) context.CancelFunc {
+func (a PlaywrightRPAAdapter) keepLeaseAlive(ctx context.Context, cancel context.CancelFunc, run browserautomation.BrowserRpaRun, fencingToken int64) context.CancelFunc {
 	if a.Heartbeat == nil || run.LeaseID == "" {
 		return func() {}
 	}
@@ -366,6 +409,9 @@ func (a PlaywrightRPAAdapter) keepLeaseAlive(ctx context.Context, cancel context
 			cancel()
 			return
 		}
+		if fencingToken < 1 {
+			fencingToken = lease.FencingToken
+		}
 		leaseVersion := lease.Version
 		missed := false
 		for {
@@ -373,7 +419,7 @@ func (a PlaywrightRPAAdapter) keepLeaseAlive(ctx context.Context, cancel context
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				updated, err := a.Heartbeat.HeartbeatRunLease(ctx, run.OrganizationID, run.ProjectID, run.ID, run.LeaseID, leaseVersion, attempt.FencingToken)
+				updated, err := a.Heartbeat.HeartbeatRunLease(ctx, run.OrganizationID, run.ProjectID, run.ID, run.LeaseID, leaseVersion, fencingToken)
 				if err != nil {
 					// One immediate retry absorbs transient database blips;
 					// a second consecutive failure cancels the run.
@@ -382,7 +428,7 @@ func (a PlaywrightRPAAdapter) keepLeaseAlive(ctx context.Context, cancel context
 						return
 					}
 					missed = true
-					updated, err = a.Heartbeat.HeartbeatRunLease(ctx, run.OrganizationID, run.ProjectID, run.ID, run.LeaseID, leaseVersion, attempt.FencingToken)
+					updated, err = a.Heartbeat.HeartbeatRunLease(ctx, run.OrganizationID, run.ProjectID, run.ID, run.LeaseID, leaseVersion, fencingToken)
 					if err != nil {
 						cancel()
 						return
@@ -406,6 +452,9 @@ func classifyResult(result RpaResult) error {
 	case CodeCDPUnavailable, CodeEnvironmentUnavailable, CodeTimeout, CodeInternal:
 		return fmt.Errorf("%w: %s", browserautomation.ErrEnvironmentUnavailable, result.ErrorMessage)
 	default:
+		if strings.HasPrefix(result.ErrorCode, "authority_") || result.ErrorCode == CodeWriteBlocked || result.ErrorCode == "plan_blocked" {
+			return fmt.Errorf("%w: %s: %s", browserautomation.ErrFinalConfirmationInvalid, result.ErrorCode, result.ErrorMessage)
+		}
 		return fmt.Errorf("%w: %s: %s", browserautomation.ErrPageDrift, result.ErrorCode, result.ErrorMessage)
 	}
 }
@@ -416,6 +465,7 @@ func preparedPageFromResult(result RpaResult) browserautomation.PreparedPage {
 		ActionVersion:   ActionVersion,
 		Readback:        map[string]string{},
 	}
+	page.Readback["final_click_performed"] = strconv.FormatBool(result.FinalClickPerformed)
 	for _, step := range result.Steps {
 		for key, value := range stringReadback(step.Readback) {
 			page.Readback[key] = value

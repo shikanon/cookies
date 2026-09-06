@@ -28,27 +28,27 @@ func (s Synchronizer) RefreshPlatformObjectPreview(ctx context.Context, query Pl
 	}
 	uri, err := stablePictureURI(current.URL)
 	if err != nil {
-		return PlatformObjectPreview{}, err
+		return PlatformObjectPreview{}, fmt.Errorf("derive stable picture URI: %w", err)
 	}
 	reader, closeReader, err := s.Readers.Open(ctx, SyncRequest{OrganizationID: query.OrganizationID, ProjectID: query.ProjectID, AccountRef: query.AccountID})
 	if err != nil {
-		return PlatformObjectPreview{}, err
+		return PlatformObjectPreview{}, fmt.Errorf("open picture signer: %w", err)
 	}
 	if closeReader != nil {
 		defer closeReader()
 	}
 	signer, ok := reader.(pictureURISigner)
 	if !ok {
-		return PlatformObjectPreview{}, ErrInvalidFact
+		return PlatformObjectPreview{}, fmt.Errorf("picture signer is unavailable: %w", ErrInvalidFact)
 	}
 	payload, err := signer.SignPictureURIs(ctx, []string{uri})
 	if err != nil {
-		return PlatformObjectPreview{}, err
+		return PlatformObjectPreview{}, fmt.Errorf("sign picture URI: %w", err)
 	}
 	signedURL := signedPictureURL(payload, uri)
 	signedURL, expiresAt := platformPreview(signedURL)
 	if signedURL == "" || expiresAt == nil || !time.Now().Before(*expiresAt) {
-		return PlatformObjectPreview{}, fmt.Errorf("%w: picture signer returned no usable URL", ErrInvalidFact)
+		return PlatformObjectPreview{}, fmt.Errorf("%w: picture signer returned no usable URL (%s)", ErrInvalidFact, signedPicturePayloadShape(payload))
 	}
 	now := time.Now().UTC()
 	if s.Now != nil {
@@ -62,8 +62,11 @@ func (s Synchronizer) RefreshPlatformObjectPreview(ctx context.Context, query Pl
 
 func stablePictureURI(raw string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme != "https" || !previewMediaHostAllowed(parsed.Hostname()) {
-		return "", ErrInvalidFact
+	if err != nil {
+		return "", fmt.Errorf("parse preview URL: %w", ErrInvalidFact)
+	}
+	if parsed.Scheme != "https" || !previewMediaHostAllowed(parsed.Hostname()) {
+		return "", fmt.Errorf("unsupported preview origin scheme=%q host=%q: %w", parsed.Scheme, parsed.Hostname(), ErrInvalidFact)
 	}
 	value := strings.TrimPrefix(parsed.EscapedPath(), "/")
 	if index := strings.Index(value, "~"); index >= 0 {
@@ -85,4 +88,12 @@ func signedPictureURL(payload map[string]any, uri string) string {
 	list, _ := data["list"].(map[string]any)
 	item, _ := list[uri].(map[string]any)
 	return firstString(item, "main_url")
+}
+
+func signedPicturePayloadShape(payload map[string]any) string {
+	data, _ := payload["data"].(map[string]any)
+	if data == nil {
+		return fmt.Sprintf("data=%T", payload["data"])
+	}
+	return fmt.Sprintf("data.list=%T", data["list"])
 }

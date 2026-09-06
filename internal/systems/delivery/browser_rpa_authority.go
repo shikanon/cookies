@@ -30,6 +30,21 @@ type browserRpaStagedCreateRepository interface {
 	ConfirmPlatformEntityMapping(context.Context, contract.OrganizationID, contract.ProjectID, string, int64, string, string) (PlatformEntityMapping, error)
 }
 
+type rebindPendingPlatformEntityMappingRequest struct {
+	OrganizationID      contract.OrganizationID
+	ProjectID           contract.ProjectID
+	MappingID           string
+	ExpectedVersion     int64
+	ConfigurationID     string
+	BusinessExecutionID string
+	BrowserRpaRunID     string
+	Now                 time.Time
+}
+
+type browserRpaStagedMappingRecoveryRepository interface {
+	RebindSafePendingPlatformEntityMapping(context.Context, rebindPendingPlatformEntityMappingRequest) (PlatformEntityMapping, error)
+}
+
 // BrowserRpaAuthorityProvider projects the immutable Delivery authority into
 // the shared Computer Use control plane. The browser client supplies only the
 // business execution ID; it cannot construct or widen the authority binding.
@@ -101,8 +116,33 @@ func (p BrowserRpaAuthorityProvider) initializeStagedMappings(ctx context.Contex
 	for _, item := range targets {
 		existing, getErr := repo.GetPlatformEntityMappingByInternalObject(ctx, authority.OrganizationID, authority.ProjectID, authority.AccountReferenceID, item.kind, item.id)
 		if getErr == nil {
-			if existing.Status == PlatformEntityMappingConfirmed || (existing.Status == PlatformEntityMappingPending && existing.BusinessExecutionID == authority.BusinessExecutionID && existing.BrowserRpaRunID == runID) {
+			currentConfiguration := existing.PlanID == authority.PlanID && existing.ConfigurationID == version.PlatformConfiguration.ConfigurationID
+			if existing.Status == PlatformEntityMappingConfirmed {
+				if !currentConfiguration {
+					return browserautomation.ErrInvalidContract
+				}
 				continue
+			}
+			if existing.Status == PlatformEntityMappingPending && currentConfiguration && existing.BusinessExecutionID == authority.BusinessExecutionID && existing.BrowserRpaRunID == runID {
+				continue
+			}
+			if existing.Status == PlatformEntityMappingPending {
+				recovery, supported := p.Repository.(browserRpaStagedMappingRecoveryRepository)
+				if !supported {
+					return browserautomation.ErrInvalidContract
+				}
+				rebound, recoveryErr := recovery.RebindSafePendingPlatformEntityMapping(ctx, rebindPendingPlatformEntityMappingRequest{
+					OrganizationID: authority.OrganizationID, ProjectID: authority.ProjectID,
+					MappingID: existing.ID, ExpectedVersion: existing.Version,
+					ConfigurationID:     version.PlatformConfiguration.ConfigurationID,
+					BusinessExecutionID: authority.BusinessExecutionID, BrowserRpaRunID: runID, Now: now,
+				})
+				if recoveryErr != nil {
+					return mapBrowserRpaAuthorityError(recoveryErr)
+				}
+				if rebound.BusinessExecutionID == authority.BusinessExecutionID && rebound.BrowserRpaRunID == runID {
+					continue
+				}
 			}
 			return browserautomation.ErrInvalidContract
 		}
@@ -204,7 +244,15 @@ func (p BrowserRpaAuthorityProvider) load(ctx context.Context, organizationID co
 	if err := change.Validate(); err != nil {
 		return ControlledExecution{}, ControlledChangeSet{}, RemoteWriteApproval{}, browserautomation.ErrInvalidContract
 	}
-	if err := approval.Validate(now); err != nil {
+	approvalValidationTime := now
+	if change.Binding.AuthorityOrigin == "plan_execution" &&
+		(change.Action == ControlledActionCreateProjectAndPromotions || change.Action == ControlledActionCreatePromotionsInExistingProject) {
+		// A safe Prepare retry can occur after the server-created approval TTL.
+		// The immutable plan still binds the action. Submit also requires a new
+		// five-minute final confirmation, so this does not extend click authority.
+		approvalValidationTime = approval.ApprovedAt
+	}
+	if err := approval.Validate(approvalValidationTime); err != nil {
 		return ControlledExecution{}, ControlledChangeSet{}, RemoteWriteApproval{}, browserautomation.ErrInvalidContract
 	}
 	return execution, change, approval, nil
@@ -212,7 +260,7 @@ func (p BrowserRpaAuthorityProvider) load(ctx context.Context, organizationID co
 
 func (p BrowserRpaAuthorityProvider) authorityFromLoaded(execution ControlledExecution, change ControlledChangeSet, approval RemoteWriteApproval) (browserautomation.AuthorityBinding, error) {
 	binding := approval.Binding
-	value := browserautomation.AuthorityBinding{SchemaVersion: browserautomation.AuthoritySchemaV1, OrganizationID: execution.OrganizationID, ProjectID: execution.ProjectID, BusinessExecutionID: execution.ID, ChangeSetID: change.ID, ApprovalID: approval.ID, ApprovalActionHash: approval.ActionHash, AccountReferenceID: binding.AccountReferenceID, ParentPlatformProjectID: binding.ParentPlatformProjectID, TargetMappingID: binding.TargetMappingID, TargetMappingVersion: binding.TargetMappingVersion, TargetPlatformObjectID: binding.TargetPlatformObjectID, TargetPlatformObjectKind: binding.TargetPlatformObjectKind, OperatorPrincipalID: binding.OperatorPrincipalID, SupersedesControlledChangeSetID: binding.SupersedesControlledChangeSetID, ObjectFingerprint: binding.ObjectFingerprint, Action: string(approval.Action), PlanID: binding.PlanID, PlanVersion: binding.PlanVersion, ProjectBudgetMode: binding.ProjectBudgetMode, ProjectBudgetLimitMinor: binding.ProjectBudgetLimitMinor, PromotionBudgetLimitMinor: binding.PromotionBudgetLimitMinor, BudgetLimitMinor: approval.BudgetLimitMinor, Currency: approval.Currency, PlanCanonicalHash: binding.PlanCanonicalHash, IntentCanonicalHash: binding.IntentCanonicalHash, FeedbackCanonicalHash: binding.OperatorFeedbackCanonicalHash, DecisionCanonicalHash: binding.DecisionCanonicalHash, ConfigurationCanonicalHash: binding.ConfigurationCanonicalHash, WorkflowID: binding.WorkflowID, WorkflowCanonicalHash: binding.WorkflowCanonicalHash, WorkflowStepID: browserRpaRemoteWriteStepID, SkillID: binding.SkillID, SkillVersion: binding.SkillVersion}
+	value := browserautomation.AuthorityBinding{SchemaVersion: browserautomation.AuthoritySchemaV1, AuthorityOrigin: binding.AuthorityOrigin, PreflightCanonicalHash: binding.PreflightCanonicalHash, OrganizationID: execution.OrganizationID, ProjectID: execution.ProjectID, BusinessExecutionID: execution.ID, ChangeSetID: change.ID, ApprovalID: approval.ID, ApprovalActionHash: approval.ActionHash, AccountReferenceID: binding.AccountReferenceID, ParentPlatformProjectID: binding.ParentPlatformProjectID, TargetMappingID: binding.TargetMappingID, TargetMappingVersion: binding.TargetMappingVersion, TargetPlatformObjectID: binding.TargetPlatformObjectID, TargetPlatformObjectKind: binding.TargetPlatformObjectKind, OperatorPrincipalID: binding.OperatorPrincipalID, SupersedesControlledChangeSetID: binding.SupersedesControlledChangeSetID, ObjectFingerprint: binding.ObjectFingerprint, Action: string(approval.Action), PlanID: binding.PlanID, PlanVersion: binding.PlanVersion, ProjectBudgetMode: binding.ProjectBudgetMode, ProjectBudgetLimitMinor: binding.ProjectBudgetLimitMinor, PromotionBudgetLimitMinor: binding.PromotionBudgetLimitMinor, BudgetLimitMinor: approval.BudgetLimitMinor, Currency: approval.Currency, PlanCanonicalHash: binding.PlanCanonicalHash, IntentCanonicalHash: binding.IntentCanonicalHash, FeedbackCanonicalHash: binding.OperatorFeedbackCanonicalHash, DecisionCanonicalHash: binding.DecisionCanonicalHash, ConfigurationCanonicalHash: binding.ConfigurationCanonicalHash, WorkflowID: binding.WorkflowID, WorkflowCanonicalHash: binding.WorkflowCanonicalHash, WorkflowStepID: browserRpaRemoteWriteStepID, SkillID: binding.SkillID, SkillVersion: binding.SkillVersion, ExecutionDriver: executionDriverForBinding(binding)}
 	if binding.PromotionMutation != nil {
 		value.PromotionMutation = toBrowserRpaPromotionMutation(*binding.PromotionMutation)
 	}

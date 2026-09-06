@@ -602,6 +602,7 @@ type OceanEnginePromotionDraft struct {
 	DeliveryIdentity            OceanEngineDeliveryIdentity  `json:"delivery_identity"`
 	BaseMaterialReferences      []StableReference            `json:"base_material_references"`
 	CopyItems                   []OceanEngineCopyItem        `json:"copy_items"`
+	ProductName                 string                       `json:"product_name,omitempty"`
 	ProductImageReferences      []StableReference            `json:"product_image_references,omitempty"`
 	ProductSellingPoints        []string                     `json:"product_selling_points,omitempty"`
 	NativeAnchorReference       *StableReference             `json:"native_anchor_reference,omitempty"`
@@ -705,6 +706,7 @@ type canonicalOceanEnginePromotion struct {
 	DeliveryIdentity            canonicalOceanEngineDeliveryIdentity  `json:"delivery_identity"`
 	BaseMaterialReferences      []canonicalStableReference            `json:"base_material_references"`
 	CopyItems                   []OceanEngineCopyItem                 `json:"copy_items"`
+	ProductName                 string                                `json:"product_name,omitempty"`
 	ProductImageReferences      []canonicalStableReference            `json:"product_image_references,omitempty"`
 	ProductSellingPoints        []string                              `json:"product_selling_points,omitempty"`
 	NativeAnchorReference       *canonicalStableReference             `json:"native_anchor_reference,omitempty"`
@@ -778,6 +780,7 @@ func canonicalOceanConfiguration(value *OceanEngineConfiguration) *canonicalOcea
 			DraftSchemaVersion: strings.TrimSpace(promotion.DraftSchemaVersion), PromotionDraftID: strings.TrimSpace(promotion.PromotionDraftID),
 			DeliveryIdentity:       canonicalOceanEngineDeliveryIdentity{Mode: strings.TrimSpace(promotion.DeliveryIdentity.Mode), AuthorizedIdentity: canonicalReferencePointer(promotion.DeliveryIdentity.AuthorizedIdentity)},
 			BaseMaterialReferences: canonicalReferences(promotion.BaseMaterialReferences), CopyItems: append([]OceanEngineCopyItem(nil), promotion.CopyItems...),
+			ProductName:            strings.TrimSpace(promotion.ProductName),
 			ProductImageReferences: canonicalReferences(promotion.ProductImageReferences), ProductSellingPoints: append([]string(nil), promotion.ProductSellingPoints...),
 			NativeAnchorReference: canonicalReferencePointer(promotion.NativeAnchorReference), LandingPageReference: canonicalReferencePointer(promotion.LandingPageReference),
 			DirectLinkReference: canonicalReferencePointer(promotion.DirectLinkReference), ProductReference: canonicalReferencePointer(promotion.ProductReference),
@@ -869,6 +872,17 @@ func FinalizePlatformConfiguration(value PlatformConfiguration) (PlatformConfigu
 }
 
 func (c PlatformConfiguration) validateStructure() error {
+	return c.validateStructureWithLandingPageCarrier(true)
+}
+
+// validateStoredStructure validates immutable historical data without applying
+// invariants that were added after that data was written. New writes and
+// execution paths must use validateStructure.
+func (c PlatformConfiguration) validateStoredStructure() error {
+	return c.validateStructureWithLandingPageCarrier(false)
+}
+
+func (c PlatformConfiguration) validateStructureWithLandingPageCarrier(strictLandingPageCarrier bool) error {
 	if c.SchemaVersion != PlatformConfigurationSchemaV2 {
 		return contractFailure(ContractErrorUnknownSchemaVersion, "schema_version", "platform configuration must use delivery-platform-configuration/v2")
 	}
@@ -897,7 +911,7 @@ func (c PlatformConfiguration) validateStructure() error {
 		if c.Payload.OceanEngine == nil || c.Payload.MagneticEngine != nil || c.Payload.OceanEngine.Profile != DeliveryPlatformOceanEngine {
 			return contractFailure(ContractErrorPlatformProfileMismatch, "payload.ocean_engine", "OceanEngine discriminator requires exactly one OceanEngine profile")
 		}
-		if err := validateOceanEngineConfiguration(*c.Payload.OceanEngine); err != nil {
+		if err := validateOceanEngineConfiguration(*c.Payload.OceanEngine, strictLandingPageCarrier); err != nil {
 			return err
 		}
 	case DeliveryPlatformMagneticEngine:
@@ -940,7 +954,7 @@ func (c PlatformConfiguration) Validate() error {
 	return nil
 }
 
-func validateOceanEngineConfiguration(configuration OceanEngineConfiguration) error {
+func validateOceanEngineConfiguration(configuration OceanEngineConfiguration, strictLandingPageCarrier bool) error {
 	if err := configuration.CalibrationManifest.validate("payload.ocean_engine.calibration_manifest"); err != nil {
 		return err
 	}
@@ -1028,6 +1042,11 @@ func validateOceanEngineConfiguration(configuration OceanEngineConfiguration) er
 		if err := validateReferenceSlices(promotion.ProductImageReferences, field+".product_image_references"); err != nil {
 			return err
 		}
+		if strictLandingPageCarrier {
+			if err := validateLandingPageCarrier(project.Carrier, promotion.LandingPageReference, field+".landing_page_reference"); err != nil {
+				return err
+			}
+		}
 		if promotion.BudgetAndBidding != nil {
 			if err := validateOceanEngineBudgetAndBidding(*promotion.BudgetAndBidding, field+".budget_and_bidding", true); err != nil {
 				return err
@@ -1054,6 +1073,25 @@ func validateOceanEngineConfiguration(configuration OceanEngineConfiguration) er
 		if err := validateReferenceSlices(promotion.CreativeComponentReferences, field+".creative_component_references"); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateLandingPageCarrier(carrier string, reference *StableReference, field string) error {
+	if reference == nil {
+		return nil
+	}
+	switch carrier {
+	case "orange_landing_page", "orange_landing_page_and_im":
+		if reference.ObjectKind == "owned_landing_page" {
+			return contractFailure(ContractErrorInvalidPromotion, field, "Orange landing-page carriers cannot use an owned landing page")
+		}
+	case "owned_landing_page":
+		if reference.ObjectKind == "orange_landing_page" {
+			return contractFailure(ContractErrorInvalidPromotion, field, "owned landing-page carriers cannot use an Orange landing page")
+		}
+	default:
+		return contractFailure(ContractErrorInvalidPromotion, field, "the selected carrier does not use a promotion landing page")
 	}
 	return nil
 }

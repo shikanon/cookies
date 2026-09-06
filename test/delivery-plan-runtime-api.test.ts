@@ -45,6 +45,8 @@ test('delivery plan client writes DeliveryIntent plus tagged PlatformConfigurati
   assert.equal(written.platform_configuration.payload.ocean_engine.project.marketing_purpose, 'lead_generation')
   assert.equal('product_selection_mode' in written.platform_configuration.payload.ocean_engine.project, false)
   assert.equal(written.platform_configuration.payload.ocean_engine.project.marketing_product_reference.id, 'product-1')
+  assert.equal(written.platform_configuration.payload.ocean_engine.project.deep_optimization_mode, 'disabled')
+  assert.equal(written.platform_configuration.payload.ocean_engine.project.placement_strategy, 'automatic')
   assert.equal(written.platform_configuration.payload.ocean_engine.project.carrier, 'owned_landing_page')
   assert.equal(written.platform_configuration.payload.ocean_engine.project.optimization_target_reference.audit_attributes.event_asset_type, 'web')
   assert.equal(written.platform_configuration.payload.ocean_engine.project.schedule.mode, 'fixed_range')
@@ -84,6 +86,23 @@ test('delivery plan client writes DeliveryIntent plus tagged PlatformConfigurati
   assert.equal(written.expected_version, 4)
   assert.equal(written.intent.intent_id, 'intent-plan_1-plan-v5')
   assert.equal(written.platform_configuration.configuration_id, 'configuration-plan_1-plan-v5')
+  assert.equal(written.platform_configuration.payload.ocean_engine.project.project_draft_id, 'project-plan_1-5')
+  assert.equal(written.platform_configuration.payload.ocean_engine.promotions[0].promotion_draft_id, 'promotion-plan_1-5-1')
+
+  plan.currentVersion.deliveryIntent!.payload.product_references = []
+  const editedConfiguration = structuredClone(plan.currentVersion.platformConfiguration!)
+  editedConfiguration.payload.ocean_engine!.promotions[0].base_material_references = [{
+    namespace: 'oceanengine', object_kind: 'video_material', scope: 'account:account-1', id: 'video-1', state: 'resolved',
+  }]
+  editedConfiguration.payload.ocean_engine!.promotions[0].product_image_references = [{
+    namespace: 'oceanengine', object_kind: 'product_image', scope: 'account:account-1', id: 'image-1', state: 'resolved',
+  }]
+  await deliveryPlanApi.updatePlatformConfiguration('project_1', plan, editedConfiguration)
+  assert.deepEqual(written.intent.payload.product_references.map((reference: { id?: string }) => reference.id), ['product-1'])
+  assert.deepEqual(written.intent.payload.material_references.map((reference: { id?: string }) => reference.id), ['asset-1', 'video-1', 'image-1'])
+  assert.equal(written.intent.intent_id, written.platform_configuration.intent.intent_id)
+  assert.equal(written.platform_configuration.payload.ocean_engine.project.project_draft_id, 'project-plan_1-2')
+  assert.equal(written.platform_configuration.payload.ocean_engine.promotions[0].promotion_draft_id, 'promotion-plan_1-2-1')
 })
 
 function draft(): DeliveryPlanDraft {

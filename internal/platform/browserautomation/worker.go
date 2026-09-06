@@ -38,10 +38,11 @@ type PreparedPage struct {
 // Typed adapter failures. Worker.Prepare classifies them into stable blocking
 // reasons; adapters must wrap these instead of returning free-form text.
 var (
-	ErrAccountMismatch        = errors.New("browser rpa account mismatch")
-	ErrPageDrift              = errors.New("browser rpa page drift")
-	ErrEnvironmentUnavailable = errors.New("browser rpa environment unavailable")
-	ErrResultUnknown          = errors.New("browser rpa result unknown")
+	ErrAccountMismatch          = errors.New("browser rpa account mismatch")
+	ErrPageDrift                = errors.New("browser rpa page drift")
+	ErrEnvironmentUnavailable   = errors.New("browser rpa environment unavailable")
+	ErrFinalConfirmationInvalid = errors.New("browser rpa final confirmation invalid")
+	ErrResultUnknown            = errors.New("browser rpa result unknown")
 )
 
 type WorkerAdapter interface {
@@ -49,10 +50,22 @@ type WorkerAdapter interface {
 	Submit(context.Context, BrowserRpaRun, ControlledActionAttempt, string) (WorkerOutcome, PreparedPage, error)
 }
 
+// WorkerSubmitGate checks deployment gates before a one-time confirmation is
+// consumed. API adapters use it for feature flags and account allowlists.
+type WorkerSubmitGate interface {
+	CheckSubmit(BrowserRpaRun) error
+}
+
 // WorkerPlanAdapter is optional. Real Runner v3 adapters implement it to
 // expose the exact prepare plan without opening a page or changing a run.
 type WorkerPlanAdapter interface {
 	Plan(context.Context, BrowserRpaRun) (json.RawMessage, error)
+}
+
+// WorkerResultReconciliationAdapter performs a read-only platform query. It
+// must not authorize or perform a controlled action.
+type WorkerResultReconciliationAdapter interface {
+	ReconcileResultUnknown(context.Context, BrowserRpaRun) (PreparedPage, error)
 }
 
 const EdgeSessionProbeSchemaV1 = "browser-rpa-edge-session-probe/v1"
@@ -75,8 +88,8 @@ func (p EdgeSessionProbe) Ready() bool {
 }
 
 // WorkerSessionProbeAdapter is optional for legacy adapters. The production
-// Runner v3 adapter implements it. Worker.Prepare repeats the probe so a UI
-// result cannot become an unsafe, stale authorization.
+// Runner v3 adapter implements it. Prepare performs its own page and account
+// checks in the same CDP connection that applies the form plan.
 type WorkerSessionProbeAdapter interface {
 	CheckSession(context.Context, BrowserRpaRun) (EdgeSessionProbe, error)
 }
@@ -152,8 +165,19 @@ func (a DeterministicFakeAdapter) Submit(_ context.Context, run BrowserRpaRun, _
 }
 
 type Worker struct {
-	Service Service
-	Adapter WorkerAdapter
+	Service        Service
+	Adapter        WorkerAdapter
+	DriverAdapters map[ExecutionDriver]WorkerAdapter
+}
+
+func (w Worker) adapterFor(run BrowserRpaRun) (WorkerAdapter, error) {
+	if adapter := w.DriverAdapters[run.EffectiveExecutionDriver()]; adapter != nil {
+		return adapter, nil
+	}
+	if run.EffectiveExecutionDriver() == ExecutionDriverPlaywrightEdgeV3 && w.Adapter != nil {
+		return w.Adapter, nil
+	}
+	return nil, ErrEnvironmentUnavailable
 }
 
 func (w Worker) CheckSession(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, runID string) (EdgeSessionProbe, error) {
@@ -161,7 +185,11 @@ func (w Worker) CheckSession(ctx context.Context, org contract.OrganizationID, p
 	if err != nil {
 		return EdgeSessionProbe{}, err
 	}
-	probe, ok := w.Adapter.(WorkerSessionProbeAdapter)
+	adapter, adapterErr := w.adapterFor(run)
+	if adapterErr != nil {
+		return EdgeSessionProbe{}, adapterErr
+	}
+	probe, ok := adapter.(WorkerSessionProbeAdapter)
 	if !ok {
 		return EdgeSessionProbe{}, ErrEnvironmentUnavailable
 	}
@@ -173,10 +201,16 @@ func (w Worker) Plan(ctx context.Context, org contract.OrganizationID, project c
 	if err != nil {
 		return nil, err
 	}
-	if run.Paused || run.TakeoverActive || terminalState(run.State) {
+	// Plan generation is read-only. Keep it available for terminal Runs so an
+	// operator can reproduce and diagnose the exact frozen Runner input.
+	if run.TakeoverActive {
 		return nil, ErrInvalidTransition
 	}
-	planner, ok := w.Adapter.(WorkerPlanAdapter)
+	adapter, adapterErr := w.adapterFor(run)
+	if adapterErr != nil {
+		return nil, adapterErr
+	}
+	planner, ok := adapter.(WorkerPlanAdapter)
 	if !ok {
 		return nil, ErrEnvironmentUnavailable
 	}
@@ -191,6 +225,10 @@ func (w Worker) Prepare(ctx context.Context, org contract.OrganizationID, projec
 	if run.Paused || run.TakeoverActive {
 		return BrowserRpaRun{}, ErrInvalidTransition
 	}
+	adapter, err := w.adapterFor(run)
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
 	if run.State == RunQueued {
 		run, err = w.Service.TransitionRun(ctx, org, project, runID, run.Version, RunEnvironmentCheck, "")
 		if err != nil {
@@ -204,28 +242,32 @@ func (w Worker) Prepare(ctx context.Context, org contract.OrganizationID, projec
 	if err != nil {
 		return BrowserRpaRun{}, err
 	}
-	if probeAdapter, ok := w.Adapter.(WorkerSessionProbeAdapter); ok {
-		probe, probeErr := probeAdapter.CheckSession(ctx, run)
-		if probeErr != nil || !probe.Ready() {
-			reason := BlockPageDrift
-			if probe.Reason == "account_mismatch" || errors.Is(probeErr, ErrAccountMismatch) {
-				reason = BlockAccountMismatch
-			}
-			return w.Service.TransitionRun(ctx, org, project, runID, run.Version, RunFailed, reason)
-		}
+	step := RunStep{ID: run.ID + "-prepare-v" + strconv.FormatInt(run.Version, 10), RunID: run.ID, Sequence: int(run.Version)*10 + 1, WorkflowStepID: run.Authority.WorkflowStepID, Action: "prepare_and_readback", Status: StepRunning, Attempt: 1, Version: 1}
+	if err := w.Service.Repository.PutStep(ctx, org, project, step); err != nil {
+		return BrowserRpaRun{}, err
 	}
-	prepared, err := w.Adapter.Prepare(ctx, run)
+	failPrepare := func(reason BlockingReason) (BrowserRpaRun, error) {
+		step.Status = StepFailed
+		step.BlockingReason = reason
+		step.Version++
+		_ = w.Service.Repository.PutStep(ctx, org, project, step)
+		return w.transitionTerminal(ctx, org, project, runID, run.Version, RunFailed, reason)
+	}
+	prepared, err := adapter.Prepare(ctx, run)
 	if err != nil {
 		reason := BlockPageDrift
 		if errors.Is(err, ErrAccountMismatch) {
 			reason = BlockAccountMismatch
+		} else if errors.Is(err, ErrEnvironmentUnavailable) {
+			reason = BlockRunnerFailure
 		}
-		return w.Service.TransitionRun(ctx, org, project, runID, run.Version, RunFailed, reason)
+		return failPrepare(reason)
 	}
 	if changesExistingPromotionAction(run.Authority.Action) && run.Authority.validatePreSubmitReadback(prepared.Readback, w.Service.now()) != nil {
-		return w.Service.TransitionRun(ctx, org, project, runID, run.Version, RunFailed, BlockPageDrift)
+		return failPrepare(BlockPageDrift)
 	}
-	step := RunStep{ID: run.ID + "-prepare-v" + strconv.FormatInt(run.Version, 10), RunID: run.ID, Sequence: int(run.Version)*10 + 1, WorkflowStepID: run.Authority.WorkflowStepID, Action: "prepare_and_readback", Status: StepSucceeded, Attempt: 1, Version: 1}
+	step.Status = StepSucceeded
+	step.Version++
 	if err := w.Service.Repository.PutStep(ctx, org, project, step); err != nil {
 		return BrowserRpaRun{}, err
 	}
@@ -241,6 +283,15 @@ func (w Worker) Submit(ctx context.Context, request WorkerSubmitRequest) (Browse
 	run, err := w.Service.Repository.GetRun(ctx, request.Authorize.OrganizationID, request.Authorize.ProjectID, request.Authorize.RunID)
 	if err != nil {
 		return BrowserRpaRun{}, err
+	}
+	adapter, err := w.adapterFor(run)
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
+	if gate, ok := adapter.(WorkerSubmitGate); ok {
+		if err := gate.CheckSubmit(run); err != nil {
+			return BrowserRpaRun{}, err
+		}
 	}
 	stepAction := "submit_platform_configuration"
 	if stagedCreateAction(run.Authority.Action) {
@@ -263,7 +314,7 @@ func (w Worker) Submit(ctx context.Context, request WorkerSubmitRequest) (Browse
 	if err := w.Service.Repository.PutStep(ctx, run.OrganizationID, run.ProjectID, step); err != nil {
 		return BrowserRpaRun{}, err
 	}
-	outcome, page, adapterErr := w.Adapter.Submit(ctx, run, attempt, request.Authorize.Token)
+	outcome, page, adapterErr := adapter.Submit(ctx, run, attempt, request.Authorize.Token)
 	if adapterErr != nil {
 		step.Status = StepFailed
 		step.Version++
@@ -277,8 +328,10 @@ func (w Worker) Submit(ctx context.Context, request WorkerSubmitRequest) (Browse
 			reason = BlockAccountMismatch
 		} else if errors.Is(adapterErr, ErrEnvironmentUnavailable) {
 			reason = BlockResultReconciliation
+		} else if errors.Is(adapterErr, ErrFinalConfirmationInvalid) {
+			reason = BlockFinalConfirmationInvalid
 		}
-		return w.Service.TransitionRun(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunFailed, reason)
+		return w.transitionTerminal(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunFailed, reason)
 	}
 	if outcome == WorkerResultUnknown {
 		step.Status = StepResultUnknown
@@ -288,7 +341,7 @@ func (w Worker) Submit(ctx context.Context, request WorkerSubmitRequest) (Browse
 		if err := w.Service.Repository.CompleteControlledAction(ctx, run.OrganizationID, run.ProjectID, attempt.ID, ControlledActionResultUnknown); err != nil {
 			return BrowserRpaRun{}, err
 		}
-		return w.Service.TransitionRun(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunResultUnknown, BlockResultReconciliation)
+		return w.transitionTerminal(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunResultUnknown, BlockResultReconciliation)
 	}
 	attemptStatus := ControlledActionVerified
 	if outcome == WorkerFailed {
@@ -333,13 +386,17 @@ func (w Worker) Submit(ctx context.Context, request WorkerSubmitRequest) (Browse
 		}
 		recorder, ok := w.Service.AuthorityProvider.(CreatedObjectRecorder)
 		if !ok {
-			return w.Service.TransitionRun(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunFailed, BlockResultReconciliation)
+			return w.transitionTerminal(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunFailed, BlockResultReconciliation)
 		}
 		complete, recordErr := recorder.RecordCreatedObject(ctx, run.Authority, run.ID, page, resultEvidenceID, listEvidenceID, w.Service.now())
 		if recordErr != nil {
-			return w.Service.TransitionRun(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunFailed, BlockResultReconciliation)
+			return w.transitionTerminal(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunFailed, BlockResultReconciliation)
 		}
 		if outcome == WorkerSuccess && !complete {
+			run, releaseErr := w.releaseRunLease(ctx, run)
+			if releaseErr != nil {
+				return run, releaseErr
+			}
 			return w.Service.TransitionRun(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunEnvironmentCheck, "")
 		}
 	}
@@ -347,12 +404,51 @@ func (w Worker) Submit(ctx context.Context, request WorkerSubmitRequest) (Browse
 	reason := BlockingReason("")
 	if outcome == WorkerFailed {
 		terminal = RunFailed
+		if page.Readback["final_click_performed"] == "true" && page.Readback["reconciliation"] == "not_found" && page.Readback["platform_write_request_observed"] == "false" {
+			reason = BlockTargetEffectNotObserved
+		}
 	}
 	if outcome == WorkerPartial {
 		terminal = RunPartial
 		reason = BlockResultReconciliation
 	}
-	return w.Service.TransitionRun(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, terminal, reason)
+	return w.transitionTerminal(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, terminal, reason)
+}
+
+func (w Worker) releaseRunLease(ctx context.Context, run BrowserRpaRun) (BrowserRpaRun, error) {
+	if run.LeaseID == "" {
+		return run, nil
+	}
+	lease, err := w.Service.Repository.GetLease(ctx, run.OrganizationID, run.ProjectID, run.LeaseID)
+	if err != nil {
+		return run, err
+	}
+	if lease.ReleasedAt != nil {
+		return run, ErrLeaseUnavailable
+	}
+	released, err := w.Service.ReleaseRunLease(ctx, run.OrganizationID, run.ProjectID, run.ID, lease.ID, run.Version, lease.Version, lease.FencingToken)
+	if err != nil {
+		return run, err
+	}
+	return released.Run, nil
+}
+
+func (w Worker) transitionTerminal(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, runID string, expected int64, state RunState, reason BlockingReason) (BrowserRpaRun, error) {
+	run, err := w.Service.TransitionRun(ctx, org, project, runID, expected, state, reason)
+	if err != nil || run.LeaseID == "" {
+		return run, err
+	}
+	lease, leaseErr := w.Service.Repository.GetLease(ctx, org, project, run.LeaseID)
+	if leaseErr != nil || lease.ReleasedAt != nil {
+		return run, nil
+	}
+	released, releaseErr := w.Service.ReleaseRunLease(ctx, org, project, run.ID, lease.ID, run.Version, lease.Version, lease.FencingToken)
+	if releaseErr != nil {
+		// The run is already terminal. An expired lease can be reclaimed by the
+		// next acquisition. Do not replace the terminal result with a 500.
+		return run, nil
+	}
+	return released.Run, nil
 }
 
 func (w Worker) appendEvidence(ctx context.Context, run BrowserRpaRun, step RunStep, page PreparedPage) error {
@@ -362,7 +458,7 @@ func (w Worker) appendEvidence(ctx context.Context, run BrowserRpaRun, step RunS
 
 func (w Worker) appendEvidenceWithID(ctx context.Context, run BrowserRpaRun, step RunStep, page PreparedPage) (string, error) {
 	now := w.Service.now()
-	id, err := w.Service.newID("brpa_evidence")
+	id, err := w.Service.newID(browserRpaEvidenceIDPrefix)
 	if err != nil {
 		return "", err
 	}
@@ -383,6 +479,114 @@ func (w Worker) appendEvidenceWithID(ctx context.Context, run BrowserRpaRun, ste
 		return "", err
 	}
 	return id, nil
+}
+
+// ReconcileResultUnknown records a read-only platform query after one final
+// click produced an unknown result. It never authorizes or performs another
+// controlled action.
+func (w Worker) ReconcileResultUnknown(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, runID string, page PreparedPage) (BrowserRpaRun, error) {
+	run, err := w.Service.Repository.GetRun(ctx, org, project, runID)
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
+	reconciliation := page.Readback["reconciliation"]
+	matched := reconciliation == "matched"
+	confirmedNoEffect := reconciliation == "not_found" && page.Readback["read_only_reconciliation"] == "true" && page.Readback["platform_write_performed"] == "false" && page.Readback["exact_name_matches"] == "0"
+	if run.State != RunResultUnknown || run.LeaseID != "" || !stagedCreateAction(run.Authority.Action) || page.InternalObjectID == "" || (page.InternalObjectKind != "project" && page.InternalObjectKind != "promotion") || (!matched && !confirmedNoEffect) {
+		return BrowserRpaRun{}, ErrInvalidTransition
+	}
+	if matched && (!numericReadbackID(page.Readback["platform_object_id"]) || page.Readback["field_reconciliation_status"] == "not_checked") {
+		return BrowserRpaRun{}, ErrInvalidTransition
+	}
+	steps, err := w.Service.Repository.ListSteps(ctx, org, project, run.ID)
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
+	evidence, err := w.Service.Repository.ListEvidence(ctx, org, project, run.ID)
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
+	unknownStepIDs := map[string]struct{}{}
+	for _, step := range steps {
+		if step.Status == StepResultUnknown {
+			unknownStepIDs[step.ID] = struct{}{}
+		}
+	}
+	clicked := false
+	for _, item := range evidence {
+		if _, ok := unknownStepIDs[item.StepID]; ok && item.FieldReadback["final_click_performed"] == "true" {
+			clicked = true
+			break
+		}
+	}
+	if matched && !clicked {
+		return BrowserRpaRun{}, ErrInvalidTransition
+	}
+	resultStep := RunStep{ID: run.ID + "-reidentified-v" + strconv.FormatInt(run.Version, 10), RunID: run.ID, Sequence: int(run.Version)*10 + 1, WorkflowStepID: run.Authority.WorkflowStepID, Action: string(TakeoverResultObserved), Status: StepSucceeded, Attempt: 1, Version: 1}
+	if err := w.Service.Repository.PutStep(ctx, org, project, resultStep); err != nil {
+		return BrowserRpaRun{}, err
+	}
+	resultEvidenceID, err := w.appendEvidenceWithID(ctx, run, resultStep, page)
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
+	listStep := RunStep{ID: resultStep.ID + "-list", RunID: run.ID, Sequence: resultStep.Sequence + 1, WorkflowStepID: run.Authority.WorkflowStepID, Action: string(TakeoverListConfirmed), Status: StepSucceeded, Attempt: 1, Version: 1}
+	if err := w.Service.Repository.PutStep(ctx, org, project, listStep); err != nil {
+		return BrowserRpaRun{}, err
+	}
+	listEvidenceID, err := w.appendEvidenceWithID(ctx, run, listStep, page)
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
+	if confirmedNoEffect {
+		return w.Service.TransitionRun(ctx, org, project, run.ID, run.Version, RunFailed, BlockTargetEffectNotObserved)
+	}
+	recorder, ok := w.Service.AuthorityProvider.(CreatedObjectRecorder)
+	if !ok {
+		return BrowserRpaRun{}, ErrInvalidContract
+	}
+	complete, err := recorder.RecordCreatedObject(ctx, run.Authority, run.ID, page, resultEvidenceID, listEvidenceID, w.Service.now())
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
+	next := RunEnvironmentCheck
+	if complete {
+		next = RunSucceeded
+	}
+	return w.Service.TransitionRun(ctx, org, project, run.ID, run.Version, next, "")
+}
+
+// ReconcileUnknownFromPlatform runs the adapter's query-only workflow and
+// records its result. It never issues a final confirmation or a submit token.
+func (w Worker) ReconcileUnknownFromPlatform(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, runID string) (BrowserRpaRun, error) {
+	run, err := w.Service.Repository.GetRun(ctx, org, project, runID)
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
+	if run.State != RunResultUnknown || run.LeaseID != "" {
+		return BrowserRpaRun{}, ErrInvalidTransition
+	}
+	adapter, ok := w.Adapter.(WorkerResultReconciliationAdapter)
+	if !ok {
+		return BrowserRpaRun{}, ErrInvalidContract
+	}
+	page, err := adapter.ReconcileResultUnknown(ctx, run)
+	if err != nil {
+		return BrowserRpaRun{}, err
+	}
+	return w.ReconcileResultUnknown(ctx, org, project, runID, page)
+}
+
+func numericReadbackID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func stagedCreateAction(action string) bool {

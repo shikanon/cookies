@@ -2,6 +2,7 @@ package browserautomation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -9,9 +10,17 @@ import (
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
 
+type submitGateAdapter struct {
+	DeterministicFakeAdapter
+	err error
+}
+
+func (a submitGateAdapter) CheckSubmit(BrowserRpaRun) error { return a.err }
+
 type stagedRecorderProvider struct {
 	recorded []PreparedPage
 	pairs    [][2]string
+	complete bool
 }
 
 func (*stagedRecorderProvider) ResolveAuthority(context.Context, contract.OrganizationID, contract.ProjectID, string, time.Time) (AuthorityResolution, error) {
@@ -26,7 +35,130 @@ func (*stagedRecorderProvider) VerifyAuthority(context.Context, AuthorityBinding
 func (p *stagedRecorderProvider) RecordCreatedObject(_ context.Context, _ AuthorityBinding, _ string, page PreparedPage, resultID, listID string, _ time.Time) (bool, error) {
 	p.recorded = append(p.recorded, page)
 	p.pairs = append(p.pairs, [2]string{resultID, listID})
+	if p.complete {
+		return true, nil
+	}
 	return len(p.recorded) == 2, nil
+}
+
+func TestWorkerReconcilesUnknownResultWithoutAnotherControlledAction(t *testing.T) {
+	now := time.Date(2026, 8, 30, 20, 45, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	provider := &stagedRecorderProvider{complete: true}
+	counter := 0
+	service := Service{Repository: repo, AuthorityProvider: provider, Now: func() time.Time { return now }, NewID: func(prefix string) (string, error) {
+		counter++
+		return fmt.Sprintf("%s_%d", prefix, counter), nil
+	}}
+	run := validRun(now)
+	run.State = RunResultUnknown
+	if _, _, err := repo.CreateRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	unknownStep := RunStep{ID: "submit_unknown", RunID: run.ID, Sequence: 1, WorkflowStepID: run.Authority.WorkflowStepID, Action: string(TakeoverResultUnknown), Status: StepResultUnknown, Attempt: 1, Version: 1}
+	if err := repo.PutStep(context.Background(), run.OrganizationID, run.ProjectID, unknownStep); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AppendEvidence(context.Background(), Evidence{SchemaVersion: EvidenceSchemaV1, ID: "evidence_unknown", OrganizationID: run.OrganizationID, ProjectID: run.ProjectID, RunID: run.ID, StepID: unknownStep.ID, FieldReadback: map[string]string{"final_click_performed": "true"}, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := Worker{Service: service}
+	result, err := worker.ReconcileResultUnknown(context.Background(), run.OrganizationID, run.ProjectID, run.ID, PreparedPage{
+		InternalObjectKind: "promotion",
+		InternalObjectID:   "promotion-draft-1",
+		Readback: map[string]string{
+			"platform_object_id":          "7679817347264446507",
+			"platform_status":             "pending_review",
+			"reconciliation":              "matched",
+			"field_reconciliation_status": "matched",
+			"final_click_performed":       "false",
+			"recovery_mode":               "query_only",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != RunSucceeded {
+		t.Fatalf("state=%s want=%s", result.State, RunSucceeded)
+	}
+	if len(provider.recorded) != 1 || provider.recorded[0].Readback["recovery_mode"] != "query_only" {
+		t.Fatalf("recorded=%#v", provider.recorded)
+	}
+	if len(repo.attempts) != 0 {
+		t.Fatalf("controlled actions=%d want=0", len(repo.attempts))
+	}
+	evidence, err := repo.ListEvidence(context.Background(), run.OrganizationID, run.ProjectID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 3 {
+		t.Fatalf("evidence=%d want=3", len(evidence))
+	}
+}
+
+func TestWorkerRejectsUnknownResultReconciliationWithoutFinalClickEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 30, 20, 45, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	provider := &stagedRecorderProvider{complete: true}
+	service := Service{Repository: repo, AuthorityProvider: provider, Now: func() time.Time { return now }}
+	run := validRun(now)
+	run.State = RunResultUnknown
+	if _, _, err := repo.CreateRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.PutStep(context.Background(), run.OrganizationID, run.ProjectID, RunStep{ID: "submit_unknown", RunID: run.ID, Sequence: 1, Status: StepResultUnknown}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (Worker{Service: service}).ReconcileResultUnknown(context.Background(), run.OrganizationID, run.ProjectID, run.ID, PreparedPage{
+		InternalObjectKind: "promotion",
+		InternalObjectID:   "promotion-draft-1",
+		Readback: map[string]string{
+			"platform_object_id":          "7679817347264446507",
+			"reconciliation":              "matched",
+			"field_reconciliation_status": "matched",
+		},
+	})
+	if err != ErrInvalidTransition {
+		t.Fatalf("err=%v want=%v", err, ErrInvalidTransition)
+	}
+	if len(provider.recorded) != 0 || len(repo.attempts) != 0 {
+		t.Fatalf("recorded=%d controlled actions=%d", len(provider.recorded), len(repo.attempts))
+	}
+}
+
+func TestWorkerRecordsReadOnlyNoEffectAndMakesRunSafelyFailed(t *testing.T) {
+	now := time.Date(2026, 8, 30, 20, 45, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	service := Service{Repository: repo, AuthorityProvider: &stagedRecorderProvider{complete: true}, Now: func() time.Time { return now }}
+	run := validRun(now)
+	run.State = RunResultUnknown
+	if _, _, err := repo.CreateRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.PutStep(context.Background(), run.OrganizationID, run.ProjectID, RunStep{ID: "submit_unknown", RunID: run.ID, Sequence: 1, Status: StepResultUnknown}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (Worker{Service: service}).ReconcileResultUnknown(context.Background(), run.OrganizationID, run.ProjectID, run.ID, PreparedPage{
+		InternalObjectKind: "promotion",
+		InternalObjectID:   "promotion-draft-1",
+		Readback: map[string]string{
+			"reconciliation":           "not_found",
+			"read_only_reconciliation": "true",
+			"platform_write_performed": "false",
+			"exact_name_matches":       "0",
+			"query_attempts":           "3",
+			"final_click_performed":    "false",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != RunFailed || result.BlockingReason != BlockTargetEffectNotObserved {
+		t.Fatalf("run=%#v", result)
+	}
 }
 
 type stagedWorkerAdapter struct{ stage int }
@@ -36,6 +168,48 @@ func (a *stagedWorkerAdapter) Prepare(context.Context, BrowserRpaRun) (PreparedP
 }
 
 type driftedStagedWorkerAdapter struct{}
+
+type unavailableWorkerAdapter struct{}
+
+type probeCountingWorkerAdapter struct {
+	probeCalls   int
+	prepareCalls int
+}
+
+type driverRecordingAdapter struct {
+	prepareCalls int
+}
+
+func (a *driverRecordingAdapter) Prepare(_ context.Context, _ BrowserRpaRun) (PreparedPage, error) {
+	a.prepareCalls++
+	return PreparedPage{Readback: map[string]string{}}, nil
+}
+
+func (*driverRecordingAdapter) Submit(context.Context, BrowserRpaRun, ControlledActionAttempt, string) (WorkerOutcome, PreparedPage, error) {
+	return WorkerSuccess, PreparedPage{}, nil
+}
+
+func (a *probeCountingWorkerAdapter) CheckSession(context.Context, BrowserRpaRun) (EdgeSessionProbe, error) {
+	a.probeCalls++
+	return EdgeSessionProbe{SchemaVersion: EdgeSessionProbeSchemaV1, Status: "ready", Reason: "session_ready", CDPAvailable: true, OceanEnginePageAvailable: true, LoggedIn: true, AccountMatched: true}, nil
+}
+
+func (a *probeCountingWorkerAdapter) Prepare(context.Context, BrowserRpaRun) (PreparedPage, error) {
+	a.prepareCalls++
+	return PreparedPage{Readback: map[string]string{}}, nil
+}
+
+func (*probeCountingWorkerAdapter) Submit(context.Context, BrowserRpaRun, ControlledActionAttempt, string) (WorkerOutcome, PreparedPage, error) {
+	return WorkerSuccess, PreparedPage{}, nil
+}
+
+func (unavailableWorkerAdapter) Prepare(context.Context, BrowserRpaRun) (PreparedPage, error) {
+	return PreparedPage{}, ErrEnvironmentUnavailable
+}
+
+func (unavailableWorkerAdapter) Submit(context.Context, BrowserRpaRun, ControlledActionAttempt, string) (WorkerOutcome, PreparedPage, error) {
+	return WorkerFailed, PreparedPage{}, ErrEnvironmentUnavailable
+}
 
 func (driftedStagedWorkerAdapter) Prepare(context.Context, BrowserRpaRun) (PreparedPage, error) {
 	return PreparedPage{Readback: map[string]string{}, DiffKeys: []string{}, InternalObjectKind: "promotion", InternalObjectID: "promotion-draft-1"}, nil
@@ -85,6 +259,86 @@ func TestDeterministicFakeWorkerTerminalOutcomes(t *testing.T) {
 	}
 }
 
+func TestWorkerDispatchesTheRunOnlyToItsFrozenExecutionDriver(t *testing.T) {
+	worker, _, repo, run, _ := fakeWorkerFixture(WorkerSuccess)
+	playwright := &driverRecordingAdapter{}
+	webAPI := &driverRecordingAdapter{}
+	run.ExecutionDriver = ExecutionDriverPlaywrightEdgeV3
+	run.Authority.ExecutionDriver = ExecutionDriverPlaywrightEdgeV3
+	repo.runs[scopeKey(run.OrganizationID, run.ProjectID, run.ID)] = run
+	worker.Adapter = nil
+	worker.DriverAdapters = map[ExecutionDriver]WorkerAdapter{
+		ExecutionDriverPlaywrightEdgeV3:  playwright,
+		ExecutionDriverOceanEngineWebAPI: webAPI,
+	}
+
+	if _, err := worker.Prepare(context.Background(), run.OrganizationID, run.ProjectID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if playwright.prepareCalls != 1 || webAPI.prepareCalls != 0 {
+		t.Fatalf("playwright calls=%d web API calls=%d", playwright.prepareCalls, webAPI.prepareCalls)
+	}
+}
+
+func TestWorkerReleasesProfileLeaseAtTerminalState(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	counter := 0
+	service := Service{Repository: repo, Now: func() time.Time { return now }, NewID: func(prefix string) (string, error) {
+		counter++
+		return fmt.Sprintf("%s_%d", prefix, counter), nil
+	}}
+	run := validRun(now)
+	if _, _, err := service.CreateRun(context.Background(), CreateRunRequest{Run: run}); err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := service.AcquireRunLease(context.Background(), run.OrganizationID, run.ProjectID, run.ID, run.Version, "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := Worker{Service: service, Adapter: DeterministicFakeAdapter{Outcome: WorkerFailed, AccountID: run.AccountID}}
+	prepared, err := worker.Prepare(context.Background(), run.OrganizationID, run.ProjectID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := service.IssueFinalConfirmation(context.Background(), run.OrganizationID, run.ProjectID, run.ID, prepared.Version, prepared.Authority.ApprovalActionHash, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := worker.Submit(context.Background(), WorkerSubmitRequest{Authorize: AuthorizeActionRequest{OrganizationID: run.OrganizationID, ProjectID: run.ProjectID, RunID: run.ID, StepID: "submit_terminal", ConfirmationID: issued.Confirmation.ID, Token: issued.Token, LeaseID: acquired.Lease.ID, FencingToken: acquired.Lease.FencingToken, IdempotencyKey: "attempt_terminal"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := repo.GetLease(context.Background(), run.OrganizationID, run.ProjectID, acquired.Lease.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != RunFailed || result.LeaseID != "" || lease.ReleasedAt == nil {
+		t.Fatalf("result=%#v lease=%#v", result, lease)
+	}
+}
+
+func TestWorkerSubmitGateDoesNotConsumeConfirmation(t *testing.T) {
+	worker, service, _, run, _ := fakeWorkerFixture(WorkerSuccess)
+	prepared, err := worker.Prepare(context.Background(), run.OrganizationID, run.ProjectID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := service.IssueFinalConfirmation(context.Background(), run.OrganizationID, run.ProjectID, run.ID, prepared.Version, prepared.Authority.ApprovalActionHash, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateErr := errors.New("write gate closed")
+	worker.Adapter = submitGateAdapter{DeterministicFakeAdapter: DeterministicFakeAdapter{Outcome: WorkerSuccess, AccountID: run.AccountID}, err: gateErr}
+	request := AuthorizeActionRequest{OrganizationID: run.OrganizationID, ProjectID: run.ProjectID, RunID: run.ID, StepID: "submit_gate", ConfirmationID: issued.Confirmation.ID, Token: issued.Token, LeaseID: "lease_1", FencingToken: 1, IdempotencyKey: "attempt_gate"}
+	if _, err := worker.Submit(context.Background(), WorkerSubmitRequest{Authorize: request}); !errors.Is(err, gateErr) {
+		t.Fatalf("gate error=%v", err)
+	}
+	if _, err := service.AuthorizeAction(context.Background(), request); err != nil {
+		t.Fatalf("confirmation was consumed by the gate: %v", err)
+	}
+}
+
 func TestWorkerAdvancesStagedCreatesAndUsesFreshConfirmationPerObject(t *testing.T) {
 	now := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
 	repo := NewMemoryRepository()
@@ -96,15 +350,18 @@ func TestWorkerAdvancesStagedCreatesAndUsesFreshConfirmationPerObject(t *testing
 	}}
 	run := validRun(now)
 	run.Authority.Action = "create_project_and_promotions"
-	if _, _, err := service.CreateRun(context.Background(), CreateRunRequest{Run: run}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.AcquireLease(context.Background(), validLease(now)); err != nil {
+	created, _, err := service.CreateRun(context.Background(), CreateRunRequest{Run: run})
+	if err != nil {
 		t.Fatal(err)
 	}
 	worker := Worker{Service: service, Adapter: &stagedWorkerAdapter{}}
-	current := run
+	current := created
 	for stage := 0; stage < 2; stage++ {
+		acquired, err := service.AcquireRunLease(context.Background(), current.OrganizationID, current.ProjectID, current.ID, current.Version, fmt.Sprintf("worker_%d", stage))
+		if err != nil {
+			t.Fatal(err)
+		}
+		current = acquired.Run
 		prepared, err := worker.Prepare(context.Background(), current.OrganizationID, current.ProjectID, current.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -113,7 +370,7 @@ func TestWorkerAdvancesStagedCreatesAndUsesFreshConfirmationPerObject(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		current, err = worker.Submit(context.Background(), WorkerSubmitRequest{Authorize: AuthorizeActionRequest{OrganizationID: current.OrganizationID, ProjectID: current.ProjectID, RunID: current.ID, StepID: fmt.Sprintf("submit_%d", stage), ConfirmationID: issued.Confirmation.ID, Token: issued.Token, LeaseID: "lease_1", FencingToken: 1, IdempotencyKey: fmt.Sprintf("attempt_%d", stage)}})
+		current, err = worker.Submit(context.Background(), WorkerSubmitRequest{Authorize: AuthorizeActionRequest{OrganizationID: current.OrganizationID, ProjectID: current.ProjectID, RunID: current.ID, StepID: fmt.Sprintf("submit_%d", stage), ConfirmationID: issued.Confirmation.ID, Token: issued.Token, LeaseID: acquired.Lease.ID, FencingToken: acquired.Lease.FencingToken, IdempotencyKey: fmt.Sprintf("attempt_%d", stage)}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,6 +380,10 @@ func TestWorkerAdvancesStagedCreatesAndUsesFreshConfirmationPerObject(t *testing
 		}
 		if current.State != want {
 			t.Fatalf("stage %d state=%s want=%s", stage, current.State, want)
+		}
+		lease, leaseErr := repo.GetLease(context.Background(), current.OrganizationID, current.ProjectID, acquired.Lease.ID)
+		if leaseErr != nil || current.LeaseID != "" || lease.ReleasedAt == nil {
+			t.Fatalf("stage %d run=%#v lease=%#v err=%v", stage, current, lease, leaseErr)
 		}
 	}
 	if len(provider.recorded) != 2 || provider.recorded[0].InternalObjectKind != "project" || provider.recorded[1].InternalObjectKind != "promotion" {
@@ -197,6 +458,31 @@ func TestFakeWorkerRejectsAccountDriftBeforeConfirmation(t *testing.T) {
 	}
 	if result.State != RunFailed || result.BlockingReason != BlockAccountMismatch {
 		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestWorkerDoesNotReportRunnerInfrastructureFailureAsPageDrift(t *testing.T) {
+	worker, _, _, run, _ := fakeWorkerFixture(WorkerSuccess)
+	worker.Adapter = unavailableWorkerAdapter{}
+	result, err := worker.Prepare(context.Background(), run.OrganizationID, run.ProjectID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != RunFailed || result.BlockingReason != BlockRunnerFailure {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestWorkerPrepareDoesNotOpenASecondSessionProbeConnection(t *testing.T) {
+	worker, _, _, run, _ := fakeWorkerFixture(WorkerSuccess)
+	adapter := &probeCountingWorkerAdapter{}
+	worker.Adapter = adapter
+	result, err := worker.Prepare(context.Background(), run.OrganizationID, run.ProjectID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != RunAwaitingConfirmation || adapter.probeCalls != 0 || adapter.prepareCalls != 1 {
+		t.Fatalf("result=%#v probe_calls=%d prepare_calls=%d", result, adapter.probeCalls, adapter.prepareCalls)
 	}
 }
 

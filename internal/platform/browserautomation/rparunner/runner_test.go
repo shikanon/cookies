@@ -73,6 +73,16 @@ func TestRunnerTreatsUnparseableOutputAsInfrastructureFailure(t *testing.T) {
 	}
 }
 
+func TestParseResultAcceptsScalarRunnerV3Readback(t *testing.T) {
+	result, err := parseResult([]byte(`{"schema_version":"oceanengine-playwright-rpa-result/v2","outcome":"success","error_code":"ok","final_click_performed":false,"steps":[{"id":"field","status":"succeeded","readback":"手动投放"},{"id":"aggregate","status":"succeeded","readback":{"project.delivery_mode":"手动投放"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Steps[0].Readback["value"] != "手动投放" || result.Steps[1].Readback["project.delivery_mode"] != "手动投放" {
+		t.Fatalf("readback=%#v", result.Steps)
+	}
+}
+
 func TestRunnerRejectsUnknownResultSchema(t *testing.T) {
 	runner := testRunner(t, "wrong-schema")
 	_, err := runner.Run(context.Background(), basePlan("prepare"))
@@ -135,7 +145,7 @@ func TestRunnerV3PassesPersistentEdgeSessionFile(t *testing.T) {
 		t.Fatalf("run v3 with session file: %v", err)
 	}
 	arguments, ok := result.Steps[0].Readback["runner_args"].([]any)
-	if !ok || len(arguments) != 2 || arguments[0] != "--session-file" || arguments[1] != runner.EdgeSessionFile {
+	if !ok || len(arguments) < 4 || arguments[0] != "--session-file" || arguments[1] != runner.EdgeSessionFile || arguments[2] != "--result-file" {
 		t.Fatalf("runner arguments = %#v", result.Steps[0].Readback)
 	}
 }

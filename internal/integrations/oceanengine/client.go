@@ -55,6 +55,10 @@ type Endpoint struct {
 }
 
 var readOnlyEndpoints = map[Endpoint]struct{}{
+	{http.MethodPost, ProjectListPath}:                                      {},
+	{http.MethodPost, PromotionListPath}:                                    {},
+	{http.MethodGet, "/superior/api/v2/project/detail"}:                     {},
+	{http.MethodGet, "/superior/api/v2/ad/promotion/detail"}:                {},
 	{http.MethodPost, "/ad/api/promotion/ads/list"}:                         {},
 	{http.MethodGet, "/superior/api/ad/promotion/detail"}:                   {},
 	{http.MethodGet, "/ad/api/promotion/ads/get_promotion_detail"}:          {},
@@ -64,6 +68,7 @@ var readOnlyEndpoints = map[Endpoint]struct{}{
 	{http.MethodPost, "/ad/api/agw/statistics_sophonx/statQuery"}:           {},
 	{http.MethodGet, "/ad/api/account/info"}:                                {},
 	{http.MethodGet, "/superior/api/v2/account/info"}:                       {},
+	{http.MethodGet, "/superior/api/v2/account/conf"}:                       {},
 	{http.MethodGet, "/ad/api/account/conf"}:                                {},
 	{http.MethodGet, "/api/ebp/ebp_info/get_global_info"}:                   {},
 	{http.MethodPost, "/superior/api/v2/ad/getImageList"}:                   {},
@@ -72,10 +77,14 @@ var readOnlyEndpoints = map[Endpoint]struct{}{
 	{http.MethodGet, "/superior/api/v2/creative/material/aweme_photo_list"}: {},
 	{http.MethodPost, "/superior/api/v2/ad/product/clue_product_list"}:      {},
 	{http.MethodGet, "/platform/api/v1/orange/third_part_list"}:             {},
+	{http.MethodGet, "/superior/api/v2/ad/get_orange_landing_page"}:         {},
 	{http.MethodPost, "/superior/api/v2/project/get_optimization_goal_v2"}:  {},
 	{http.MethodGet, "/nbs/api/ads/brand/yuntu/query_brand_industry"}:       {},
 	{http.MethodGet, "/superior/api/v2/agw/ad/brand"}:                       {},
 	{http.MethodPost, "/superior/api/v2/ad/authorize/list"}:                 {},
+	{http.MethodGet, CheckProjectNamePath}:                                  {},
+	{http.MethodGet, CheckPromotionNamePath}:                                {},
+	{http.MethodGet, "/superior/api/project"}:                               {},
 }
 
 type Session struct {
@@ -196,6 +205,46 @@ func cookieValue(header, name string) string {
 		}
 	}
 	return ""
+}
+
+// CheckProjectName runs the read-only project-name availability query the
+// browser sends before a create. It is part of the read-only calibration
+// surface only.
+func (c *Client) CheckProjectName(ctx context.Context, projectName string) (map[string]any, error) {
+	query := url.Values{}
+	query.Set("projectName", projectName)
+	return c.do(ctx, http.MethodGet, CheckProjectNamePath+"?"+query.Encode(), nil, "")
+}
+
+// CheckPromotionName runs the read-only promotion-name availability query the
+// browser sends immediately before a promotion create.
+func (c *Client) CheckPromotionName(ctx context.Context, promotionName string) (map[string]any, error) {
+	query := url.Values{}
+	query.Set("promotionName", promotionName)
+	return c.do(ctx, http.MethodGet, CheckPromotionNamePath+"?"+query.Encode(), nil, "")
+}
+
+// GetProjects reads project rows by platform ID. This is the same read the
+// browser issues after a create; the aggregate project/promotion list omits
+// projects that have no promotions yet.
+func (c *Client) GetProjects(ctx context.Context, projectIDs ...string) (map[string]any, error) {
+	query := url.Values{}
+	query.Set("project_ids", strings.Join(projectIDs, ","))
+	query.Set("need_raw_campaign", "true")
+	return c.do(ctx, http.MethodGet, "/superior/api/project?"+query.Encode(), nil, "")
+}
+
+// ProjectDetails reads the complete project state used by the Superior edit
+// form. It is read-only and includes the platform-resolved external_action.
+func (c *Client) ProjectDetails(ctx context.Context, projectIDs ...string) (map[string]any, error) {
+	query := url.Values{}
+	query.Set("project_ids", strings.Join(projectIDs, ","))
+	query.Set("need_product_recognition", "true")
+	query.Set("need_bind_product_material", "true")
+	query.Set("need_keywords", "true")
+	query.Set("need_ea_conversion_status", "true")
+	query.Set("need_fill_history_blue_keywords_info", "true")
+	return c.do(ctx, http.MethodGet, "/superior/api/v2/project/detail?"+query.Encode(), nil, "")
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, contentType string) (map[string]any, error) {

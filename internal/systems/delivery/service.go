@@ -337,6 +337,14 @@ type ConnectorAccountReader interface {
 	ListAccounts(context.Context, string, string) ([]connector.PlatformAccount, error)
 }
 
+type ExternalAccountIDResolver interface {
+	ResolveExternalAccountID(context.Context, string, string, string) (string, error)
+}
+
+type BrowserRpaRunLauncher interface {
+	LaunchBrowserRpaRun(context.Context, BrowserRpaLaunchRequest) (BrowserRpaLaunchResult, error)
+}
+
 type Repository interface {
 	CreatePlan(context.Context, DeliveryPlan, DeliveryPlanVersion) (DeliveryPlan, error)
 	UpdatePlan(context.Context, contract.OrganizationID, contract.ProjectID, string, int, DeliveryPlanVersion) (DeliveryPlan, error)
@@ -373,6 +381,8 @@ type Service struct {
 	Insights                InsightsConsumer
 	ConnectorSnapshots      ConnectorSnapshotReader
 	ConnectorAccounts       ConnectorAccountReader
+	ExternalAccountIDs      ExternalAccountIDResolver
+	BrowserRpaLauncher      BrowserRpaRunLauncher
 	LaunchBatchCalibrations ConnectorLaunchBatchCalibrationReader
 	NewID                   ids.Generator
 	Now                     func() time.Time

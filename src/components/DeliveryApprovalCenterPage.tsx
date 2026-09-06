@@ -8,7 +8,6 @@ import {
 import { useProject } from '../context/ProjectContext'
 import type { DataState } from '../types'
 import { StateBoundary } from './StateBoundary'
-import { DeliveryExecutionPanel } from './DeliveryExecutionPanel'
 
 const invalidReasonLabels: Record<NonNullable<DeliveryApproval['invalidReason']>, string> = {
   APPROVAL_EXPIRED: '审批已超过 24 小时有效期，需要重新预检并审批。',
@@ -24,7 +23,7 @@ const preflightPassedStatuses = new Set<DeliveryControlChangeSet['status']>([
   'rolled_back',
 ])
 
-export function DeliveryApprovalCenterPage({ state, tourCase, tourRunId, selectedChangeSetId }: { state: DataState; tourCase?: string; tourRunId?: string; selectedChangeSetId?: string }) {
+export function DeliveryApprovalCenterPage({ state, selectedChangeSetId }: { state: DataState; tourCase?: string; tourRunId?: string; selectedChangeSetId?: string }) {
   const { currentProject } = useProject()
   const projectId = currentProject.id
   const [changeSets, setChangeSets] = useState<DeliveryControlChangeSet[]>([])
@@ -94,7 +93,6 @@ export function DeliveryApprovalCenterPage({ state, tourCase, tourRunId, selecte
   }
 
   const approval = selected?.approval
-  const approvalValid = selected?.status === 'approved' && approval?.valid === true
   const preflightPassed = selected ? preflightPassedStatuses.has(selected.status) : false
   const optimizationApproval = Boolean(selected?.recommendationId)
 
@@ -178,15 +176,9 @@ export function DeliveryApprovalCenterPage({ state, tourCase, tourRunId, selecte
               <button className="primary-button" onClick={() => void apply('approve')} disabled={busy}><ThumbsUp size={15}/>{optimizationApproval ? '批准优化申请' : '批准平台操作演练'}</button>
             </div>
           </section> : selected.status === 'approved' ? <div className="approval-decision-result" role="status"><CircleCheck size={18}/><span><b>{optimizationApproval ? '优化申请已批准' : '平台操作演练已批准'}</b><small>审批决定和不可变内容快照已保存。</small></span></div> : null}
-          {optimizationApproval ? <div className="approval-optimization-handoff"><span><b>当前仅完成配置审批留痕</b><small>行为工作流编译和真实平台写入尚未实现；这里不会生成后续操作包，也不会宣称平台已执行。</small></span></div> : <DeliveryExecutionPanel
-            projectId={projectId}
-            changeSet={selected}
-            canExecute={approvalValid}
-            goldenPath={tourCase === 'golden_path'}
-            onExecutionCreated={updated => {
-              setChangeSets(current => current.map(item => item.id === updated.id ? updated : item))
-            }}
-          />}
+          {optimizationApproval
+            ? <div className="approval-optimization-handoff"><span><b>当前仅完成配置审批留痕</b><small>行为工作流编译和真实平台写入尚未实现；这里不会生成后续操作包，也不会宣称平台已执行。</small></span></div>
+            : <div className="approval-optimization-handoff"><span><b>旧模拟申请仅供审计</b><small>此页面不再启动本地模拟。请返回投放配置页，并进入真实受控执行。</small></span></div>}
         </> : <div className="panel-empty"><FileCheck2 size={24}/>没有可显示的变更申请。</div>}
         {notice ? <div className="inline-notice" role="status">{notice}</div> : null}
       </section>

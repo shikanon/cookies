@@ -37,6 +37,51 @@ type AssetPageRequest struct {
 	Limit int
 }
 
+const (
+	OrangeLandingPageConsultType            = 172
+	OrangeLandingPageTrafficEcommerceType   = 174
+	OrangeLandingPageDeepTargetFirstBypass  = 607
+	OrangeLandingPageDeepTargetSecondBypass = 608
+)
+
+// OrangeLandingPageFilter contains the business filters used by the live
+// Orange landing-page picker. Zero values omit optional query parameters.
+type OrangeLandingPageFilter struct {
+	Search                    string
+	OrderMode                 int
+	SearchMode                int
+	NeedUBA                   bool
+	AuditStatuses             []int
+	MultiAssetTypes           []int
+	ExternalAction            int
+	DeepExternalAction        int
+	Statuses                  []int
+	FilterDPA                 bool
+	TypeList                  int
+	FilterTypeList            int
+	MicroAppInstanceID        string
+	EBPGroupIDs               []string
+	CheckConversionTarget     bool
+	ConvertTargetForCheck     int
+	DeepConvertTargetForCheck int
+}
+
+// OptimizationTargetContext is the complete parent form state used by
+// get_optimization_goal_v2. The same account can return different goals for
+// different values in this context.
+type OptimizationTargetContext struct {
+	CampaignType       int    `json:"campaign_type"`
+	LandingType        int    `json:"landing_type"`
+	AssetType          int    `json:"asset_type"`
+	MicroAppID         string `json:"micro_app_id"`
+	CDPMarketingGoal   int    `json:"cdp_marketing_goal"`
+	DPAAdType          int    `json:"dpa_ad_type"`
+	MicroPromotionType int    `json:"micro_promotion_type"`
+	MicroAppInstanceID string `json:"micro_app_instance_id"`
+	MultiAssetTypes    []int  `json:"multi_asset_types,omitempty"`
+	NeedAssets         bool   `json:"need_assets"`
+}
+
 type ReferenceReadError struct {
 	Stage string
 	Err   error
@@ -63,6 +108,16 @@ func (c *Client) ListPage(ctx context.Context, request ListRequest) (map[string]
 		"isSophonx": 1, "project_ids": []string{}, "cascade_fields": []string{"disable_by_cpl2"}, "metrics_range_filter": []any{},
 	}
 	return c.postJSON(ctx, "/ad/api/promotion/ads/list", body)
+}
+
+// ProjectListContract and PromotionListContract are exact readback paths for
+// Web API write reconciliation. Callers must query by the unique object name.
+func (c *Client) ProjectListContract(ctx context.Context, request any) (map[string]any, error) {
+	return c.postJSON(ctx, ProjectListPath, request)
+}
+
+func (c *Client) PromotionListContract(ctx context.Context, request any) (map[string]any, error) {
+	return c.postJSON(ctx, PromotionListPath, request)
 }
 
 func (c *Client) PromotionConfiguration(ctx context.Context, promotionID string) (map[string]any, error) {
@@ -111,6 +166,13 @@ func (c *Client) AccountInfo(ctx context.Context) (map[string]any, error) {
 	return value, err
 }
 
+// AccountConfiguration reads the account-scoped frontend capability catalog.
+// It contains dictionaries, feature gates, quotas, and component rules. It
+// does not replace the branch-specific optimization capability endpoint.
+func (c *Client) AccountConfiguration(ctx context.Context) (map[string]any, error) {
+	return c.getJSON(ctx, "/superior/api/v2/account/conf")
+}
+
 // ImageMaterialsPage reads one image-library page. The endpoint is read-only
 // and was verified by the Connector prototype against the live asset picker.
 func (c *Client) ImageMaterialsPage(ctx context.Context, request AssetPageRequest) (map[string]any, error) {
@@ -121,6 +183,17 @@ func (c *Client) ImageMaterialsPage(ctx context.Context, request AssetPageReques
 		"image_modes":  []int{3, 16, 2}, "use_pre_audit_result": true,
 		"is_need_stats_cost": true, "limit": limit, "page": page,
 	}
+	return c.postJSON(ctx, "/superior/api/v2/ad/getImageList", body)
+}
+
+// ProductImagesPage reads one page from the product-image "My Images" picker.
+// Ocean Engine separates this catalog with image_mode 649502.
+func (c *Client) ProductImagesPage(ctx context.Context, request AssetPageRequest) (map[string]any, error) {
+	page, limit := normalizeAssetPage(request)
+	if limit > 30 {
+		limit = 30
+	}
+	body := map[string]any{"page": page, "limit": limit, "image_mode": 649502}
 	return c.postJSON(ctx, "/superior/api/v2/ad/getImageList", body)
 }
 
@@ -164,6 +237,111 @@ func (c *Client) OrangeLandingPagesPage(ctx context.Context, request AssetPageRe
 	return c.getJSON(ctx, "/platform/api/v1/orange/third_part_list?"+query.Encode())
 }
 
+// FilteredOrangeLandingPagesPage reads one Orange landing-page picker branch.
+// The query rules match the currently observed Superior business bundle.
+func (c *Client) FilteredOrangeLandingPagesPage(ctx context.Context, request AssetPageRequest, filter OrangeLandingPageFilter) (map[string]any, error) {
+	page, limit := normalizeAssetPage(request)
+	orderMode := filter.OrderMode
+	if orderMode <= 0 {
+		orderMode = 1
+	}
+	searchMode := filter.SearchMode
+	if searchMode <= 0 {
+		searchMode = 3
+	}
+	auditStatuses := filter.AuditStatuses
+	if len(auditStatuses) == 0 {
+		auditStatuses = []int{0, 9, 1, 10}
+	}
+	statuses := filter.Statuses
+	if len(statuses) == 0 {
+		statuses = []int{0, 5, 8}
+	}
+	query := url.Values{
+		"page":              {strconv.Itoa(page)},
+		"size":              {strconv.Itoa(limit)},
+		"search":            {filter.Search},
+		"order_mode":        {strconv.Itoa(orderMode)},
+		"search_mode":       {strconv.Itoa(searchMode)},
+		"need_uba":          {strconv.FormatBool(filter.NeedUBA)},
+		"audit_status_list": {joinInts(auditStatuses, ", ")},
+		"status":            {joinInts(statuses, ",")},
+	}
+	if filter.FilterDPA {
+		query.Set("filter_dpa", "1")
+	}
+	setIntQuery(query, "type_list", filter.TypeList)
+	setIntQuery(query, "filter_type_list", filter.FilterTypeList)
+	setStringQuery(query, "instance_id", filter.MicroAppInstanceID)
+	setIntListQuery(query, "multi_asset_types", filter.MultiAssetTypes)
+	setStringListQuery(query, "ebp_group_ids", filter.EBPGroupIDs)
+
+	deepTarget := filter.DeepExternalAction
+	if deepTarget == 0 {
+		deepTarget = filter.DeepConvertTargetForCheck
+	}
+	bypassConversionFilter := deepTarget == OrangeLandingPageDeepTargetFirstBypass || deepTarget == OrangeLandingPageDeepTargetSecondBypass
+	if !bypassConversionFilter {
+		setIntQuery(query, "external_action", filter.ExternalAction)
+		setIntQuery(query, "deep_external_action", filter.DeepExternalAction)
+		if filter.CheckConversionTarget {
+			setIntQuery(query, "convert_target_for_check", filter.ConvertTargetForCheck)
+			setIntQuery(query, "deep_convert_target_for_check", filter.DeepConvertTargetForCheck)
+		}
+	}
+	return c.getJSON(ctx, "/superior/api/v2/ad/get_orange_landing_page?"+query.Encode())
+}
+
+// MultiConversionOrangeLandingPagesPage reads pages that the live picker
+// permits for external_action=100 and the multi-lead-component branch.
+func (c *Client) MultiConversionOrangeLandingPagesPage(ctx context.Context, request AssetPageRequest) (map[string]any, error) {
+	return c.FilteredOrangeLandingPagesPage(ctx, request, OrangeLandingPageFilter{
+		MultiAssetTypes:       []int{2},
+		ExternalAction:        100,
+		FilterDPA:             true,
+		CheckConversionTarget: true,
+		ConvertTargetForCheck: 100,
+	})
+}
+
+func joinInts(values []int, separator string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.Itoa(value))
+	}
+	return strings.Join(parts, separator)
+}
+
+func setIntQuery(query url.Values, key string, value int) {
+	if value != 0 {
+		query.Set(key, strconv.Itoa(value))
+	}
+}
+
+func setStringQuery(query url.Values, key, value string) {
+	if value = strings.TrimSpace(value); value != "" {
+		query.Set(key, value)
+	}
+}
+
+func setIntListQuery(query url.Values, key string, values []int) {
+	if len(values) > 0 {
+		query.Set(key, joinInts(values, ","))
+	}
+}
+
+func setStringListQuery(query url.Values, key string, values []string) {
+	clean := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			clean = append(clean, value)
+		}
+	}
+	if len(clean) > 0 {
+		query.Set(key, strings.Join(clean, ","))
+	}
+}
+
 // OptimizationTargets reads the project optimization targets for one landing-page carrier.
 // assetType 2 is Orange and assetType 3 is an advertiser-owned landing page.
 func (c *Client) OptimizationTargets(ctx context.Context, assetType int, needAssets bool) (map[string]any, error) {
@@ -176,6 +354,18 @@ func (c *Client) OptimizationTargets(ctx context.Context, assetType int, needAss
 		"micro_promotion_type": 2, "micro_app_instance_id": "", "need_assets": needAssets,
 	}
 	return c.adSurface().postJSON(ctx, "/superior/api/v2/project/get_optimization_goal_v2", body)
+}
+
+// OptimizationTargetCapabilities reads the account capability for one exact
+// project branch. It does not create or change a platform object.
+func (c *Client) OptimizationTargetCapabilities(ctx context.Context, request OptimizationTargetContext) (map[string]any, error) {
+	if request.CampaignType <= 0 || request.LandingType <= 0 || request.AssetType <= 0 || request.CDPMarketingGoal <= 0 || request.MicroPromotionType <= 0 {
+		return nil, fmt.Errorf("invalid optimization target context")
+	}
+	if len(request.MultiAssetTypes) > 8 {
+		return nil, fmt.Errorf("invalid optimization target context")
+	}
+	return c.adSurface().postJSON(ctx, "/superior/api/v2/project/get_optimization_goal_v2", request)
 }
 
 // BrandIndustries reads the account product-category tree.
@@ -341,4 +531,30 @@ func walkRows(value any, leaves *[]map[string]any) {
 			*leaves = append(*leaves, row)
 		}
 	}
+}
+
+// FlattenNamedRows collects every object carrying a non-empty value under the
+// given name key. The aggregate platform views name rows project_name and
+// promotion_name instead of name.
+func FlattenNamedRows(value any, nameKey string) []map[string]any {
+	var rows []map[string]any
+	var walk func(any)
+	walk = func(current any) {
+		switch typed := current.(type) {
+		case map[string]any:
+			if name, ok := typed[nameKey].(string); ok && name != "" {
+				rows = append(rows, typed)
+				return
+			}
+			for _, child := range typed {
+				walk(child)
+			}
+		case []any:
+			for _, child := range typed {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	return rows
 }

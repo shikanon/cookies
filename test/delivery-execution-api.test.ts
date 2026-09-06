@@ -4,6 +4,24 @@ import { deliveryExecutionApi } from '../src/api/delivery.ts'
 
 const now = '2026-08-03T08:00:00.000Z'
 
+test('delivery execution client starts a real Browser RPA run from one plan version', async t => {
+  const originalFetch = globalThis.fetch
+  const calls: Array<{ url: string; init?: RequestInit }> = []
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init })
+    return jsonResponse({ controlled_change_set: { id: 'controlled_1' }, controlled_execution: { id: 'execution_1' }, browser_rpa_run: { run_id: 'curun_1' } })
+  }
+  t.after(() => { globalThis.fetch = originalFetch })
+
+  const result = await deliveryExecutionApi.startBrowserRpaExecution('project_1', 'plan_1', 3, 'playwright-rpa/edge/v3', 'real-run-1')
+
+  assert.equal(calls[0].url, '/api/delivery/v1/projects/project_1/plans/plan_1/browser-rpa-runs')
+  assert.equal(calls[0].init?.method, 'POST')
+  assert.equal(new Headers(calls[0].init?.headers).get('Idempotency-Key'), 'real-run-1')
+  assert.deepEqual(JSON.parse(calls[0].init?.body as string), { expected_version: 3, execution_driver: 'playwright-rpa/edge/v3' })
+  assert.equal(result.browser_rpa_run.run_id, 'curun_1')
+})
+
 test('delivery execution client sends the frozen idempotent execute request', async t => {
   const originalFetch = globalThis.fetch
   const calls: Array<{ url: string; init?: RequestInit }> = []

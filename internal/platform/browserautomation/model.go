@@ -27,6 +27,13 @@ const (
 	ConfirmationSchemaV1 = "browser-rpa-final-confirmation/v1"
 )
 
+type ExecutionDriver string
+
+const (
+	ExecutionDriverOceanEngineWebAPI ExecutionDriver = "oceanengine-web-api/session/v1"
+	ExecutionDriverPlaywrightEdgeV3  ExecutionDriver = "playwright-rpa/edge/v3"
+)
+
 func acceptedRunSchemaVersion(value string) bool {
 	return value == RunSchemaV1 || value == LegacyRunSchemaV1
 }
@@ -77,9 +84,11 @@ const (
 	BlockProjectNotAllowed         BlockingReason = "PROJECT_NOT_ALLOWED"
 	BlockSiteNotAllowed            BlockingReason = "SITE_NOT_ALLOWED"
 	BlockPageDrift                 BlockingReason = "PAGE_DRIFT"
+	BlockRunnerFailure             BlockingReason = "RUNNER_FAILURE"
 	BlockWorkflowDrift             BlockingReason = "WORKFLOW_DRIFT"
 	BlockSkillDrift                BlockingReason = "SKILL_DRIFT"
 	BlockResultReconciliation      BlockingReason = "RESULT_RECONCILIATION_REQUIRED"
+	BlockTargetEffectNotObserved   BlockingReason = "TARGET_EFFECT_NOT_OBSERVED"
 )
 
 type Platform string
@@ -252,6 +261,8 @@ func validPromotionMaterials(values []PromotionMaterialReference) bool {
 
 type AuthorityBinding struct {
 	SchemaVersion                   string                    `json:"schema_version"`
+	AuthorityOrigin                 string                    `json:"authority_origin,omitempty"`
+	PreflightCanonicalHash          string                    `json:"preflight_canonical_hash,omitempty"`
 	OrganizationID                  contract.OrganizationID   `json:"organization_id"`
 	ProjectID                       contract.ProjectID        `json:"project_id"`
 	BusinessExecutionID             string                    `json:"business_execution_id"`
@@ -285,6 +296,7 @@ type AuthorityBinding struct {
 	ConfigurationCanonicalHash      string                    `json:"configuration_canonical_hash"`
 	WorkflowID                      string                    `json:"workflow_id"`
 	WorkflowCanonicalHash           string                    `json:"workflow_canonical_hash"`
+	ExecutionDriver                 ExecutionDriver           `json:"execution_driver,omitempty"`
 	WorkflowStepID                  string                    `json:"workflow_step_id"`
 	SkillID                         string                    `json:"skill_id,omitempty"`
 	SkillVersion                    string                    `json:"skill_version,omitempty"`
@@ -295,6 +307,12 @@ func (b AuthorityBinding) Validate() error {
 		b.BusinessExecutionID == "" || b.ChangeSetID == "" || b.ApprovalID == "" || b.AccountReferenceID == "" ||
 		b.ObjectFingerprint == "" || !validAuthorityAction(b.Action) || b.ProjectBudgetLimitMinor < 0 || b.PromotionBudgetLimitMinor < 0 || b.BudgetLimitMinor < 0 || b.Currency != "CNY" ||
 		b.WorkflowID == "" || b.WorkflowStepID == "" || (b.SkillID == "") != (b.SkillVersion == "") {
+		return ErrInvalidContract
+	}
+	if b.AuthorityOrigin != "" && b.AuthorityOrigin != "plan_execution" {
+		return ErrInvalidContract
+	}
+	if b.AuthorityOrigin == "plan_execution" && !isSHA256(b.PreflightCanonicalHash) {
 		return ErrInvalidContract
 	}
 	if b.Action == "create_promotions_in_existing_project" && (strings.TrimSpace(b.ParentPlatformProjectID) == "" || b.PromotionBudgetLimitMinor < 1 || b.BudgetLimitMinor != b.PromotionBudgetLimitMinor) {
@@ -318,10 +336,17 @@ func (b AuthorityBinding) Validate() error {
 	if b.SupersedesControlledChangeSetID != "" && strings.TrimSpace(b.SupersedesControlledChangeSetID) != b.SupersedesControlledChangeSetID {
 		return ErrInvalidContract
 	}
-	for _, hash := range []string{b.ApprovalActionHash, b.PlanCanonicalHash, b.IntentCanonicalHash, b.FeedbackCanonicalHash, b.DecisionCanonicalHash, b.ConfigurationCanonicalHash, b.WorkflowCanonicalHash} {
+	hashes := []string{b.ApprovalActionHash, b.PlanCanonicalHash, b.IntentCanonicalHash, b.ConfigurationCanonicalHash, b.WorkflowCanonicalHash}
+	if b.AuthorityOrigin != "plan_execution" {
+		hashes = append(hashes, b.FeedbackCanonicalHash, b.DecisionCanonicalHash)
+	}
+	for _, hash := range hashes {
 		if !isSHA256(hash) {
 			return ErrInvalidContract
 		}
+	}
+	if b.ExecutionDriver != "" && b.ExecutionDriver != ExecutionDriverPlaywrightEdgeV3 && b.ExecutionDriver != ExecutionDriverOceanEngineWebAPI {
+		return ErrInvalidContract
 	}
 	return nil
 }
@@ -534,27 +559,28 @@ type KillSwitch struct {
 }
 
 type BrowserRpaRun struct {
-	SchemaVersion  string                  `json:"schema_version"`
-	ID             string                  `json:"id"`
-	OrganizationID contract.OrganizationID `json:"organization_id"`
-	ProjectID      contract.ProjectID      `json:"project_id"`
-	Platform       Platform                `json:"platform"`
-	AccountID      string                  `json:"account_id"`
-	Authority      AuthorityBinding        `json:"authority"`
-	EnvironmentID  string                  `json:"environment_id"`
-	ProfileID      string                  `json:"profile_id"`
-	LeaseID        string                  `json:"lease_id"`
-	PolicyID       string                  `json:"policy_id"`
-	State          RunState                `json:"state"`
-	BlockingReason BlockingReason          `json:"blocking_reason,omitempty"`
-	Paused         bool                    `json:"paused"`
-	TakeoverActive bool                    `json:"takeover_active"`
-	Version        int64                   `json:"version"`
-	IdempotencyKey string                  `json:"idempotency_key"`
-	RequestHash    string                  `json:"request_hash"`
-	CreatedBy      string                  `json:"created_by"`
-	CreatedAt      time.Time               `json:"created_at"`
-	UpdatedAt      time.Time               `json:"updated_at"`
+	SchemaVersion   string                  `json:"schema_version"`
+	ID              string                  `json:"id"`
+	OrganizationID  contract.OrganizationID `json:"organization_id"`
+	ProjectID       contract.ProjectID      `json:"project_id"`
+	Platform        Platform                `json:"platform"`
+	AccountID       string                  `json:"account_id"`
+	ExecutionDriver ExecutionDriver         `json:"execution_driver"`
+	Authority       AuthorityBinding        `json:"authority"`
+	EnvironmentID   string                  `json:"environment_id"`
+	ProfileID       string                  `json:"profile_id"`
+	LeaseID         string                  `json:"lease_id"`
+	PolicyID        string                  `json:"policy_id"`
+	State           RunState                `json:"state"`
+	BlockingReason  BlockingReason          `json:"blocking_reason,omitempty"`
+	Paused          bool                    `json:"paused"`
+	TakeoverActive  bool                    `json:"takeover_active"`
+	Version         int64                   `json:"version"`
+	IdempotencyKey  string                  `json:"idempotency_key"`
+	RequestHash     string                  `json:"request_hash"`
+	CreatedBy       string                  `json:"created_by"`
+	CreatedAt       time.Time               `json:"created_at"`
+	UpdatedAt       time.Time               `json:"updated_at"`
 }
 
 func (r BrowserRpaRun) authorizesPlatformProject(platformProjectID string) bool {
@@ -568,6 +594,9 @@ func (r BrowserRpaRun) Validate() error {
 	if !acceptedRunSchemaVersion(r.SchemaVersion) || r.ID == "" || r.OrganizationID == "" || r.ProjectID == "" || r.Platform != PlatformOceanEngine || r.AccountID == "" || r.Version < 1 || r.IdempotencyKey == "" || !isSHA256(r.RequestHash) {
 		return ErrInvalidContract
 	}
+	if r.EffectiveExecutionDriver() != ExecutionDriverPlaywrightEdgeV3 && r.EffectiveExecutionDriver() != ExecutionDriverOceanEngineWebAPI {
+		return ErrInvalidContract
+	}
 	if err := r.Authority.Validate(); err != nil || r.Authority.OrganizationID != r.OrganizationID || r.Authority.ProjectID != r.ProjectID || r.Authority.AccountReferenceID != r.AccountID {
 		return ErrInvalidContract
 	}
@@ -575,6 +604,15 @@ func (r BrowserRpaRun) Validate() error {
 		return ErrInvalidContract
 	}
 	return nil
+}
+
+// EffectiveExecutionDriver preserves the driver for rows created before the
+// execution_driver column existed.
+func (r BrowserRpaRun) EffectiveExecutionDriver() ExecutionDriver {
+	if r.ExecutionDriver == "" {
+		return ExecutionDriverPlaywrightEdgeV3
+	}
+	return r.ExecutionDriver
 }
 
 var runTransitions = map[RunState][]RunState{
@@ -585,7 +623,9 @@ var runTransitions = map[RunState][]RunState{
 	RunAwaitingConfirmation: {RunAwaitingTakeover, RunPreparing, RunSubmitting, RunFailed, RunCancelled},
 	RunSubmitting:           {RunVerifying, RunFailed, RunPartial, RunResultUnknown},
 	RunVerifying:            {RunEnvironmentCheck, RunSucceeded, RunFailed, RunPartial, RunResultUnknown},
-	RunSucceeded:            {}, RunFailed: {}, RunPartial: {}, RunResultUnknown: {}, RunCancelled: {},
+	RunSucceeded:            {}, RunFailed: {}, RunPartial: {},
+	RunResultUnknown: {RunEnvironmentCheck, RunSucceeded, RunFailed},
+	RunCancelled:     {},
 }
 
 func CanTransition(from, to RunState) bool { return slices.Contains(runTransitions[from], to) }

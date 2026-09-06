@@ -62,6 +62,17 @@ export type StableReference = {
   evidence_version?: string
 }
 
+function stableReferenceKey(reference: StableReference): string {
+  return [reference.namespace, reference.object_kind, reference.id ?? '', reference.version ?? '', reference.content_hash ?? '', reference.semantic_key ?? ''].join('\u0000')
+}
+
+function mergeStableReferences(current: StableReference[] | undefined, selected: StableReference[]): StableReference[] {
+  const references = new Map<string, StableReference>()
+  for (const reference of current ?? []) references.set(stableReferenceKey(reference), structuredClone(reference))
+  for (const reference of selected) references.set(stableReferenceKey(reference), structuredClone(reference))
+  return [...references.values()]
+}
+
 export type OceanEngineCalibrationManifestBinding = {
   schema_version: 'oceanengine-calibration-manifest/v1'
   manifest_id: string
@@ -140,6 +151,7 @@ export type PlatformConfiguration = {
         delivery_identity: { mode: string; authorized_identity?: StableReference }
         base_material_references: StableReference[]
         copy_items: Array<{ text: string }>
+        product_name?: string
         product_image_references?: StableReference[]
         product_selling_points?: string[]
         native_anchor_reference?: StableReference
@@ -895,13 +907,47 @@ export const deliveryPlanApi = {
     const intent = plan.currentVersion.deliveryIntent
     if (!intent) throw new DeliveryApiError('LEGACY_CONFIGURATION_UNSUPPORTED', 409, '当前计划没有可编辑的业务意图。')
     const nextVersion = plan.currentVersionNumber + 1
-    const nextIntent = { ...intent, intent_id: planRevisionIdentity('intent', plan.id, nextVersion), version_number: nextVersion, canonical_hash: undefined }
+    const oceanEngine = configuration.payload.ocean_engine
+    const revisedOceanEngine = oceanEngine ? {
+      ...oceanEngine,
+      project: {
+        ...oceanEngine.project,
+        project_draft_id: `project-${plan.id}-${nextVersion}`,
+      },
+      promotions: oceanEngine.promotions.map((promotion, index) => ({
+        ...promotion,
+        promotion_draft_id: `promotion-${plan.id}-${nextVersion}-${index + 1}`,
+      })),
+    } : undefined
     const nextConfiguration = {
       ...configuration,
       configuration_id: planRevisionIdentity('configuration', plan.id, nextVersion),
       version_number: nextVersion,
       canonical_hash: undefined,
-      intent: { schema_version: 'delivery-intent/v1' as const, intent_id: nextIntent.intent_id, version_number: nextVersion },
+      intent: { schema_version: 'delivery-intent/v1' as const, intent_id: planRevisionIdentity('intent', plan.id, nextVersion), version_number: nextVersion },
+      payload: {
+        ...configuration.payload,
+        ocean_engine: revisedOceanEngine,
+      },
+    }
+    const marketingProduct = nextConfiguration.payload.ocean_engine?.project.marketing_product_reference
+    const promotions = nextConfiguration.payload.ocean_engine?.promotions ?? []
+    const configuredMaterials = promotions.flatMap(promotion => [
+      ...promotion.base_material_references,
+      ...(promotion.product_image_references ?? []),
+    ])
+    const configuredLandingPages = promotions.flatMap(promotion => promotion.landing_page_reference ? [promotion.landing_page_reference] : [])
+    const nextIntent = {
+      ...intent,
+      intent_id: nextConfiguration.intent.intent_id,
+      version_number: nextVersion,
+      canonical_hash: undefined,
+      payload: {
+        ...intent.payload,
+        product_references: marketingProduct ? [structuredClone(marketingProduct)] : intent.payload.product_references,
+        material_references: mergeStableReferences(intent.payload.material_references, configuredMaterials),
+        landing_page_references: mergeStableReferences(intent.payload.landing_page_references, configuredLandingPages),
+      },
     }
     return toDeliveryPlan(await deliveryPlanRequest<WireDeliveryPlan>(projectId, `/plans/${encodeURIComponent(plan.id)}`, {
       method: 'PATCH',
@@ -1012,21 +1058,29 @@ export const deliveryOptimizationApi = {
 }
 
 export const deliveryExecutionApi = {
-  async executePlan(
+  async listPlatformEntityMappings(projectId: string, accountReferenceId: string): Promise<DeliveryPlatformEntityMapping[]> {
+    const response = await deliveryPlanRequest<{ items?: DeliveryPlatformEntityMapping[] | null }>(
+      projectId,
+      `/platform-entity-mappings?account_reference_id=${encodeURIComponent(accountReferenceId)}`,
+    )
+    return response.items ?? []
+  },
+  async startBrowserRpaExecution(
     projectId: string,
     planId: string,
     expectedVersion: number,
+    executionDriver: DeliveryExecutionDriver,
     idempotencyKey: string,
-  ): Promise<DeliveryExecutionRecord> {
-    return toDeliveryExecutionRecord(await deliveryPlanRequest<WireDeliveryExecutionRecord>(
+  ): Promise<{ controlled_change_set: { id: string }; controlled_execution: { id: string }; browser_rpa_run: { run_id: string } }> {
+    return deliveryPlanRequest<{ controlled_change_set: { id: string }; controlled_execution: { id: string }; browser_rpa_run: { run_id: string } }>(
       projectId,
-      `/plans/${encodeURIComponent(planId)}/execute`,
+      `/plans/${encodeURIComponent(planId)}/browser-rpa-runs`,
       {
         method: 'POST',
         headers: { 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({ expected_version: expectedVersion }),
+        body: JSON.stringify({ expected_version: expectedVersion, execution_driver: executionDriver }),
       },
-    ))
+    )
   },
   async execute(
     projectId: string,
@@ -1078,6 +1132,26 @@ export const deliveryExecutionApi = {
       },
     )
   },
+}
+
+export type DeliveryExecutionDriver = 'oceanengine-web-api/session/v1' | 'playwright-rpa/edge/v3'
+
+export type DeliveryPlatformEntityMapping = {
+  id: string
+  account_reference_id: string
+  plan_id: string
+  configuration_id: string
+  business_execution_id: string
+  browser_rpa_run_id: string
+  internal_object_kind: 'project' | 'promotion' | string
+  internal_object_id: string
+  platform_object_kind: 'project' | 'promotion' | string
+  platform_object_id: string
+  platform_status: string
+  status: 'pending_verification' | 'confirmed'
+  version: number
+  created_at: string
+  updated_at: string
 }
 
 function toDeliveryOutcomeSimulation(value: WireDeliveryOutcomeSimulation): DeliveryOutcomeSimulation {
@@ -1605,7 +1679,8 @@ function toPlatformRuntimeDraft(projectId: string, identity: string, versionNumb
           account_reference: { namespace: 'oceanengine', object_kind: 'advertiser_account', scope, id: draft.advertiser.id, state: 'resolved', display_name_snapshot: draft.advertiser.name },
           marketing_purpose: draft.marketingPurpose, marketing_scenario: 'short_video_image_text',
           marketing_product_reference: marketingProductReference,
-          carrier: draft.tracking.deliveryCarrier, optimization_target_reference: optimizationTargetReference, delivery_mode: 'manual',
+          carrier: draft.tracking.deliveryCarrier, optimization_target_reference: optimizationTargetReference,
+          deep_optimization_mode: 'disabled', delivery_mode: 'manual', placement_strategy: 'automatic',
           targeting: { smart_expansion: false },
           schedule: { mode: draft.schedule.mode, start_at: draft.schedule.startAt, end_at: draft.schedule.endAt, timezone: draft.schedule.timezone },
           budget_and_bidding: { currency: 'CNY', daily_budget_minor: dailyBudget, bidding_strategy: 'stable_cost', charging_mode: 'CPC', bid_minor: 0 },
@@ -1614,8 +1689,9 @@ function toPlatformRuntimeDraft(projectId: string, identity: string, versionNumb
           project_name: draft.name,
         },
         promotions: materialReferences.map((reference, index) => ({
-          draft_schema_version: 'oceanengine-configuration/v1', promotion_draft_id: `promotion-${identity}-${index + 1}`,
+          draft_schema_version: 'oceanengine-configuration/v1', promotion_draft_id: `promotion-${identity}-${versionNumber}-${index + 1}`,
           delivery_identity: { mode: 'account_info' }, base_material_references: [reference], copy_items: [],
+          product_name: draft.marketingProduct.name,
           landing_page_reference: landingPageReference,
           settings: {}, promotion_name: `${draft.name}-${index + 1}`,
         })),

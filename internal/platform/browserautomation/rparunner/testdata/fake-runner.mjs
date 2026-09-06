@@ -33,6 +33,17 @@ stdin.on('close', () => {
   }
   if (plan.schema_version === 'oceanengine-playwright-rpa-plan/v3') {
     const notChecked = mode === 'v3-not-checked'
+    if (mode === 'v3-no-effect') {
+      process.stdout.write(JSON.stringify({
+        schema_version: 'oceanengine-playwright-rpa-result/v2',
+        outcome: 'failed',
+        error_code: 'submit_no_effect_confirmed',
+        final_click_performed: true,
+        reconciliation: 'not_found',
+        steps: [{ id: plan.steps?.[0]?.id ?? 'step', status: 'failed', readback: { reconciliation: 'not_found', platform_write_request_observed: false } }],
+      }))
+      return
+    }
     process.stdout.write(JSON.stringify({
       schema_version: 'oceanengine-playwright-rpa-result/v2',
       outcome: 'success',
