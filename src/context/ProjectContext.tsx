@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, type ApiAgencyWorkbench, type ApiArtifact, type ApiBusinessTask, type ApiBusinessTaskType, type ApiGenerationJob, type ApiOperationalRecord, type ApiProject } from '../data/api'
 import type { ArtifactKey, ArtifactStatus, BusinessTaskRecord, ChangeSetRecord, ProjectArtifact, ProjectRecord } from '../types'
-import { deliveryApi, type DeliveryChangeSet } from '../api/delivery'
+import type { DeliveryChangeSet } from '../api/delivery'
 import { presentCreativeStatus } from '../lib/media-status'
 import { useAuth } from './AuthContext'
 
@@ -22,11 +22,6 @@ interface ProjectContextValue {
   updateTask: (id: string, patch: Partial<Pick<BusinessTaskRecord, 'name' | 'objective' | 'status' | 'sourceTaskIds' | 'sourceArtifactIds' | 'outputArtifactIds'>>) => Promise<BusinessTaskRecord>
   advanceArtifact: (key: ArtifactKey, status: ProjectRecord['artifacts'][ArtifactKey]['status']) => Promise<void>
   updateArtifact: (key: ArtifactKey, patch: Partial<ProjectRecord['artifacts'][ArtifactKey]>) => Promise<void>
-  addChangeSet: (budgetLimit?: number) => Promise<DeliveryChangeSet>
-  preflightChangeSet: (id: string) => Promise<DeliveryChangeSet>
-  approveChangeSet: (id: string) => Promise<DeliveryChangeSet>
-  executeChangeSet: (id: string) => Promise<DeliveryChangeSet>
-  rollbackChangeSet: (id: string, reason: string) => Promise<DeliveryChangeSet>
 }
 
 const ProjectContext = createContext<ProjectContextValue | null>(null)
@@ -250,49 +245,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const advanceArtifact = useCallback((key: ArtifactKey, status: ProjectRecord['artifacts'][ArtifactKey]['status']) => updateArtifact(key, { status }), [updateArtifact])
 
-  const addChangeSet = useCallback(async (budgetLimit?: number) => {
-    const project = projects.find(candidate => candidate.id === loadedProjectId)
-    if (!project) throw new Error('请先选择已保存的 Project。')
-    const artifactIds = [project.artifacts.brief.id, project.artifacts.creative.id].filter((id): id is string => Boolean(id))
-    const changeSet = await deliveryApi.createChangeSet({
-      projectId: project.id,
-      name: '素材组合与探索预算优化',
-      artifactIds,
-      budgetLimit: budgetLimit ?? project.budget,
-    })
-    await reloadProjects()
-    return changeSet
-  }, [loadedProjectId, projects, reloadProjects])
-
-  const preflightChangeSet = useCallback(async (id: string) => {
-    const project = projects.find(candidate => candidate.id === loadedProjectId)
-    if (!project) throw new Error('请先选择已保存的 Project。')
-    const changeSet = await deliveryApi.preflight(project.id, id)
-    await reloadProjects()
-    return changeSet
-  }, [loadedProjectId, projects, reloadProjects])
-  const approveChangeSet = useCallback(async (id: string) => {
-    const project = projects.find(candidate => candidate.id === loadedProjectId)
-    if (!project) throw new Error('请先选择已保存的 Project。')
-    const changeSet = await deliveryApi.approve(project.id, id)
-    await reloadProjects()
-    return changeSet
-  }, [loadedProjectId, projects, reloadProjects])
-  const executeChangeSet = useCallback(async (id: string) => {
-    const project = projects.find(candidate => candidate.id === loadedProjectId)
-    if (!project) throw new Error('请先选择已保存的 Project。')
-    const changeSet = await deliveryApi.execute(project.id, id)
-    await reloadProjects()
-    return changeSet
-  }, [loadedProjectId, projects, reloadProjects])
-  const rollbackChangeSet = useCallback(async (id: string, reason: string) => {
-    const project = projects.find(candidate => candidate.id === loadedProjectId)
-    if (!project) throw new Error('请先选择已保存的 Project。')
-    const changeSet = await deliveryApi.rollback(project.id, id, reason)
-    await reloadProjects()
-    return changeSet
-  }, [loadedProjectId, projects, reloadProjects])
-  const value = useMemo(() => ({ projects, currentProject, agencyWorkbench, targetProjectId, loadedProjectId, isLoading, error, routeDiagnostic, reloadProjects, selectProject, createProject, updateProject, createTask, updateTask, advanceArtifact, updateArtifact, addChangeSet, preflightChangeSet, approveChangeSet, executeChangeSet, rollbackChangeSet }), [projects, currentProject, agencyWorkbench, targetProjectId, loadedProjectId, isLoading, error, routeDiagnostic, reloadProjects, selectProject, createProject, updateProject, createTask, updateTask, advanceArtifact, updateArtifact, addChangeSet, preflightChangeSet, approveChangeSet, executeChangeSet, rollbackChangeSet])
+  const value = useMemo(() => ({ projects, currentProject, agencyWorkbench, targetProjectId, loadedProjectId, isLoading, error, routeDiagnostic, reloadProjects, selectProject, createProject, updateProject, createTask, updateTask, advanceArtifact, updateArtifact }), [projects, currentProject, agencyWorkbench, targetProjectId, loadedProjectId, isLoading, error, routeDiagnostic, reloadProjects, selectProject, createProject, updateProject, createTask, updateTask, advanceArtifact, updateArtifact])
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
 }
 

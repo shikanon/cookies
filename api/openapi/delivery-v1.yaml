@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Cookies Delivery API
   version: 2.0.0
-  description: Immutable DeliveryIntent and tagged PlatformConfiguration plans, authoritative preflight, content-bound approvals, and legacy read-only history.
+  description: Demo writes return HTTP 410 (DELIVERY_DEMO_RETIRED). Missing execution adapters return HTTP 503 (EXECUTION_UNAVAILABLE) without a mock fallback. Immutable DeliveryIntent and tagged PlatformConfiguration plans, authoritative preflight, content-bound approvals, and legacy read-only history.
 servers:
   - url: /
 security:
@@ -198,21 +198,10 @@ paths:
     post:
       operationId: generateDeliveryRecommendation
       deprecated: true
-      summary: Generate one historical Tour-only optimization recommendation
-      description: >-
-        Requires a succeeded platform-operation rehearsal, two persisted metric windows, and
-        monitoring alerts for the same execution. The recommendation freezes those exact evidence
-        references and never writes to a real platform.
-      requestBody: { $ref: '#/components/requestBodies/ExpectedVersion' }
+      summary: Historical demo writes have been retired
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
       responses:
-        '201':
-          description: Proposed recommendation with frozen evidence, base, and target snapshots.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DeliveryRecommendation' }
-        '409': { $ref: '#/components/responses/Problem' }
-        '412': { $ref: '#/components/responses/Problem' }
-        '404': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
   /api/delivery/v1/projects/{project_id}/plans/{plan_id}/decisions:generate:
     parameters:
@@ -675,27 +664,10 @@ paths:
     post:
       operationId: acceptDeliveryRecommendation
       deprecated: true
-      summary: Accept a recommendation and create only one new draft ChangeSet
-      description: >-
-        Acceptance does not mutate the Plan, preflight or approve the ChangeSet,
-        execute an action, or write a platform. The Idempotency-Key is scoped to
-        the organization, project and accept operation; replaying the same
-        canonical request returns the same decision and ChangeSet.
-      requestBody: { $ref: '#/components/requestBodies/ExpectedVersion' }
+      summary: Historical demo writes have been retired
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
       responses:
-        '201': { $ref: '#/components/responses/RecommendationDecision' }
-        '200':
-          description: Idempotent replay of the original accepted decision.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/RecommendationDecisionResult' }
-        '409':
-          description: IDEMPOTENCY_CONFLICT, INVALID_STATE, or VERSION_CONFLICT.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Problem' }
-        '412': { $ref: '#/components/responses/Problem' }
-        '404': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
   /api/delivery/v1/projects/{project_id}/recommendations/{recommendation_id}:reject:
     parameters:
@@ -704,17 +676,10 @@ paths:
     post:
       operationId: rejectDeliveryRecommendation
       deprecated: true
-      summary: Reject a proposed recommendation without modifying a Plan or ChangeSet
-      requestBody: { $ref: '#/components/requestBodies/ExpectedVersion' }
+      summary: Historical demo writes have been retired
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
       responses:
-        '200':
-          description: Rejected recommendation decision.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DeliveryRecommendation' }
-        '409': { $ref: '#/components/responses/Problem' }
-        '412': { $ref: '#/components/responses/Problem' }
-        '404': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
   /api/delivery/v1/projects/{project_id}/decisions:
     parameters:
@@ -1109,22 +1074,11 @@ paths:
       - $ref: '#/components/parameters/ExecutionID'
     post:
       operationId: createDemoDeliveryMetricSnapshot
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [dataset_version]
-              properties:
-                dataset_version: { type: string, const: post-launch-simulator/v1 }
+      deprecated: true
+      summary: Historical demo writes have been retired
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
       responses:
-        '201':
-          description: Immutable simulated metric snapshot.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DeliveryMetricSnapshot' }
+        '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
     get:
       operationId: listDeliveryMetricSnapshots
@@ -1146,24 +1100,11 @@ paths:
       - $ref: '#/components/parameters/ProjectID'
     post:
       operationId: evaluateDeliveryMonitoringAlerts
-      summary: Evaluate deterministic project-scoped monitoring alerts from one fixture
-      description: >-
-        This controlled mock evaluation never polls or writes a real advertising
-        platform. It evaluates the selected fixture, persists any resulting alert
-        projections with their evaluated metric windows.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AlertEvaluationRequest' }
+      deprecated: true
+      summary: Historical demo writes have been retired
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
       responses:
-        '200':
-          description: Fixture evaluation and its resulting alerts.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AlertEvaluationResult' }
-        '400': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
   /api/delivery/v1/projects/{project_id}/plans/{plan_id}/browser-rpa-runs:
     parameters:
@@ -1294,25 +1235,11 @@ paths:
       - $ref: '#/components/parameters/TourRunID'
     post:
       operationId: prepareDeliveryTourRun
-      summary: Deterministically prepare an owner-scoped complete mock delivery tour
-      description: >-
-        Replaying a prepared run returns the same seven case plans without duplication.
-        A partially prepared run is first reset through its exact ownership boundary and
-        then rebuilt. This endpoint never writes to a real advertising platform.
+      deprecated: true
+      summary: Historical demo writes have been retired
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
       responses:
-        '201':
-          description: A new run and its seven deterministic cases were prepared.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DeliveryTourRun' }
-        '200':
-          description: The already prepared run was replayed without duplication.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DeliveryTourRun' }
-        '400': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
   /api/delivery/v1/projects/{project_id}/executions/{execution_id}/simulation-runs:
     parameters:
@@ -1320,23 +1247,11 @@ paths:
       - $ref: '#/components/parameters/ExecutionID'
     post:
       operationId: createDeliveryOutcomeSimulationRun
-      summary: Run a deterministic post-launch outcome scenario after a successful platform-operation rehearsal
-      description: >-
-        This rule-driven Mock simulation does not predict real advertising performance.
-        The exact PlanVersion, approved configuration, scenario and stable seed form
-        an idempotent input; matching inputs replay the same SimulationRun and metric windows.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/CreateOutcomeSimulationRequest' }
+      deprecated: true
+      summary: Historical demo writes have been retired
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
       responses:
-        '200':
-          description: Existing deterministic run replayed.
-          content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeSimulationResult' } } }
-        '201':
-          description: New deterministic run and metric windows created.
-          content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeSimulationResult' } } }
+        '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
   /api/delivery/v1/projects/{project_id}/executions/{execution_id}/simulation-run:
     parameters:
@@ -1357,7 +1272,7 @@ paths:
       - $ref: '#/components/parameters/TourRunID'
     get:
       operationId: getDeliveryTourRun
-      summary: Read authoritative tour progress and resumable URLs
+      summary: Read historical tour progress
       responses:
         '200':
           description: The run, seven cases, and progress derived from persisted delivery authority data.
@@ -1374,19 +1289,11 @@ paths:
       - $ref: '#/components/parameters/TourRunID'
     post:
       operationId: resetDeliveryTourRun
-      summary: Delete only the selected owner's exact tour-run causal closure
-      description: >-
-        Isolation is the authenticated organization, active project, stable run ID, and
-        authenticated owner. Ordinary plans and other owners or runs are not selected.
+      deprecated: true
+      summary: Historical demo writes have been retired
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
       responses:
-        '200':
-          description: The run was marked reset and exact deletion counts are returned.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DeliveryTourResetResult' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '404': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
@@ -1502,6 +1409,11 @@ components:
               expected_version: { type: integer, minimum: 1 }
               scenario: { $ref: '#/components/schemas/ExecutionScenario' }
   responses:
+    DemoRetired:
+      description: Historical demo writes are retired (DELIVERY_DEMO_RETIRED).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Problem' }
     ChangeSet:
       description: Updated ChangeSet.
       content:

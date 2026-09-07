@@ -19,8 +19,6 @@ export interface AppRoute {
   objectId?: string
   contextId?: string
   view?: string
-  tourRunId?: string
-  tourCase?: string
   strategyStage?: StrategyStage
   strategyPanel?: StrategyPanel
   strategyResource?: string
@@ -80,8 +78,6 @@ export function parseRoute(location = `${window.location.pathname}${window.locat
     contextId,
     view,
     isLegacyVideoEditingRoute: systemKey === 'creative' && (parts[3] || 'tasks') === 'video' && view === '素材剪辑',
-    tourRunId: url.searchParams.get('tour_run_id') ?? undefined,
-    tourCase: url.searchParams.get('tour_case') ?? undefined,
     strategyStage: strategyWorkspaceRoute?.location.stage,
     strategyPanel: strategyWorkspaceRoute?.location.panel,
     strategyResource: strategyWorkspaceRoute?.location.resource,
@@ -109,13 +105,11 @@ export function projectManagePath(projectId: string) {
   return `/projects/${projectId}/manage`
 }
 
-export function projectPath(projectId: string, systemKey: SystemKey, navId: string, objectId?: string, view?: string, contextId?: string, tourRunId?: string, tourCase?: string) {
+export function projectPath(projectId: string, systemKey: SystemKey, navId: string, objectId?: string, view?: string, contextId?: string) {
   const path = `/projects/${projectId}/${systemKey}/${navId}${objectId ? `/${objectId}` : ''}`
   const search = new URLSearchParams()
   if (view) search.set('view', view)
   if (contextId) search.set('context', contextId)
-  if (tourRunId) search.set('tour_run_id', tourRunId)
-  if (tourCase) search.set('tour_case', tourCase)
   return search.size ? `${path}?${search.toString()}` : path
 }
 

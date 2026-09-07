@@ -877,42 +877,6 @@ func (r MySQLRepository) ListExecutions(ctx context.Context, organizationID cont
 	return legacyValues, nil
 }
 
-func (r MySQLRepository) CreateMetricSnapshot(ctx context.Context, value DeliveryMetricSnapshot) (DeliveryMetricSnapshot, bool, error) {
-	basis, err := json.Marshal(value.CalculationBasis)
-	if err != nil {
-		return DeliveryMetricSnapshot{}, false, err
-	}
-	result, err := r.DB.ExecContext(ctx, `INSERT IGNORE INTO delivery_metric_snapshots (
-		id, organization_id, project_id, execution_id, simulation_run_id, plan_id, creative_package_id,
-		source, is_simulated, dataset_version, fixture_version, window_sequence, currency, window_start, window_end, data_through,
-		impressions, clicks, conversions, spend_cents, revenue_cents, calculation_basis, created_by, created_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		value.ID, value.OrganizationID, value.ProjectID, value.ExecutionID, nullableString(value.SimulationRunID), value.PlanID, value.CreativePackageID,
-		value.Source, value.IsSimulated, value.DatasetVersion, value.FixtureVersion, value.WindowSequence, value.Currency, value.WindowStart, value.WindowEnd, value.DataThrough,
-		value.RawMetrics.Impressions, value.RawMetrics.Clicks, value.RawMetrics.Conversions, value.RawMetrics.SpendCents, value.RawMetrics.RevenueCents,
-		basis, value.CreatedBy, value.CreatedAt)
-	if err != nil {
-		return DeliveryMetricSnapshot{}, false, err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return DeliveryMetricSnapshot{}, false, err
-	}
-	if affected == 1 {
-		return value, true, nil
-	}
-	values, err := r.ListMetricSnapshots(ctx, value.OrganizationID, value.ProjectID, value.ExecutionID, 100)
-	if err != nil {
-		return DeliveryMetricSnapshot{}, false, err
-	}
-	for _, existing := range values {
-		if existing.DatasetVersion == value.DatasetVersion && existing.FixtureVersion == value.FixtureVersion && existing.WindowSequence == value.WindowSequence {
-			return existing, false, nil
-		}
-	}
-	return DeliveryMetricSnapshot{}, false, ErrNotFound
-}
-
 func (r MySQLRepository) ListMetricSnapshots(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, executionID string, limit int) ([]DeliveryMetricSnapshot, error) {
 	rows, err := r.DB.QueryContext(ctx, metricSnapshotSelect+`
 		WHERE organization_id = ? AND project_id = ? AND execution_id = ?

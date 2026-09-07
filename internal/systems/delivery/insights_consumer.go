@@ -314,16 +314,6 @@ type fixtureEnvelope struct {
 
 type MockInsightsReader struct{}
 
-func (s Service) insightsConsumer() InsightsConsumer {
-	if s.Insights != nil {
-		return s.Insights
-	}
-	if s.Repository != nil {
-		return SimulationInsightsReader{Repository: s.Repository}
-	}
-	return MockInsightsReader{}
-}
-
 func (MockInsightsReader) Read(ctx context.Context, query InsightsQuery) (DeliveryInsightsSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return DeliveryInsightsSnapshot{}, err

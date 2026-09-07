@@ -1,43 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CircleAlert, CircleCheck, ListRestart, Play, RefreshCw, ShieldAlert } from 'lucide-react'
+import { CircleAlert, CircleCheck, ListRestart, RefreshCw, ShieldAlert } from 'lucide-react'
 import {
   deliveryExecutionApi,
   type DeliveryControlChangeSet,
   type DeliveryExecutionRecord,
-  type DeliveryExecutionScenario,
 } from '../api/delivery'
-
-const scenarios: Array<{ value: DeliveryExecutionScenario; label: string }> = [
-  { value: 'success', label: 'success · 已确认完成' },
-  { value: 'failed', label: 'failed · 确认未产生目标效果' },
-  { value: 'partial', label: 'partial · 仅部分完成' },
-  { value: 'result_unknown', label: 'result_unknown · 结果待核验' },
-]
 
 type Props = {
   projectId: string
   changeSet: DeliveryControlChangeSet
-  canExecute: boolean
-  goldenPath?: boolean
-  onExecutionCreated: (changeSet: DeliveryControlChangeSet) => void
 }
 
-export function DeliveryExecutionPanel({ projectId, changeSet, canExecute, goldenPath = false, onExecutionCreated }: Props) {
+export function DeliveryExecutionPanel({ projectId, changeSet }: Props) {
   const [records, setRecords] = useState<DeliveryExecutionRecord[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [selectedRecord, setSelectedRecord] = useState<DeliveryExecutionRecord>()
-  const [scenario, setScenario] = useState<DeliveryExecutionScenario>('success')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [detailRevision, setDetailRevision] = useState(0)
-  const idempotencyKeys = useRef(new Map<string, string>())
   const listRequest = useRef(0)
   const detailRequest = useRef(0)
-  const executionRequest = useRef(0)
   const activeProjectId = useRef(projectId)
-  const activeChangeSetId = useRef(changeSet.id)
   activeProjectId.current = projectId
-  activeChangeSetId.current = changeSet.id
 
   const refresh = useCallback(async () => {
     if (!projectId) return
@@ -54,7 +38,7 @@ export function DeliveryExecutionPanel({ projectId, changeSet, canExecute, golde
       })
       setSelectedRecord(undefined)
       setDetailRevision(current => current + 1)
-      setNotice(values.length ? `已从 Go 权威 API 加载 ${values.length} 条 Execution 记录。` : '当前 Project 暂无 Execution 记录。')
+      setNotice(values.length ? `已加载 ${values.length} 条 Execution 记录。` : '当前 Project 暂无 Execution 记录。')
     } catch (error) {
       if (request !== listRequest.current || activeProjectId.current !== requestedProjectId) return
       setNotice(error instanceof Error ? error.message : '读取 Execution 记录失败。')
@@ -66,19 +50,12 @@ export function DeliveryExecutionPanel({ projectId, changeSet, canExecute, golde
   useEffect(() => {
     listRequest.current += 1
     detailRequest.current += 1
-    executionRequest.current += 1
-    idempotencyKeys.current.clear()
     setRecords([])
     setSelectedId('')
     setSelectedRecord(undefined)
     setNotice('')
     setBusy(false)
   }, [projectId])
-
-  useEffect(() => {
-    executionRequest.current += 1
-    setBusy(false)
-  }, [changeSet.id])
 
   useEffect(() => {
     void refresh()
@@ -112,42 +89,15 @@ export function DeliveryExecutionPanel({ projectId, changeSet, canExecute, golde
   const unresolvedExecution = records.find(value => (
     value.execution.changeSetId === changeSet.id && value.execution.status === 'result_unknown'
   ))
-  const canStart = canExecute && !unresolvedExecution && !busy
-
-  const startExecution = async () => {
-    if (!canStart) return
-    const requestedProjectId = projectId
-    const requestedChangeSetId = changeSet.id
-    const request = ++executionRequest.current
-    const keyScope = `${changeSet.id}:${scenario}`
-    const idempotencyKey = idempotencyKeys.current.get(keyScope) ?? createIdempotencyKey()
-    idempotencyKeys.current.set(keyScope, idempotencyKey)
-    setBusy(true)
-    try {
-      const value = await deliveryExecutionApi.execute(projectId, changeSet.id, changeSet.version, scenario, idempotencyKey)
-      if (request !== executionRequest.current || activeProjectId.current !== requestedProjectId || activeChangeSetId.current !== requestedChangeSetId) return
-      setRecords(current => [value, ...current.filter(item => item.execution.id !== value.execution.id)])
-      setSelectedId(value.execution.id)
-      setSelectedRecord(value)
-      onExecutionCreated(value.changeSet)
-      setNotice('平台操作演练已完成；操作步骤与证据已保存。效果模拟使用上线前 PlanVersion，不依赖本次演练。')
-    } catch (error) {
-      if (request !== executionRequest.current || activeProjectId.current !== requestedProjectId || activeChangeSetId.current !== requestedChangeSetId) return
-      setNotice(error instanceof Error ? error.message : '启动平台操作演练失败。')
-    } finally {
-      if (request === executionRequest.current && activeProjectId.current === requestedProjectId && activeChangeSetId.current === requestedChangeSetId) setBusy(false)
-    }
-  }
-
-  return <section className="delivery-execution-panel" aria-label="平台操作演练记录">
+  return <section className="delivery-execution-panel" aria-label="历史执行记录">
     <header className="delivery-execution-header">
       <div>
-        <span className="section-label">平台操作演练</span>
+        <span className="section-label">历史执行记录</span>
         <h3>持久步骤、证据与恢复判断</h3>
         <p>这里验证审批绑定、操作步骤与异常恢复，不把操作成功解释为真实投放效果。</p>
       </div>
       <button className="secondary-button" onClick={() => void refresh()} disabled={busy}>
-        <RefreshCw size={15}/>从 Go API 刷新
+        <RefreshCw size={15}/>刷新历史记录
       </button>
     </header>
 
@@ -155,17 +105,7 @@ export function DeliveryExecutionPanel({ projectId, changeSet, canExecute, golde
       <ShieldAlert size={18}/><span><b>禁止盲目重试</b><small>Execution {unresolvedExecution.execution.id.slice(-12)} 的结果未知。请先查询并重新核验，再生成恢复决定；不得复用此变更申请直接重试。</small></span>
     </div> : null}
 
-    <div className="execution-start-controls">
-      <label>{goldenPath ? '演练路径' : '异常场景'}
-        <select value={scenario} onChange={event => setScenario(event.target.value as DeliveryExecutionScenario)} disabled={goldenPath || !canExecute || busy}>
-          {scenarios.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
-        </select>
-      </label>
-      <button className="secondary-button" onClick={() => void startExecution()} disabled={!canStart}>
-        <Play size={15}/>启动平台操作演练
-      </button>
-      {!canExecute ? <small>先完成当前变更申请的批准，才能启动平台操作演练。</small> : goldenPath ? <small>黄金路径固定运行 success；异常结果只在独立场景中选择。</small> : null}
-    </div>
+    <p>历史演示执行已下线。真实操作请使用执行中心的受控 Browser RPA 流程。</p>
 
     <div className="execution-records">
       <div className="execution-list" aria-label="Execution 列表">
@@ -225,11 +165,6 @@ function ExecutionDetail({ record }: { record: DeliveryExecutionRecord }) {
     <h5>脱敏 Evidence references</h5>
     <div className="execution-evidence"><p>{evidence.summary}</p>{evidence.references.length ? evidence.references.map(reference => <code key={reference}>{reference}</code>) : <small>服务端尚未返回 Evidence reference。</small>}</div>
   </>
-}
-
-function createIdempotencyKey() {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
-  return `delivery-execution-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
 function shortHash(value: string) {

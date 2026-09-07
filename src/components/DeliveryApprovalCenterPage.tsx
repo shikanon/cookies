@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CircleAlert, CircleCheck, FileCheck2, RotateCcw, ShieldCheck, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { CircleAlert, CircleCheck, FileCheck2, RotateCcw, ShieldCheck } from 'lucide-react'
 import {
   deliveryPlanApi,
   type DeliveryApproval,
   type DeliveryControlChangeSet,
 } from '../api/delivery'
+import { projectPath } from '../lib/router'
 import { useProject } from '../context/ProjectContext'
 import type { DataState } from '../types'
 import { StateBoundary } from './StateBoundary'
+import { DeliveryExecutionPanel } from './DeliveryExecutionPanel'
 
 const invalidReasonLabels: Record<NonNullable<DeliveryApproval['invalidReason']>, string> = {
   APPROVAL_EXPIRED: '审批已超过 24 小时有效期，需要重新预检并审批。',
@@ -23,14 +25,13 @@ const preflightPassedStatuses = new Set<DeliveryControlChangeSet['status']>([
   'rolled_back',
 ])
 
-export function DeliveryApprovalCenterPage({ state, selectedChangeSetId }: { state: DataState; tourCase?: string; tourRunId?: string; selectedChangeSetId?: string }) {
+export function DeliveryApprovalCenterPage({ state, selectedChangeSetId }: { state: DataState; selectedChangeSetId?: string }) {
   const { currentProject } = useProject()
   const projectId = currentProject.id
   const [changeSets, setChangeSets] = useState<DeliveryControlChangeSet[]>([])
   const [selectedId, setSelectedId] = useState(selectedChangeSetId ?? '')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
-  const [rejectionReason, setRejectionReason] = useState('')
   const listRequest = useRef(0)
   const activeProjectId = useRef(projectId)
   activeProjectId.current = projectId
@@ -66,32 +67,6 @@ export function DeliveryApprovalCenterPage({ state, selectedChangeSetId }: { sta
     return () => { listRequest.current += 1 }
   }, [refresh])
 
-  useEffect(() => {
-    setRejectionReason('')
-  }, [selectedId])
-
-  const apply = async (action: 'approve' | 'reject') => {
-    if (!selected) return
-	if (action === 'reject' && rejectionReason.trim().length < 3) {
-	  setNotice('打回时请填写至少 3 个字符的修改原因。')
-	  return
-	}
-    listRequest.current += 1
-    setBusy(true)
-    try {
-      const updated = action === 'approve'
-        ? await deliveryPlanApi.approveChangeSet(projectId, selected.id, selected.version)
-        : await deliveryPlanApi.rejectChangeSet(projectId, selected.id, selected.version, rejectionReason.trim())
-      setChangeSets(current => current.map(item => item.id === updated.id ? updated : item))
-	  if (action === 'reject') setRejectionReason('')
-      setNotice(action === 'approve' ? `已批准${updated.recommendationId ? '优化申请' : '平台操作演练'}；授权将在 24 小时后过期。` : '已打回变更申请，并保留修改原因。')
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : '审批失败')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const approval = selected?.approval
   const preflightPassed = selected ? preflightPassedStatuses.has(selected.status) : false
   const optimizationApproval = Boolean(selected?.recommendationId)
@@ -99,15 +74,16 @@ export function DeliveryApprovalCenterPage({ state, selectedChangeSetId }: { sta
   return <StateBoundary
     state={state}
     contextLabel="智能投放 / 审批中心"
-    emptyTitle="当前 Project 暂无待审批变更申请"
-    emptyDetail="在投放计划页检查草稿并提交变更申请后，审批快照会出现在这里。"
+    emptyTitle="当前 Project 暂无历史审批记录"
+    emptyDetail="真实审批请进入受控执行中心。"
     errorDetail="审批队列暂时无法读取。请确认 Delivery 服务可用后刷新。"
     retryLabel="刷新审批队列"
   >
+    <p className="inline-notice">此页仅查看历史审批；演示授权不适用于真实平台。<a href={projectPath(projectId, 'delivery', 'execution')}>进入受控执行中心</a></p>
     <div className="approval-workspace">
       <aside className="approval-queue">
         <div className="surface-toolbar">
-          <h3>审批队列</h3>
+          <h3>历史审批记录</h3>
           <button onClick={() => void refresh()} disabled={busy} aria-label="刷新审批队列"><RotateCcw size={15}/></button>
         </div>
         {changeSets.map(item => <button
@@ -161,24 +137,10 @@ export function DeliveryApprovalCenterPage({ state, selectedChangeSetId }: { sta
             <GateRow passed={approval?.valid === true} label="审批有效性" detail={approval?.valid ? '内容、有效期、范围和预算匹配' : approval?.invalidReason ?? '尚未批准'} />
           </div>
 
-          {selected.status === 'preflight_passed' ? <section className="approval-decision-panel" aria-labelledby="approval-decision-title">
-            <header className="approval-decision-heading">
-              <div><span className="section-label">审批决定</span><h3 id="approval-decision-title">批准当前快照，或说明原因后打回</h3></div>
-              <small>{optimizationApproval ? '本次决定仅记录对优化配置快照的人工批准，不会生成行为工作流或写入广告平台。' : '本次授权仅用于启动平台操作演练。'}</small>
-            </header>
-            <label className="approval-rejection-reason" htmlFor="approval-rejection-reason">
-              <span>打回修改说明 <em>打回时必填</em></span>
-              <textarea id="approval-rejection-reason" value={rejectionReason} onChange={event => setRejectionReason(event.target.value)} placeholder="例如：预算上限与本轮目标不一致，请调整为……" disabled={busy} maxLength={500} aria-describedby="approval-rejection-help"/>
-              <small id="approval-rejection-help"><span>请具体说明需要修改的对象、字段和期望结果，至少 3 个字符。</span><b>{rejectionReason.length} / 500</b></small>
-            </label>
-            <div className="approval-decision-actions">
-              <button className="secondary-button approval-reject-button" onClick={() => void apply('reject')} disabled={busy || rejectionReason.trim().length < 3}><ThumbsDown size={15}/>打回修改</button>
-              <button className="primary-button" onClick={() => void apply('approve')} disabled={busy}><ThumbsUp size={15}/>{optimizationApproval ? '批准优化申请' : '批准平台操作演练'}</button>
-            </div>
-          </section> : selected.status === 'approved' ? <div className="approval-decision-result" role="status"><CircleCheck size={18}/><span><b>{optimizationApproval ? '优化申请已批准' : '平台操作演练已批准'}</b><small>审批决定和不可变内容快照已保存。</small></span></div> : null}
-          {optimizationApproval
-            ? <div className="approval-optimization-handoff"><span><b>当前仅完成配置审批留痕</b><small>行为工作流编译和真实平台写入尚未实现；这里不会生成后续操作包，也不会宣称平台已执行。</small></span></div>
-            : <div className="approval-optimization-handoff"><span><b>旧模拟申请仅供审计</b><small>此页面不再启动本地模拟。请返回投放配置页，并进入真实受控执行。</small></span></div>}
+          {optimizationApproval ? <div className="approval-optimization-handoff"><span><b>当前仅完成配置审批留痕</b><small>行为工作流编译和真实平台写入尚未实现；这里不会生成后续操作包，也不会宣称平台已执行。</small></span></div> : <DeliveryExecutionPanel
+            projectId={projectId}
+            changeSet={selected}
+          />}
         </> : <div className="panel-empty"><FileCheck2 size={24}/>没有可显示的变更申请。</div>}
         {notice ? <div className="inline-notice" role="status">{notice}</div> : null}
       </section>

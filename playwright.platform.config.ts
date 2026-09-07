@@ -49,6 +49,7 @@ const localGoEnv = {
     'delivery.write',
     'delivery.approve',
     'delivery.execute',
+    'connector.read',
     'provider.job.create',
     'provider.text.generate',
     'provider.vision.understand',
@@ -78,7 +79,7 @@ const localGoEnv = {
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /(platform-go-demo|strategy-brand-video-foundation|strategy-workspace-rearchitecture|delivery-plan-preflight|delivery-approval-content-hash|delivery-decision-workflow|delivery-execution-scenarios|delivery-monitoring-alerts|delivery-platform-configuration|delivery-browser-rpa-execution|delivery-mock-tour|video-editor-phase1)\.spec\.ts/,
+  testMatch: /(platform-go-demo|strategy-brand-video-foundation|strategy-workspace-rearchitecture|delivery-plan-preflight|delivery-approval-content-hash|delivery-decision-workflow|delivery-execution-scenarios|delivery-monitoring-alerts|delivery-platform-configuration|delivery-browser-rpa-execution|delivery-demo-retirement|video-editor-phase1)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   use: {

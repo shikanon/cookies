@@ -35,7 +35,6 @@ const VideoCreationPage = lazy(() => import('./SpecializedPages').then(module =>
 const DeliveryMonitoringPage = lazy(() => import('./DeliveryMonitoringPage').then(module => ({ default: module.DeliveryMonitoringPage })))
 const DeliveryOptimizationPage = lazy(() => import('./DeliveryOptimizationPage').then(module => ({ default: module.DeliveryOptimizationPage })))
 const DeliveryConfigurationPage = lazy(() => import('./DeliveryConfigurationPage').then(module => ({ default: module.DeliveryConfigurationPage })))
-const DeliveryMockEnvironmentBanner = lazy(() => import('./DeliveryTourPage').then(module => ({ default: module.DeliveryMockEnvironmentBanner })))
 const ProductsPage = lazy(() => import('./ProductsPage').then(module => ({ default: module.ProductsPage })))
 const ExperimentCenterPage = lazy(() => import('./ExperimentCenterPage').then(module => ({ default: module.ExperimentCenterPage })))
 const PreLaunchPage = lazy(() => import('./insight/prelaunch/PreLaunchPage').then(module => ({ default: module.PreLaunchPage })))
@@ -64,7 +63,7 @@ const DeliveryPlatformEntitiesPage = lazy(() => import('../features/delivery-pla
   default: module.DeliveryPlatformEntitiesPage,
 })))
 
-type OpenProject = (id: string, system?: SystemKey, navId?: string, objectId?: string, view?: string, contextId?: string, tourRunId?: string, tourCase?: string) => void
+type OpenProject = (id: string, system?: SystemKey, navId?: string, objectId?: string, view?: string, contextId?: string) => void
 type OpenStrategyWorkspace = (projectId: string, workspaceId: string, location: StrategyWorkspaceLocation, replace?: boolean) => void
 
 function creativeTaskDestination(task: BusinessTaskRecord): { navId: string; view?: string } {
@@ -1521,8 +1520,6 @@ export function ModulePage({
   strategyStage,
   strategyPanel,
   strategyResource,
-  tourRunId,
-  tourCase,
   onOpenProject,
   onOpenStrategyWorkspace,
 }: {
@@ -1534,8 +1531,6 @@ export function ModulePage({
   strategyStage?: StrategyStage
   strategyPanel?: StrategyPanel
   strategyResource?: string
-  tourRunId?: string
-  tourCase?: string
   onOpenProject: OpenProject
   onOpenStrategyWorkspace: OpenStrategyWorkspace
 }) {
@@ -1626,16 +1621,16 @@ export function ModulePage({
     : system.key === 'insight' && item.id === 'experiments' ? <ExperimentCenterPage state={dataState} activeView={activeView}/>
     : system.key === 'insight' && item.id === 'settings' ? <SettingsPage state={dataState} view={settingsViews[activeView] ?? 'thresholds'}/>
     : system.key === 'delivery' && item.id === 'plans' ? <DeliveryPlanPage state={dataState}/>
-    : system.key === 'delivery' && item.id === 'configuration' ? <DeliveryConfigurationPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>
-    : system.key === 'delivery' && item.id === 'approvals' ? <ApprovalCenterPage state={dataState} tourCase={tourCase} tourRunId={tourRunId} selectedChangeSetId={objectId}/>
+    : system.key === 'delivery' && item.id === 'configuration' ? <DeliveryConfigurationPage state={dataState} activeView={activeView}/>
+    : system.key === 'delivery' && item.id === 'approvals' ? <ApprovalCenterPage state={dataState} selectedChangeSetId={objectId}/>
     : system.key === 'delivery' && item.id === 'execution' ? <Suspense fallback={<div className="page-notice" role="status">正在加载受控执行中心…</div>}>
       <ControlledExecutionWorkspace projectId={currentProject.id} runId={objectId} activeView={activeView}/>
     </Suspense>
     : system.key === 'delivery' && item.id === 'platform-entities' ? <Suspense fallback={<div className="page-notice" role="status">正在加载项目与单元…</div>}>
       <DeliveryPlatformEntitiesPage projectId={currentProject.id} activeView={activeView}/>
     </Suspense>
-    : system.key === 'delivery' && item.id === 'monitoring' ? <DeliveryMonitoringPage tourCase={tourCase}/>
-    : system.key === 'delivery' && item.id === 'optimization' ? <DeliveryOptimizationPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>
+    : system.key === 'delivery' && item.id === 'monitoring' ? <DeliveryMonitoringPage/>
+    : system.key === 'delivery' && item.id === 'optimization' ? <DeliveryOptimizationPage state={dataState} activeView={activeView}/>
     : system.key === 'delivery' && item.id === 'evidence' ? <AuditEvidenceSurface/>
     : system.key === 'delivery' && item.id === 'products' ? <Suspense fallback={<div className="page-notice" role="status">正在加载产品目录…</div>}><ProductsPage activeView={activeView}/></Suspense>
     : null
@@ -1677,10 +1672,9 @@ export function ModulePage({
   const hasImplementedHeaderViews = !(system.key === 'delivery' && (item.id === 'plans' || item.id === 'approvals' || item.id === 'monitoring'))
   const changeView = (view: string) => {
     setActiveView(view)
-    onOpenProject(currentProject.id, system.key, item.id, isStrategyWorkspace ? objectId : undefined, view, undefined, tourRunId, tourCase)
+    onOpenProject(currentProject.id, system.key, item.id, isStrategyWorkspace ? objectId : undefined, view, undefined)
   }
-  const deliveryEnvironment = system.key === 'delivery' && (tourRunId || tourCase) ? <DeliveryMockEnvironmentBanner/> : null
-  const pageSurface = <>{deliveryEnvironment}<div className={showObjectDetail ? 'page-surface with-object-detail' : 'page-surface'}>{surface}{showObjectDetail ? <ObjectDetail system={system} item={item} objectId={objectId!} onOpenProject={onOpenProject}/> : null}</div></>
+  const pageSurface = <><div className={showObjectDetail ? 'page-surface with-object-detail' : 'page-surface'}>{surface}{showObjectDetail ? <ObjectDetail system={system} item={item} objectId={objectId!} onOpenProject={onOpenProject}/> : null}</div></>
 
   const strategyStatusLabel = isStrategyWorkspace ? strategyStageLabel(strategyStage ?? 'intake') : activeView
   return <div className={`module-page page-frame layout-${item.layout}${isStrategyWorkspace ? ' strategy-workspace-page' : ''}`}>{isStrategyWorkspace ? null : <PageHeader item={item} activeView={activeView} onViewChange={changeView} onPrimaryAction={() => { void primaryAction() }} busy={busy} actionLabel={actionLabel} showTabs={hasImplementedHeaderViews} showDescription={!(system.key === 'delivery' && item.id === 'configuration')}/>}{import.meta.env.VITE_SHOW_STATE_PREVIEW === 'true' ? <StatePreview value={dataState} onChange={setDataState}/> : null}{notice ? <div className="page-notice" role="status"><CircleCheck size={16}/>{notice}<button aria-label="关闭提示" onClick={() => setNotice('')}>×</button></div> : null}{isStrategyWorkspace ? <div className="strategy-workspace-shell">{pageSurface}</div> : pageSurface}{system.key === 'strategy' && specialized ? <footer className="statusbar"><span>Project：{currentProject.name}</span><span>模块：{item.label}</span><span>阶段：{strategyStatusLabel}</span><span>状态源：Strategy 服务</span><strong>持久化：已启用</strong></footer> : system.key === 'strategy' ? <footer className="statusbar"><span>Project：{currentProject.name}</span><span>模块：{item.label}</span><span>视图：{activeView}</span><span>状态源：通用页面</span><strong>尚未接入专用数据源</strong></footer> : <footer className="statusbar"><span>Project：{currentProject.name}</span><span>阶段：{projectProgress.stageLabel}</span><span>进度：{progressPercentLabel(projectProgress)}</span><span>更新时间：{currentProject.updatedAt}</span><strong>进度状态：{progressStatusLabel(projectProgress)}</strong></footer>}{taskDialog?.domain === 'strategy' ? <KanonStrategyTaskDialog onClose={() => setTaskDialog(null)} onCreated={strategyTaskCreated}/> : taskDialog ? <TaskCreateDialog domain={taskDialog.domain} initialType={taskDialog.initialType} onClose={() => setTaskDialog(null)} onCreated={taskCreated}/> : null}</div>

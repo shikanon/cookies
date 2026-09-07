@@ -220,3 +220,43 @@ func readyOceanRuntimeInputs(t *testing.T, promotionCount int) (DeliveryIntent, 
 	}
 	return intent, finalized
 }
+
+func TestStoredPromotionProductNamePreservesCanonicalHash(t *testing.T) {
+	service, actor := newTestService()
+	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := plan.CurrentVersion
+	configuration := version.PlatformConfiguration
+	canonicalJSON, _ := json.Marshal(configuration.CanonicalPayload())
+	var canonical map[string]any
+	if err := json.Unmarshal(canonicalJSON, &canonical); err != nil {
+		t.Fatal(err)
+	}
+	canonical["ocean_engine"].(map[string]any)["promotions"].([]any)[0].(map[string]any)["product_name"] = "历史商品名称"
+	storedHash, err := contract.CanonicalJSONHash(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(version)
+	var stored map[string]any
+	if err := json.Unmarshal(payload, &stored); err != nil {
+		t.Fatal(err)
+	}
+	storedConfiguration := stored["platform_configuration"].(map[string]any)
+	storedConfiguration["canonical_hash"] = storedHash
+	storedConfiguration["payload"].(map[string]any)["ocean_engine"].(map[string]any)["promotions"].([]any)[0].(map[string]any)["product_name"] = "历史商品名称"
+	payload, _ = json.Marshal(stored)
+	decoded, err := decodePlanVersion(payload, storedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.CanonicalHash != storedHash || decoded.PlatformConfiguration.Payload.OceanEngine.Promotions[0].ProductName != "历史商品名称" {
+		t.Fatal("stored product name or hash changed")
+	}
+	decoded.PlatformConfiguration.Payload.OceanEngine.Promotions[0].ProductName = "另一个商品"
+	if _, err := PlanCanonicalHash(decoded); err == nil {
+		t.Fatal("a changed product name must fail the stored hash check")
+	}
+}

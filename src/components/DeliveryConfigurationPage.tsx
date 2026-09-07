@@ -987,7 +987,7 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
   </section>
 }
 
-export function DeliveryConfigurationPage({ state, activeView, tourRunId, tourCase }: { state: DataState; activeView: string; tourRunId?: string; tourCase?: string }) {
+export function DeliveryConfigurationPage({ state, activeView }: { state: DataState; activeView: string }) {
   const { currentProject, agencyWorkbench } = useProject()
   const projectId = currentProject.id
   const confirmedAssets = useMemo(() => (agencyWorkbench?.assetVersionPointers ?? []).filter(asset => asset.projectId === projectId && asset.humanConfirmedVersion), [agencyWorkbench, projectId])
@@ -1010,7 +1010,7 @@ export function DeliveryConfigurationPage({ state, activeView, tourRunId, tourCa
   const showConfiguration = activeView === '配置映射'
   const showCalibration = activeView === '字段校准与处置'
   const showPreflight = activeView === '检查与提交'
-  const planEditorURL = projectPath(projectId, 'delivery', 'plans', undefined, '计划列表', undefined, tourRunId, tourCase)
+  const planEditorURL = projectPath(projectId, 'delivery', 'plans', undefined, '计划列表', undefined)
   const referenceIntentIssues = useMemo(() => configuredReferenceIntentIssues(editableConfiguration, selectedPlan), [editableConfiguration, selectedPlan])
 
   const refresh = async () => {

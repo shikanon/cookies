@@ -30,7 +30,7 @@ export default function App() {
 
   useEffect(() => {
     if (route.systemKey === 'delivery' && route.navId === 'three-tier' && route.projectId) {
-      navigate(projectPath(route.projectId, 'delivery', 'configuration', route.objectId, route.view, route.contextId, route.tourRunId, route.tourCase), true)
+      navigate(projectPath(route.projectId, 'delivery', 'configuration', route.objectId, route.view, route.contextId), true)
     }
   }, [navigate, route])
 
@@ -76,7 +76,7 @@ export default function App() {
           panel: route.strategyPanel,
           resource: route.strategyResource,
         })
-      : projectPath(route.projectId, route.systemKey, route.navId, route.objectId, route.view, route.contextId, route.tourRunId, route.tourCase)
+      : projectPath(route.projectId, route.systemKey, route.navId, route.objectId, route.view, route.contextId)
     rememberProjectSystemPath(route.projectId, route.systemKey, path)
   }, [route])
 
@@ -86,14 +86,14 @@ export default function App() {
   const systemLanding: Record<SystemKey, string> = { strategy: 'tasks', creative: 'tasks', insight: 'analysis', delivery: 'plans' }
   const activeProjectId = route.projectId ?? currentProject.id
   const changeSystem = (next: SystemKey) => navigate(projectPath(activeProjectId, next, systemLanding[next]))
-  const openProject = (projectId: string, next?: SystemKey, navId?: string, objectId?: string, view?: string, contextId?: string, tourRunId?: string, tourCase?: string) => {
+  const openProject = (projectId: string, next?: SystemKey, navId?: string, objectId?: string, view?: string, contextId?: string) => {
     selectProject(projectId)
     if (next === 'creative' && navId === 'video' && view === '素材剪辑') {
       navigate(videoEditingPath(projectId, contextId))
       return
     }
     const rememberedPath = next && !navId ? getRememberedProjectSystemPath(projectId, next) : undefined
-    navigate(next ? rememberedPath ?? projectPath(projectId, next, navId ?? systemLanding[next], objectId, view, contextId, tourRunId, tourCase) : projectHomePath(projectId))
+    navigate(next ? rememberedPath ?? projectPath(projectId, next, navId ?? systemLanding[next], objectId, view, contextId) : projectHomePath(projectId))
   }
 
   const openStrategyWorkspace = (projectId: string, workspaceId: string, location: StrategyWorkspaceLocation, replace = false) => {
@@ -124,8 +124,6 @@ export default function App() {
         strategyStage={route.strategyStage}
         strategyPanel={route.strategyPanel}
         strategyResource={route.strategyResource}
-        tourRunId={route.tourRunId}
-        tourCase={route.tourCase}
         onOpenProject={openProject}
         onOpenStrategyWorkspace={openStrategyWorkspace}
       />

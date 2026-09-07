@@ -46,7 +46,7 @@ const initialPrior: PriorForm = {
   cvrMin: 0.002, cvrMode: 0.02, cvrMax: 0.08, tracking: 0.9, fatigue: 0.03,
 }
 
-export function DeliveryMonitoringPage({ tourCase: _tourCase }: { tourCase?: string }) {
+export function DeliveryMonitoringPage() {
   const { currentProject } = useProject()
   const queryPlanID = new URLSearchParams(window.location.search).get('plan_id') ?? ''
   const [plans, setPlans] = useState<DeliveryPlan[] | null>(null)
