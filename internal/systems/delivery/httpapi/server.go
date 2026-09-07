@@ -37,23 +37,15 @@ type Application interface {
 	Rollback(context.Context, contract.ActorContext, contract.ProjectID, string, int64) (delivery.ChangeSet, error)
 	ListExecutions(context.Context, contract.ActorContext, contract.ProjectID, int) ([]delivery.ExecutionResult, error)
 	GetExecution(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.ExecutionResult, error)
-	CreateOutcomeSimulation(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.CreateOutcomeSimulationRequest) (delivery.OutcomeSimulationResult, error)
 	GetLatestOutcomeSimulation(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.OutcomeSimulationResult, error)
-	CreateDemoMetricSnapshot(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.CreateMetricSnapshotRequest) (delivery.DeliveryMetricSnapshot, error)
 	ListMetricSnapshots(context.Context, contract.ActorContext, contract.ProjectID, string, int) ([]delivery.DeliveryMetricSnapshot, error)
-	EvaluateAlerts(context.Context, contract.ActorContext, contract.ProjectID, delivery.EvaluateAlertsRequest) (delivery.EvaluateAlertsResponse, error)
 	InspectConnectorAlerts(context.Context, contract.ActorContext, contract.ProjectID, delivery.ConnectorInspectionRequest) (delivery.ConnectorInspectionResponse, error)
 	ListAlerts(context.Context, contract.ActorContext, contract.ProjectID, delivery.AlertFilter) ([]delivery.DeliveryAlert, error)
 	UpdateAlert(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.UpdateAlertRequest) (delivery.DeliveryAlert, error)
-	GenerateRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string, int) (delivery.DeliveryRecommendation, error)
 	ListRecommendations(context.Context, contract.ActorContext, contract.ProjectID, int) ([]delivery.DeliveryRecommendation, error)
 	GetRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DeliveryRecommendation, error)
-	AcceptRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string, string, int64) (delivery.RecommendationAcceptance, bool, error)
-	RejectRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string, int64) (delivery.DeliveryRecommendation, error)
 	GetManualActionPackage(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.ManualActionPackage, error)
-	PrepareTourRun(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DeliveryTourRun, bool, error)
 	GetTourRun(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DeliveryTourRun, error)
-	ResetTourRun(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DeliveryTourResetResult, error)
 }
 
 type decisionWorkflowApplication interface {
@@ -121,7 +113,7 @@ func New(app Application) *Server {
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/browser-rpa-runs", server.startBrowserRpaExecution)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/configuration:compile", server.compileConfiguration)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/configuration:override", server.overrideConfiguration)
-	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/recommendations:generate", server.generateRecommendation)
+	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/recommendations:generate", server.retiredDemoWrite)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_id}/decisions:generate", server.generateDecision)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans/{plan_action}", server.createChangeSet)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/change-sets", server.listChangeSets)
@@ -131,7 +123,7 @@ func New(app Application) *Server {
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/change-sets/{change_set_id}/manual-action-package", server.getManualActionPackage)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/recommendations", server.listRecommendations)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/recommendations/{recommendation_id}", server.getRecommendation)
-	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/recommendations/{recommendation_action}", server.recommendationAction)
+	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/recommendations/{recommendation_action}", server.retiredDemoWrite)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/decisions", server.listDecisions)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/decisions/{decision_id}", server.getDecision)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/decisions/{decision_action}", server.decisionAction)
@@ -154,15 +146,15 @@ func New(app Application) *Server {
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/platform-entity-mappings/{mapping_action}", server.platformEntityMappingAction)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/executions", server.listExecutions)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/executions/{execution_id}", server.getExecution)
-	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/executions/{execution_id}/simulation-runs", server.createOutcomeSimulation)
+	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/executions/{execution_id}/simulation-runs", server.retiredDemoWrite)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/executions/{execution_id}/simulation-run", server.getLatestOutcomeSimulation)
-	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/executions/{execution_id}/metric-snapshots", server.createMetricSnapshot)
+	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/executions/{execution_id}/metric-snapshots", server.retiredDemoWrite)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/executions/{execution_id}/metric-snapshots", server.listMetricSnapshots)
-	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/alerts:evaluate", server.evaluateAlerts)
+	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/alerts:evaluate", server.retiredDemoWrite)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/alerts:inspect", server.inspectConnectorAlerts)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/alerts", server.listAlerts)
 	server.mux.HandleFunc("PATCH /api/delivery/v1/projects/{project_id}/alerts/{alert_id}", server.updateAlert)
-	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/tour-runs/{tour_action}", server.tourRunAction)
+	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/tour-runs/{tour_action}", server.retiredDemoWrite)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/tour-runs/{run_id}", server.getTourRun)
 	return server
 }
@@ -434,32 +426,6 @@ func (s *Server) getDecisionSelection(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, value)
 }
 
-func (s *Server) tourRunAction(w http.ResponseWriter, r *http.Request) {
-	action := r.PathValue("tour_action")
-	switch {
-	case strings.HasSuffix(action, ":prepare"):
-		value, replay, err := s.app.PrepareTourRun(r.Context(), mustActor(r), projectID(r), strings.TrimSuffix(action, ":prepare"))
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		status := http.StatusCreated
-		if replay {
-			status = http.StatusOK
-		}
-		writeJSON(w, status, value)
-	case strings.HasSuffix(action, ":reset"):
-		value, err := s.app.ResetTourRun(r.Context(), mustActor(r), projectID(r), strings.TrimSuffix(action, ":reset"))
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, value)
-	default:
-		writeError(w, r, delivery.ErrNotFound)
-	}
-}
-
 func (s *Server) getTourRun(w http.ResponseWriter, r *http.Request) {
 	value, err := s.app.GetTourRun(r.Context(), mustActor(r), projectID(r), r.PathValue("run_id"))
 	if err != nil {
@@ -477,20 +443,6 @@ func (s *Server) overrideConfiguration(w http.ResponseWriter, r *http.Request) {
 	writeError(w, r, delivery.ErrLegacyConfigurationUnsupported)
 }
 
-func (s *Server) generateRecommendation(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		ExpectedVersion int `json:"expected_version"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	v, err := s.app.GenerateRecommendation(r.Context(), mustActor(r), projectID(r), r.PathValue("plan_id"), body.ExpectedVersion)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, v)
-}
 func (s *Server) listRecommendations(w http.ResponseWriter, r *http.Request) {
 	v, err := s.app.ListRecommendations(r.Context(), mustActor(r), projectID(r), queryLimit(r))
 	if err != nil {
@@ -507,43 +459,6 @@ func (s *Server) getRecommendation(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, v)
 }
-func (s *Server) recommendationAction(w http.ResponseWriter, r *http.Request) {
-	action := r.PathValue("recommendation_action")
-	var body struct {
-		ExpectedVersion int64 `json:"expected_version"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	if strings.HasSuffix(action, ":accept") {
-		key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-		if key == "" {
-			writeError(w, r, delivery.ErrInvalidRequest)
-			return
-		}
-		v, replay, err := s.app.AcceptRecommendation(r.Context(), mustActor(r), projectID(r), strings.TrimSuffix(action, ":accept"), key, body.ExpectedVersion)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		if replay {
-			writeJSON(w, http.StatusOK, v)
-		} else {
-			writeJSON(w, http.StatusCreated, v)
-		}
-		return
-	}
-	if strings.HasSuffix(action, ":reject") {
-		v, err := s.app.RejectRecommendation(r.Context(), mustActor(r), projectID(r), strings.TrimSuffix(action, ":reject"), body.ExpectedVersion)
-		if err != nil {
-			writeError(w, r, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, v)
-		return
-	}
-	http.NotFound(w, r)
-}
 func (s *Server) compileManualActionPackage(w http.ResponseWriter, r *http.Request) {
 	writeError(w, r, delivery.ErrLegacyConfigurationUnsupported)
 }
@@ -557,18 +472,6 @@ func (s *Server) getManualActionPackage(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, v)
 }
 
-func (s *Server) evaluateAlerts(w http.ResponseWriter, r *http.Request) {
-	var body delivery.EvaluateAlertsRequest
-	if !decode(w, r, &body) {
-		return
-	}
-	v, err := s.app.EvaluateAlerts(r.Context(), mustActor(r), projectID(r), body)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, v)
-}
 func (s *Server) inspectConnectorAlerts(w http.ResponseWriter, r *http.Request) {
 	var body delivery.ConnectorInspectionRequest
 	if !decode(w, r, &body) {
@@ -890,38 +793,6 @@ func (s *Server) getExecution(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, value)
 }
 
-func (s *Server) createMetricSnapshot(writer http.ResponseWriter, request *http.Request) {
-	var body delivery.CreateMetricSnapshotRequest
-	if !decode(writer, request, &body) {
-		return
-	}
-	value, err := s.app.CreateDemoMetricSnapshot(
-		request.Context(), mustActor(request), projectID(request), request.PathValue("execution_id"), body,
-	)
-	if err != nil {
-		writeError(writer, request, err)
-		return
-	}
-	writeJSON(writer, http.StatusCreated, value)
-}
-
-func (s *Server) createOutcomeSimulation(writer http.ResponseWriter, request *http.Request) {
-	var body delivery.CreateOutcomeSimulationRequest
-	if !decode(writer, request, &body) {
-		return
-	}
-	value, err := s.app.CreateOutcomeSimulation(request.Context(), mustActor(request), projectID(request), request.PathValue("execution_id"), body)
-	if err != nil {
-		writeError(writer, request, err)
-		return
-	}
-	status := http.StatusCreated
-	if value.Replay {
-		status = http.StatusOK
-	}
-	writeJSON(writer, status, value)
-}
-
 func (s *Server) getLatestOutcomeSimulation(writer http.ResponseWriter, request *http.Request) {
 	value, err := s.app.GetLatestOutcomeSimulation(request.Context(), mustActor(request), projectID(request), request.PathValue("execution_id"))
 	if err != nil {
@@ -1014,6 +885,10 @@ func writeError(writer http.ResponseWriter, request *http.Request, err error) {
 	}
 	contractCode := delivery.DeliveryContractErrorCode(err)
 	switch {
+	case errors.Is(err, delivery.ErrDemoRetired):
+		status, code, message, retryable = http.StatusGone, "DELIVERY_DEMO_RETIRED", "历史演示写入已下线，请使用真实投放流程", false
+	case errors.Is(err, delivery.ErrExecutionUnavailable):
+		status, code, message, retryable = http.StatusServiceUnavailable, "EXECUTION_UNAVAILABLE", "投放执行能力尚未配置，请使用受控 Browser RPA 流程", false
 	case contractCode != "":
 		status, code, message, retryable = http.StatusBadRequest, contractCode, err.Error(), false
 	case errors.Is(err, delivery.ErrInvalidRequest):
@@ -1068,4 +943,8 @@ func writeError(writer http.ResponseWriter, request *http.Request, err error) {
 
 func errorScenario(code string) delivery.Scenario {
 	return delivery.Scenario(strings.ToLower(code))
+}
+
+func (s *Server) retiredDemoWrite(w http.ResponseWriter, r *http.Request) {
+	writeError(w, r, delivery.ErrDemoRetired)
 }

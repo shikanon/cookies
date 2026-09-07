@@ -6,43 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
-	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
 
-// CreateRecommendation persists a project-scoped recommendation derived from an immutable configuration snapshot.
-func (r MySQLRepository) CreateRecommendation(ctx context.Context, v DeliveryRecommendation) (DeliveryRecommendation, error) {
-	if v.BaseConfiguration == nil || v.TargetConfiguration == nil || v.BaseSnapshot != nil || v.TargetSnapshot != nil {
-		return DeliveryRecommendation{}, ErrLegacyConfigurationUnsupported
-	}
-	target, err := json.Marshal(recommendationTarget(v))
-	if err != nil {
-		return v, err
-	}
-	base, err := json.Marshal(recommendationBase(v))
-	if err != nil {
-		return v, err
-	}
-	evidence, _ := json.Marshal(v.Evidence)
-	risks, _ := json.Marshal(v.Risks)
-	_, err = r.DB.ExecContext(ctx, `INSERT INTO delivery_recommendations (id,organization_id,project_id,plan_id,plan_version,simulation_run_id,fingerprint,base_snapshot_hash,base_snapshot,target_snapshot,target_snapshot_hash,evidence_json,action_text,impact_text,risks_json,observation_text,cooldown_until,provenance,status,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.OrganizationID, v.ProjectID, v.PlanID, v.PlanVersion, nullableString(v.SimulationRunID), v.Fingerprint, v.BaseSnapshotHash, base, target, v.TargetSnapshotHash, evidence, v.Action, v.Impact, risks, v.Observation, v.CooldownUntil, v.Provenance, v.Status, v.Version, v.CreatedBy, v.CreatedAt, v.UpdatedAt)
-	if err != nil {
-		var mysqlError *mysqlDriver.MySQLError
-		if errors.As(err, &mysqlError) && mysqlError.Number == 1062 {
-			existing, getErr := scanRecommendation(r.DB.QueryRowContext(ctx, recommendationSelect+` WHERE organization_id=? AND project_id=? AND fingerprint=?`, v.OrganizationID, v.ProjectID, v.Fingerprint))
-			if getErr == nil && existing.BaseSnapshotHash == v.BaseSnapshotHash && existing.TargetSnapshotHash == v.TargetSnapshotHash {
-				return existing, nil
-			}
-			if getErr == nil {
-				return DeliveryRecommendation{}, ErrIdempotencyConflict
-			}
-		}
-		return DeliveryRecommendation{}, err
-	}
-	return v, nil
-}
 func (r MySQLRepository) ListRecommendations(ctx context.Context, o contract.OrganizationID, p contract.ProjectID, limit int) ([]DeliveryRecommendation, error) {
 	rows, err := r.DB.QueryContext(ctx, recommendationSelect+` WHERE organization_id=? AND project_id=? ORDER BY created_at DESC,id DESC LIMIT ?`, o, p, limit)
 	if err != nil {
@@ -65,86 +32,6 @@ func (r MySQLRepository) GetRecommendation(ctx context.Context, o contract.Organ
 		return DeliveryRecommendation{}, ErrNotFound
 	}
 	return v, err
-}
-func (r MySQLRepository) AcceptRecommendation(ctx context.Context, v DeliveryRecommendation, key, requestHash string, cs ChangeSet) (RecommendationAcceptance, bool, error) {
-	if v.ReadOnly || v.TargetConfiguration == nil || cs.TargetSnapshot == nil || cs.LegacyTargetSnapshot != nil {
-		return RecommendationAcceptance{}, false, ErrLegacyConfigurationUnsupported
-	}
-	tx, err := r.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return RecommendationAcceptance{}, false, err
-	}
-	defer tx.Rollback()
-	stored, err := scanRecommendation(tx.QueryRowContext(ctx, recommendationSelect+` WHERE organization_id=? AND project_id=? AND id=? FOR UPDATE`, v.OrganizationID, v.ProjectID, v.ID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return RecommendationAcceptance{}, false, ErrNotFound
-	}
-	if err != nil {
-		return RecommendationAcceptance{}, false, err
-	}
-	if stored.Status == RecommendationAccepted {
-		if stored.IdempotencyKey == key && stored.RequestHash == requestHash {
-			got, err := scanChangeSet(tx.QueryRowContext(ctx, changeSetSelect+` WHERE organization_id=? AND project_id=? AND id=?`, v.OrganizationID, v.ProjectID, stored.AcceptedChangeSetID))
-			return RecommendationAcceptance{Recommendation: stored, ChangeSet: got}, true, err
-		}
-		return RecommendationAcceptance{}, false, ErrIdempotencyConflict
-	}
-	if stored.Status != RecommendationProposed || stored.Version != v.Version {
-		return RecommendationAcceptance{}, false, ErrVersionConflict
-	}
-	// Serialize draft creation per Plan even when two different recommendations
-	// are accepted concurrently. MySQL has no portable partial unique index for
-	// status='draft', so the parent Plan row is the transaction lock.
-	var lockedPlanID string
-	if err = tx.QueryRowContext(ctx, `SELECT id FROM delivery_plans WHERE organization_id=? AND project_id=? AND id=? FOR UPDATE`, v.OrganizationID, v.ProjectID, v.PlanID).Scan(&lockedPlanID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return RecommendationAcceptance{}, false, ErrNotFound
-		}
-		return RecommendationAcceptance{}, false, err
-	}
-	var draftCount int
-	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM delivery_change_sets WHERE organization_id=? AND project_id=? AND plan_id=? AND status='draft'`, v.OrganizationID, v.ProjectID, v.PlanID).Scan(&draftCount)
-	if err != nil {
-		return RecommendationAcceptance{}, false, err
-	}
-	if draftCount > 0 {
-		return RecommendationAcceptance{}, false, ErrInvalidState
-	}
-	notes, _ := json.Marshal(cs.PreflightNotes)
-	target := changeSetSnapshotJSON(cs)
-	_, err = tx.ExecContext(ctx, `INSERT INTO delivery_change_sets (id,organization_id,project_id,plan_id,plan_version,status,risk_level,preflight_notes,target_snapshot,target_snapshot_hash,target_snapshot_schema_version,recommendation_id,approved_by,approved_at,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?,?,?)`, cs.ID, cs.OrganizationID, cs.ProjectID, cs.PlanID, cs.PlanVersion, cs.Status, cs.RiskLevel, notes, target, cs.TargetSnapshotHash, nullableString(changeSetSnapshotSchema(cs)), cs.RecommendationID, cs.Version, cs.CreatedBy, cs.CreatedAt, cs.UpdatedAt)
-	if err != nil {
-		return RecommendationAcceptance{}, false, err
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE delivery_recommendations SET status=?,version=version+1,idempotency_key=?,request_hash=?,accepted_change_set_id=?,updated_at=? WHERE organization_id=? AND project_id=? AND id=? AND status=? AND version=?`, RecommendationAccepted, key, requestHash, cs.ID, cs.UpdatedAt, v.OrganizationID, v.ProjectID, v.ID, RecommendationProposed, v.Version)
-	if err != nil {
-		return RecommendationAcceptance{}, false, err
-	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		return RecommendationAcceptance{}, false, ErrVersionConflict
-	}
-	if err = tx.Commit(); err != nil {
-		return RecommendationAcceptance{}, false, err
-	}
-	stored.Status = RecommendationAccepted
-	stored.Version++
-	stored.IdempotencyKey = key
-	stored.RequestHash = requestHash
-	stored.AcceptedChangeSetID = cs.ID
-	stored.UpdatedAt = cs.UpdatedAt
-	return RecommendationAcceptance{Recommendation: stored, ChangeSet: cs}, false, nil
-}
-func (r MySQLRepository) RejectRecommendation(ctx context.Context, o contract.OrganizationID, p contract.ProjectID, id string, expected int64, actor string, now time.Time) (DeliveryRecommendation, error) {
-	res, err := r.DB.ExecContext(ctx, `UPDATE delivery_recommendations SET status=?,version=version+1,updated_at=? WHERE organization_id=? AND project_id=? AND id=? AND status=? AND version=?`, RecommendationRejected, now, o, p, id, RecommendationProposed, expected)
-	if err != nil {
-		return DeliveryRecommendation{}, err
-	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		return DeliveryRecommendation{}, ErrVersionConflict
-	}
-	return r.GetRecommendation(ctx, o, p, id)
 }
 func (r MySQLRepository) GetManualActionPackage(ctx context.Context, o contract.OrganizationID, p contract.ProjectID, cs string) (ManualActionPackage, error) {
 	var payload []byte
@@ -196,14 +83,6 @@ func scanRecommendation(row rowScanner) (DeliveryRecommendation, error) {
 		v.AcceptedChangeSetID = cs.String
 	}
 	return v, nil
-}
-
-func recommendationBase(value DeliveryRecommendation) any {
-	return value.BaseConfiguration
-}
-
-func recommendationTarget(value DeliveryRecommendation) any {
-	return value.TargetConfiguration
 }
 
 func decodeRecommendationSnapshot(value *DeliveryRecommendation, payload []byte, base bool) error {

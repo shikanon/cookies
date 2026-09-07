@@ -68,7 +68,7 @@ func TestChangeSetFreezesVersionAndRejectsStalePlan(t *testing.T) {
 	}
 }
 
-func TestChangeSetGoldenFlowAndMetricProvenance(t *testing.T) {
+func TestChangeSetGoldenFlow(t *testing.T) {
 	service, actor := newTestService()
 	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
 	if err != nil {
@@ -96,13 +96,7 @@ func TestChangeSetGoldenFlowAndMetricProvenance(t *testing.T) {
 	if executed.Execution.Mode != ExecutionModeLocalSimulation {
 		t.Fatalf("unexpected mode %q", executed.Execution.Mode)
 	}
-	metric, err := service.CreateDemoMetricSnapshot(context.Background(), actor, "project_a", executed.Execution.ID, CreateMetricSnapshotRequest{DatasetVersion: DemoMetricDatasetVersion})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if metric.Source != MetricSourceDemoFixture || !metric.IsSimulated {
-		t.Fatalf("unexpected metric provenance: %#v", metric)
-	}
+
 }
 
 func TestDecisionWorkflowServiceDiagnosesThenCompilesWithoutAuthority(t *testing.T) {
@@ -141,54 +135,17 @@ func TestDecisionWorkflowServiceDiagnosesThenCompilesWithoutAuthority(t *testing
 	}
 }
 
-func TestAlertsAreDeterministicAndUseCAS(t *testing.T) {
+func TestHistoricalAlertActionsUseCAS(t *testing.T) {
 	service, actor := newTestService()
-	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
-	if err != nil {
-		t.Fatal(err)
-	}
 	repo := service.Repository.(*memoryRepository)
-	repo.simulations = append(repo.simulations, OutcomeSimulationRun{ID: "simulation_1", OrganizationID: actor.OrganizationID, ProjectID: "project_a", ExecutionID: "execution_1", Scenario: OutcomeScenarioReviewRejected, Events: []OutcomeSimulationEvent{{Type: "review_rejected"}}})
-	repo.metrics = append(repo.metrics,
-		DeliveryMetricSnapshot{ID: "metric_1", OrganizationID: actor.OrganizationID, ProjectID: "project_a", ExecutionID: "execution_1", SimulationRunID: "simulation_1", PlanID: plan.ID, Source: MetricSourceDemoFixture, DatasetVersion: DemoMetricDatasetVersion, FixtureVersion: "deterministic-v1/test", WindowSequence: 1, WindowStart: plan.StartAt, WindowEnd: plan.StartAt.Add(24 * time.Hour), DataThrough: plan.StartAt.Add(24 * time.Hour), RawMetrics: RawMetrics{Impressions: 10000, Clicks: 500, Conversions: 20, SpendCents: 20000}},
-		DeliveryMetricSnapshot{ID: "metric_2", OrganizationID: actor.OrganizationID, ProjectID: "project_a", ExecutionID: "execution_1", SimulationRunID: "simulation_1", PlanID: plan.ID, Source: MetricSourceDemoFixture, DatasetVersion: DemoMetricDatasetVersion, FixtureVersion: "deterministic-v1/test", WindowSequence: 2, WindowStart: plan.StartAt.Add(24 * time.Hour), WindowEnd: plan.StartAt.Add(48 * time.Hour), DataThrough: plan.StartAt.Add(48 * time.Hour), RawMetrics: RawMetrics{Impressions: 10000, Clicks: 400, Conversions: 0, SpendCents: 60000}},
-	)
-	response, err := service.EvaluateAlerts(context.Background(), actor, "project_a", EvaluateAlertsRequest{Fixture: AlertScenarioAnomalyDay})
-	if err != nil || response.CreatedCount != 4 || len(response.Items) != 4 {
-		t.Fatalf("evaluate=%#v err=%v", response, err)
-	}
-	byType := map[AlertType]DeliveryAlert{}
-	for _, alert := range response.Items {
-		byType[alert.Type] = alert
-	}
-	if got := *byType[AlertSpendSpike].MetricDefinition.ObservedValue; got != 60000 {
-		t.Fatalf("spend spike must evaluate the anomaly window, got %v", got)
-	}
-	if got := *byType[AlertZeroConversion].MetricDefinition.ObservedValue; got != 0 {
-		t.Fatalf("zero conversion must evaluate the anomaly window, got %v", got)
-	}
-	if got := *byType[AlertCostWorsening].MetricDefinition.ObservedValue; got != 60000 {
-		t.Fatalf("cost worsening must use its safe zero-conversion denominator, got %v", got)
-	}
-	for _, alert := range response.Items {
-		if len(alert.EvidenceRefs) < 3 || alert.ExecutionID != "execution_1" {
-			t.Fatalf("alert must retain the exact execution and metric chain: %#v", alert)
-		}
-	}
-	replayed, err := service.EvaluateAlerts(context.Background(), actor, "project_a", EvaluateAlertsRequest{Fixture: AlertScenarioAnomalyDay})
-	if err != nil || replayed.ReusedCount != 4 {
-		t.Fatalf("replay=%#v err=%v", replayed, err)
-	}
-	alert := response.Items[0]
-	updated, err := service.UpdateAlert(context.Background(), actor, "project_a", alert.ID, UpdateAlertRequest{Action: AlertAcknowledge, ExpectedVersion: alert.Version})
-	if err != nil || updated.Status != AlertAcknowledged || updated.Version != 2 {
+	alert := DeliveryAlert{ID: "historical_alert", OrganizationID: actor.OrganizationID, ProjectID: "project_a", Status: AlertOpen, Version: 1, Source: MetricSourceDemoFixture, IsSimulated: true}
+	repo.alerts = map[string]DeliveryAlert{repositoryKey(actor.OrganizationID, "project_a", alert.ID): alert}
+	updated, err := service.UpdateAlert(context.Background(), actor, "project_a", alert.ID, UpdateAlertRequest{Action: AlertAcknowledge, ExpectedVersion: 1})
+	if err != nil || updated.Status != AlertAcknowledged || updated.Version != 2 || !updated.IsSimulated {
 		t.Fatalf("update=%#v err=%v", updated, err)
 	}
 	if _, err := service.UpdateAlert(context.Background(), actor, "project_a", alert.ID, UpdateAlertRequest{Action: AlertDismiss, ExpectedVersion: 1}); !errors.Is(err, ErrVersionConflict) {
-		t.Fatalf("stale terminal action error=%v", err)
-	}
-	if _, err := service.EvaluateAlerts(context.Background(), actor, "project_a", EvaluateAlertsRequest{Fixture: AlertScenarioStaleData}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("stale action error=%v", err)
 	}
 }
 
@@ -863,6 +820,7 @@ func newTestServiceClock() (Service, contract.ActorContext, func(time.Time)) {
 	counter := 0
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	service := Service{
+		Adapter:    DeterministicMockAdapter{},
 		Repository: repository,
 		Projects:   testProjects{},
 		NewID: func(prefix string) (string, error) {
@@ -1357,16 +1315,6 @@ func (r *memoryRepository) GetExecutionByChangeSet(_ context.Context, organizati
 	return ExecutionResult{}, ErrNotFound
 }
 
-func (r *memoryRepository) CreateMetricSnapshot(_ context.Context, value DeliveryMetricSnapshot) (DeliveryMetricSnapshot, bool, error) {
-	for _, existing := range r.metrics {
-		if existing.OrganizationID == value.OrganizationID && existing.ExecutionID == value.ExecutionID && existing.DatasetVersion == value.DatasetVersion && existing.FixtureVersion == value.FixtureVersion && existing.WindowSequence == value.WindowSequence {
-			return existing, false, nil
-		}
-	}
-	r.metrics = append(r.metrics, value)
-	return value, true, nil
-}
-
 func (r *memoryRepository) ListMetricSnapshots(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, executionID string, _ int) ([]DeliveryMetricSnapshot, error) {
 	values := make([]DeliveryMetricSnapshot, 0)
 	for _, value := range r.metrics {
@@ -1385,22 +1333,6 @@ func (r *memoryRepository) ListProjectMetricSnapshots(_ context.Context, organiz
 		}
 	}
 	return values, nil
-}
-func (r *memoryRepository) CreateOrGetOutcomeSimulation(_ context.Context, run OutcomeSimulationRun, metrics []DeliveryMetricSnapshot) (OutcomeSimulationRun, []DeliveryMetricSnapshot, bool, error) {
-	for _, existing := range r.simulations {
-		if existing.OrganizationID == run.OrganizationID && existing.ProjectID == run.ProjectID && existing.Fingerprint == run.Fingerprint {
-			stored := make([]DeliveryMetricSnapshot, 0)
-			for _, metric := range r.metrics {
-				if metric.SimulationRunID == existing.ID {
-					stored = append(stored, metric)
-				}
-			}
-			return existing, stored, true, nil
-		}
-	}
-	r.simulations = append(r.simulations, run)
-	r.metrics = append(r.metrics, metrics...)
-	return run, metrics, false, nil
 }
 func (r *memoryRepository) GetLatestOutcomeSimulation(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, executionID string) (OutcomeSimulationRun, []DeliveryMetricSnapshot, error) {
 	for index := len(r.simulations) - 1; index >= 0; index-- {

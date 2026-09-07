@@ -32,14 +32,6 @@ unit (platform promotion) → material mappings plus project-scoped `spend`, `im
 unit/currency, schema and definition versions, source (`mock`/`replay` or a
 future `connector`), freshness, quality, and evidence references.
 
-The historical fixture API uses versioned deterministic mock fixtures embedded
-in Delivery. It is not connected to the business monitoring page. Replay keeps the
-same fixture identities and scope. The current simulation adapter normalizes
-stored OutcomeSimulation windows into the same metric-fact DTO; `EvaluateAlerts`
-then calculates from those facts rather than reading Repository metrics.
-An optional `execution_id` on the query pins the simulation adapter to that
-execution; it filters before selecting a seed so projects with multiple
-executions never mix windows.
-Only `usable` data can produce a deterministic alert. `empty`, `stale`, `incomplete`, `schema_mismatch`, and
-`unavailable` data return an explicit quality/provenance result with no alert,
-and never fabricate a zero metric.
+Historical fixtures and stored OutcomeSimulation records remain readable for audit and regression tests. They cannot create new business alerts. The retired `alerts:evaluate` endpoint returns HTTP 410; real monitoring uses `InspectConnectorAlerts` and its freshness, quality, and account boundaries.
+
+Tour and legacy Recommendation writes are retired. The old approval and execution panels are read-only. Tests explicitly inject their deterministic execution adapter; missing production execution capability never generates simulated success.

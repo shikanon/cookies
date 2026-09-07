@@ -480,29 +480,6 @@ export function createPlatformClient(options: PlatformClientOptions = {}) {
       asArray((await request<ItemsResponse<PlatformAuditEvent>>(`/projects/${encodeURIComponent(projectId)}/audit-events`)).items).map(toApiAuditEvent),
     listChangeSets: async (projectId: string) =>
       asArray((await request<ItemsResponse<PlatformChangeSet>>(`/projects/${encodeURIComponent(projectId)}/change-sets`)).items).map(toDeliveryChangeSet),
-    createChangeSet: (projectId: string, input: { name: string; artifactIds: string[]; budgetLimit: number }) =>
-      request<PlatformChangeSet>(`/projects/${encodeURIComponent(projectId)}/change-sets`, withIdempotency({
-        method: "POST",
-        body: JSON.stringify({
-          name: input.name,
-          artifact_refs: input.artifactIds.map(artifactId => toProjectAssetRef(projectId, artifactId)),
-          budget_limit: input.budgetLimit,
-        }),
-      })).then(toDeliveryChangeSet),
-    preflightChangeSet: (projectId: string, changeSetId: string) =>
-      request<PlatformChangeSet>(`/projects/${encodeURIComponent(projectId)}/change-sets/${encodeURIComponent(changeSetId)}/preflight`, { method: "POST" }).then(toDeliveryChangeSet),
-    approveChangeSet: (projectId: string, changeSetId: string) =>
-      request<PlatformChangeSet>(`/projects/${encodeURIComponent(projectId)}/change-sets/${encodeURIComponent(changeSetId)}/approve`, {
-        method: "POST",
-        body: JSON.stringify({ actor: "Amelia Meng", role: "demo-approver", note: "前端演示审批通过" }),
-      }).then(toDeliveryChangeSet),
-    executeChangeSet: (projectId: string, changeSetId: string) =>
-      request<PlatformChangeSet>(`/projects/${encodeURIComponent(projectId)}/change-sets/${encodeURIComponent(changeSetId)}/execute`, { method: "POST" }).then(toDeliveryChangeSet),
-    rollbackChangeSet: (projectId: string, changeSetId: string, reason: string) =>
-      request<PlatformChangeSet>(`/projects/${encodeURIComponent(projectId)}/change-sets/${encodeURIComponent(changeSetId)}/rollback`, {
-        method: "POST",
-        body: JSON.stringify({ actor: "Amelia Meng", reason }),
-      }).then(toDeliveryChangeSet),
     createMedia: (projectId: string, kind: "image" | "video", prompt: string) =>
       request<PlatformProviderJob>(`/projects/${encodeURIComponent(projectId)}/model/jobs`, withIdempotency({
         method: "POST",

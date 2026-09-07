@@ -33,7 +33,7 @@ ID。它也支持已绑定单元的预算修改。素材替换、暂停和启用
 6. 生成不可变 DeliveryDecision；
 7. 选择候选并编译 write-disabled workflow。
 
-任何历史配置进入这些路径都返回稳定错误 `LEGACY_CONFIGURATION_UNSUPPORTED`。仓储层不会写入新的历史 PlanVersion、历史 ChangeSet 或历史 Recommendation。旧 Recommendation 的生成、采纳与拒绝只允许带 owner-scoped `tour_run_id` 的历史演示链；普通项目以 Decision 为唯一优化主路径。
+任何历史配置进入这些路径都返回稳定错误 `LEGACY_CONFIGURATION_UNSUPPORTED`。仓储层不会写入新的历史 PlanVersion、历史 ChangeSet 或历史 Recommendation。旧 Recommendation 的生成、采纳与拒绝已下线，接口返回 HTTP 410 `DELIVERY_DEMO_RETIRED`；业务以 Decision 为唯一优化主路径。
 
 旧 `configuration:compile`、`configuration:override` 与操作包 POST 只保留为 deprecated 兼容墓碑。它们不解析业务请求，不依赖 Service，也不产生副作用。
 
@@ -77,26 +77,15 @@ CompiledWorkflow 显式绑定平台、账户引用、配置身份与 hash，以�
 
 ## OutcomeSimulation 与监控
 
-OutcomeSimulation 只接受已成功平台操作演练所绑定的 v2 PlanVersion 和 ChangeSet。相同输入、情景与稳定 seed 产生确定性指标窗口和事件。Decision 必须引用同一 SimulationRun、Execution 和指标窗口，并把指标业务内容纳入 canonical hash；旧 Recommendation 仅供 Tour 历史演示。
+OutcomeSimulation 仅保留历史读取；演示执行、指标和模拟告警不会再通过业务页面生成。
 
-该 Execution 绑定路径现在是历史 Tour 兼容路径。上线前 Mechanistic Simulation 使用独立端口、存储和 API。它直接绑定不可变 PlanVersion、DeliveryIntent、OceanEngineConfiguration 和校准 Manifest。它不要求 Execution、Approval 或 Browser RPA Run。
+上线前 Mechanistic Simulation 使用独立端口、存储和 API。它直接绑定不可变 PlanVersion、DeliveryIntent、OceanEngineConfiguration 和校准 Manifest。它不要求 Execution、Approval 或 Browser RPA Run。
 
 Mechanistic Simulation v1 显式选择本地 Connector 账号。服务读取该账号已保存的七日启动批次先验。模型输出普通情景和跑量号情景。模型不提前识别跑量单元。模型不生成预算或出价变更。显式 CVR 和追踪先验只用于转化诊断。
 
-## Tour
+## 历史 Tour
 
-黄金路径固定为八步：
-
-1. 核对计划来源；
-2. 核对平台配置；
-3. 首次 ChangeSet 检查与审批；
-4. 平台操作演练；
-5. 情景模拟、指标与告警；
-6. 生成优化建议；
-7. 采纳建议并形成新 ChangeSet；
-8. 第二次人工审批。
-
-Tour 不生成操作包。最终页面明确说明行为工作流编译和真实平台写入尚未实现。
+准备与复位已下线，旧写入接口返回 HTTP 410。历史记录保持可读，前端忽略 Tour 参数。旧审批页仅查看历史快照；真实投放进入受控执行中心。未配置执行适配器时返回 `EXECUTION_UNAVAILABLE`，不得回退到 Mock。
 
 ## 前端信息架构
 

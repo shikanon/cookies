@@ -1,5 +1,3 @@
-import { platformClient } from '../data/platformClient'
-
 export class DeliveryApiError extends Error {
   readonly violations: Array<{ field: string; reason: string }>
   constructor(readonly code: string | undefined, readonly status: number, message: string, violations: Array<{ field: string; reason: string }> = []) {
@@ -29,16 +27,6 @@ export type DeliveryChangeSet = {
   version: number
   createdAt: string
   updatedAt: string
-}
-
-export const deliveryApi = {
-  listChangeSets: (projectId?: string) => projectId ? platformClient.listChangeSets(projectId) : Promise.resolve([]),
-  createChangeSet: (input: { projectId: string; name: string; artifactIds: string[]; budgetLimit: number }) =>
-    platformClient.createChangeSet(input.projectId, input),
-  preflight: (projectId: string, id: string) => platformClient.preflightChangeSet(projectId, id),
-  approve: (projectId: string, id: string) => platformClient.approveChangeSet(projectId, id),
-  execute: (projectId: string, id: string) => platformClient.executeChangeSet(projectId, id),
-  rollback: (projectId: string, id: string, reason: string) => platformClient.rollbackChangeSet(projectId, id, reason),
 }
 
 export type DeliverySource = 'mock'
@@ -964,20 +952,9 @@ export const deliveryPlanApi = {
       `/change-sets/${encodeURIComponent(changeSetId)}`,
     ))
   },
-  async approveChangeSet(projectId: string, changeSetId: string, expectedVersion: number): Promise<DeliveryControlChangeSet> {
-    return deliveryChangeSetAction(projectId, changeSetId, 'approve', expectedVersion)
-  },
-  async rejectChangeSet(projectId: string, changeSetId: string, expectedVersion: number, reason: string): Promise<DeliveryControlChangeSet> {
-    const response = await deliveryPlanRequest<WireDeliveryControlChangeSet>(
-      projectId,
-      `/change-sets/${encodeURIComponent(changeSetId)}:reject`,
-      { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion, reason }) },
-    )
-    return toDeliveryControlChangeSet(response)
-  },
 }
 
-/** Phase C Decision -> CompiledWorkflow authority spine. Recommendation methods below remain historical-tour compatibility only. */
+/** Phase C Decision -> CompiledWorkflow authority spine. Recommendation reads below preserve historical records. */
 export const deliveryOptimizationApi = {
   async generateDecision(projectId: string, planId: string, expectedVersion: number): Promise<DeliveryDecision> {
     return toDeliveryDecision(await deliveryPlanRequest<WireDeliveryDecision>(
@@ -1022,38 +999,12 @@ export const deliveryOptimizationApi = {
       method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ disposition, reason, diff_keys: diffKeys, ...(finalConfiguration ? { final_configuration: finalConfiguration } : {}) }),
     }))
   },
-  async generateRecommendations(projectId: string, planId: string, expectedVersion: number): Promise<DeliveryRecommendation> {
-    const response = await deliveryPlanRequest<WireDeliveryRecommendation>(
-      projectId,
-      `/plans/${encodeURIComponent(planId)}/recommendations:generate`,
-      { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) },
-    )
-    return toDeliveryRecommendation(response)
-  },
   async listRecommendations(projectId: string): Promise<DeliveryRecommendation[]> {
     const response = await deliveryPlanRequest<{ items?: WireDeliveryRecommendation[] | null }>(projectId, '/recommendations')
     return (response.items ?? []).map(toDeliveryRecommendation)
   },
   async getRecommendation(projectId: string, recommendationId: string): Promise<DeliveryRecommendation> {
     return toDeliveryRecommendation(await deliveryPlanRequest<WireDeliveryRecommendation>(projectId, `/recommendations/${encodeURIComponent(recommendationId)}`))
-  },
-  async acceptRecommendation(projectId: string, recommendationId: string, expectedVersion: number, idempotencyKey: string): Promise<{
-    recommendation: DeliveryRecommendation
-    changeSet: DeliveryControlChangeSet
-  }> {
-    const response = await deliveryPlanRequest<{ recommendation: WireDeliveryRecommendation; change_set: WireDeliveryControlChangeSet }>(
-      projectId,
-      `/recommendations/${encodeURIComponent(recommendationId)}:accept`,
-      { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ expected_version: expectedVersion }) },
-    )
-    return { recommendation: toDeliveryRecommendation(response.recommendation), changeSet: toDeliveryControlChangeSet(response.change_set) }
-  },
-  async rejectRecommendation(projectId: string, recommendationId: string, expectedVersion: number): Promise<DeliveryRecommendation> {
-    return toDeliveryRecommendation(await deliveryPlanRequest<WireDeliveryRecommendation>(
-      projectId,
-      `/recommendations/${encodeURIComponent(recommendationId)}:reject`,
-      { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) },
-    ))
   },
 }
 
@@ -1082,23 +1033,6 @@ export const deliveryExecutionApi = {
       },
     )
   },
-  async execute(
-    projectId: string,
-    changeSetId: string,
-    expectedVersion: number,
-    scenario: DeliveryExecutionScenario,
-    idempotencyKey: string,
-  ): Promise<DeliveryExecutionRecord> {
-    return toDeliveryExecutionRecord(await deliveryPlanRequest<WireDeliveryExecutionRecord>(
-      projectId,
-      `/change-sets/${encodeURIComponent(changeSetId)}:execute`,
-      {
-        method: 'POST',
-        headers: { 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({ expected_version: expectedVersion, scenario }),
-      },
-    ))
-  },
   async list(projectId: string): Promise<DeliveryExecutionRecord[]> {
     const response = await deliveryPlanRequest<{ items?: WireDeliveryExecutionRecord[] | null }>(projectId, '/executions')
     return (response.items ?? []).map(toDeliveryExecutionRecord)
@@ -1109,28 +1043,11 @@ export const deliveryExecutionApi = {
       `/executions/${encodeURIComponent(executionId)}`,
     ))
   },
-  async runOutcomeSimulation(projectId: string, executionId: string, scenario: DeliveryOutcomeScenario, stableSeed: string): Promise<DeliveryOutcomeSimulation> {
-    return toDeliveryOutcomeSimulation(await deliveryPlanRequest<WireDeliveryOutcomeSimulation>(
-      projectId,
-      `/executions/${encodeURIComponent(executionId)}/simulation-runs`,
-      { method: 'POST', body: JSON.stringify({ scenario, stable_seed: stableSeed }) },
-    ))
-  },
   async getLatestOutcomeSimulation(projectId: string, executionId: string): Promise<DeliveryOutcomeSimulation> {
     return toDeliveryOutcomeSimulation(await deliveryPlanRequest<WireDeliveryOutcomeSimulation>(
       projectId,
       `/executions/${encodeURIComponent(executionId)}/simulation-run`,
     ))
-  },
-  async createMetricSnapshot(projectId: string, executionId: string): Promise<void> {
-    await deliveryPlanRequest(
-      projectId,
-      `/executions/${encodeURIComponent(executionId)}/metric-snapshots`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ dataset_version: 'preroll-demo/v1' }),
-      },
-    )
   },
 }
 
@@ -1246,20 +1163,6 @@ export type DeliveryAlert = {
   updatedAt: string
 }
 
-export type DeliveryAlertEvaluation = {
-  items: DeliveryAlert[]
-  createdCount: number
-  reusedCount: number
-  source: 'demo_fixture'
-  isSimulated: true
-  scenario: DeliveryAlertFixture
-  evaluatedAt: string
-  insightsSource?: 'mock' | 'replay' | 'connector'
-  insightsQuality?: 'usable' | 'empty' | 'stale' | 'incomplete' | 'schema_mismatch' | 'unavailable'
-  insightsQualityReason?: string
-  insightsFixtureVersion?: string
-  insightsEvidenceRefs?: string[]
-}
 
 type WireDeliveryAlert = {
   id: string
@@ -1291,29 +1194,8 @@ type WireDeliveryAlert = {
   updated_at: string
 }
 
-type WireDeliveryAlertEvaluation = {
-  items: WireDeliveryAlert[]
-  created_count: number
-  reused_count: number
-  source: 'demo_fixture'
-  is_simulated: true
-  scenario: DeliveryAlertFixture
-  evaluated_at: string
-  insights_source?: 'mock' | 'replay' | 'connector'
-  insights_quality?: DeliveryAlertEvaluation['insightsQuality']
-  insights_quality_reason?: string
-  insights_fixture_version?: string
-  insights_evidence_refs?: string[]
-}
 
 export const deliveryAlertApi = {
-  async evaluate(projectId: string, fixture: DeliveryAlertFixture, executionId?: string): Promise<DeliveryAlertEvaluation> {
-    const response = await deliveryPlanRequest<WireDeliveryAlertEvaluation>(projectId, '/alerts:evaluate', {
-      method: 'POST',
-      body: JSON.stringify({ fixture, ...(executionId ? { execution_id: executionId } : {}) }),
-    })
-    return toDeliveryAlertEvaluation(response)
-  },
   async inspect(projectId: string, planId: string, windowDays = 14): Promise<ConnectorInspection> {
     const response = await deliveryPlanRequest<WireConnectorInspection>(projectId, '/alerts:inspect', {
       method: 'POST', body: JSON.stringify({ plan_id: planId, window_days: windowDays }),
@@ -1470,22 +1352,6 @@ async function deliveryChangeSetAction(
   return toDeliveryControlChangeSet(response)
 }
 
-function toDeliveryAlertEvaluation(value: WireDeliveryAlertEvaluation): DeliveryAlertEvaluation {
-  return {
-    items: value.items.map(toDeliveryAlert),
-    createdCount: value.created_count,
-    reusedCount: value.reused_count,
-    source: value.source,
-    isSimulated: value.is_simulated,
-    scenario: value.scenario,
-    evaluatedAt: value.evaluated_at,
-    insightsSource: value.insights_source,
-    insightsQuality: value.insights_quality,
-    insightsQualityReason: value.insights_quality_reason,
-    insightsFixtureVersion: value.insights_fixture_version,
-    insightsEvidenceRefs: value.insights_evidence_refs,
-  }
-}
 
 function toDeliveryAlert(value: WireDeliveryAlert): DeliveryAlert {
   return {
@@ -1543,28 +1409,7 @@ function toDeliveryAlert(value: WireDeliveryAlert): DeliveryAlert {
 
 export type DeliveryTourCaseKey = 'golden_path' | 'preflight_failure' | 'approval_expired' | 'plan_stale' | 'partial_execution' | 'result_unknown' | 'review_rejected_alert'
 
-export type DeliveryTourCase = {
-  key: DeliveryTourCaseKey
-  title: string
-  planId: string
-  status: 'missing' | 'prepared' | 'ready' | 'observed'
-  expectedOutcome: string
-  startUrl: string
-  source: DeliverySource
-  scenario: DeliveryTourCaseKey
-  evidence: string[]
-  observedAt: string
-}
 
-export type DeliveryTourStep = {
-  key: string
-  title: string
-  completionCondition: string
-  complete: boolean
-  url: string
-  explanation: string
-  evidence: string[]
-}
 
 async function deliveryPlanRequest<T>(projectId: string, path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
@@ -1579,42 +1424,6 @@ async function deliveryPlanRequest<T>(projectId: string, path: string, init: Req
       : problem.error?.message ?? 'Delivery API 请求失败', details)
   }
   return payload as T
-}
-
-function toWireDraft(draft: DeliveryPlanDraft): WireDeliveryPlanDraft {
-  return {
-    name: draft.name,
-    objective: draft.objective,
-    marketing_purpose: draft.marketingPurpose || undefined,
-    advertiser: draft.advertiser,
-    budget: { total_minor: draft.budget.totalMinor, currency: draft.budget.currency },
-    schedule: { start_at: draft.schedule.startAt, end_at: draft.schedule.endAt, timezone: draft.schedule.timezone },
-    marketing_product: draft.marketingProduct.id ? {
-      id: draft.marketingProduct.id, ocean_engine_product_id: draft.marketingProduct.oceanEngineProductId,
-      name: draft.marketingProduct.name, activity_type: draft.marketingProduct.activityType,
-      activity_name: draft.marketingProduct.activityName, brand_name: draft.marketingProduct.brandName,
-    } : undefined,
-    tracking: {
-      landing_page: draft.tracking.landingPage,
-      pixel_id: draft.tracking.pixelId,
-      conversion_event: draft.tracking.conversionEvent,
-    },
-    creative_references: draft.creativeReferences.map(reference => ({
-      asset_id: reference.assetId,
-      version: reference.version,
-      content_hash: reference.contentHash,
-      route: reference.route,
-      confirmed: reference.confirmed,
-      ocean_engine_material_id: reference.oceanEngineMaterialId,
-    })),
-    strategy_reference: {
-      task_id: draft.strategyReference.taskId,
-      version: draft.strategyReference.version,
-      content_hash: draft.strategyReference.contentHash,
-      route: draft.strategyReference.route,
-    },
-    source_strategy_version: draft.sourceStrategyVersion,
-  }
 }
 
 function toPlatformRuntimeDraft(projectId: string, identity: string, versionNumber: number, draft: DeliveryPlanDraft) {

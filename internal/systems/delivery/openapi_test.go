@@ -57,7 +57,8 @@ func TestOpenAPIContractCoversPlanLifecyclePreflightAndErrors(t *testing.T) {
 		"const: mock",
 		"const: local_simulation",
 		"const: post_launch_simulator",
-		"const: post-launch-simulator/v1",
+		"DELIVERY_DEMO_RETIRED",
+		"EXECUTION_UNAVAILABLE",
 	}
 	for _, expected := range required {
 		if !strings.Contains(contract, expected) {

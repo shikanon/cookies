@@ -22,6 +22,8 @@ const (
 )
 
 var (
+	ErrDemoRetired                       = errors.New("delivery demo writes have been retired")
+	ErrExecutionUnavailable              = errors.New("delivery execution adapter is not configured")
 	ErrNotFound                          = errors.New("delivery resource not found")
 	ErrInvalidRequest                    = errors.New("delivery request is invalid")
 	ErrInvalidState                      = errors.New("delivery resource is not in a state that allows this action")
@@ -70,8 +72,7 @@ const (
 const ExecutionModeLocalSimulation = "local_simulation"
 
 const (
-	DemoMetricDatasetVersion = "post-launch-simulator/v1"
-	MetricSourceDemoFixture  = "post_launch_simulator"
+	MetricSourceDemoFixture = "post_launch_simulator"
 )
 
 // CreatePlanRequest only accepts the authoritative immutable intent and
@@ -312,17 +313,6 @@ type DeliveryMetricSnapshot struct {
 	CreatedAt         time.Time               `json:"created_at"`
 }
 
-type CreateMetricSnapshotRequest struct {
-	DatasetVersion string `json:"dataset_version"`
-}
-
-func (r CreateMetricSnapshotRequest) Validate() error {
-	if strings.TrimSpace(r.DatasetVersion) != DemoMetricDatasetVersion {
-		return ErrInvalidRequest
-	}
-	return nil
-}
-
 type PlanDetail struct {
 	Plan       DeliveryPlan      `json:"plan"`
 	ChangeSets []ChangeSet       `json:"change_sets"`
@@ -366,7 +356,6 @@ type Repository interface {
 	ListExecutions(context.Context, contract.OrganizationID, contract.ProjectID, int) ([]ExecutionResult, error)
 	GetExecution(context.Context, contract.OrganizationID, contract.ProjectID, string) (ExecutionResult, error)
 	GetExecutionByChangeSet(context.Context, contract.OrganizationID, contract.ProjectID, string) (ExecutionResult, error)
-	CreateMetricSnapshot(context.Context, DeliveryMetricSnapshot) (DeliveryMetricSnapshot, bool, error)
 	ListMetricSnapshots(context.Context, contract.OrganizationID, contract.ProjectID, string, int) ([]DeliveryMetricSnapshot, error)
 	ListProjectMetricSnapshots(context.Context, contract.OrganizationID, contract.ProjectID, int) ([]DeliveryMetricSnapshot, error)
 	UpsertAlert(context.Context, DeliveryAlert) (DeliveryAlert, error)
@@ -378,7 +367,6 @@ type Service struct {
 	Repository              Repository
 	Projects                ActiveProjectResolver
 	Adapter                 PlatformAdapter
-	Insights                InsightsConsumer
 	ConnectorSnapshots      ConnectorSnapshotReader
 	ConnectorAccounts       ConnectorAccountReader
 	ExternalAccountIDs      ExternalAccountIDResolver
@@ -389,10 +377,6 @@ type Service struct {
 }
 
 func (s Service) CreatePlan(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, request CreatePlanRequest) (DeliveryPlan, error) {
-	return s.createPlan(ctx, actor, projectID, request, "", "")
-}
-
-func (s Service) createPlan(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, request CreatePlanRequest, tourRunID, tourCase string) (DeliveryPlan, error) {
 	if err := s.ready(actor, projectID, ScopeWrite); err != nil {
 		return DeliveryPlan{}, err
 	}
@@ -402,17 +386,8 @@ func (s Service) createPlan(ctx context.Context, actor contract.ActorContext, pr
 	if _, err := s.Projects.RequireActiveContext(ctx, actor, projectID); err != nil {
 		return DeliveryPlan{}, err
 	}
-	if tourRunID == "" {
-		if err := s.validateProjectAccount(ctx, actor, projectID, request.PlatformConfiguration); err != nil {
-			return DeliveryPlan{}, err
-		}
-	}
-	tourOwnerID := ""
-	if tourRunID == "" && tourCase != "" || tourRunID != "" && tourCase == "" {
-		return DeliveryPlan{}, ErrInvalidRequest
-	}
-	if tourRunID != "" {
-		tourOwnerID = actor.Principal.ID
+	if err := s.validateProjectAccount(ctx, actor, projectID, request.PlatformConfiguration); err != nil {
+		return DeliveryPlan{}, err
 	}
 	id, err := s.idGenerator()("deliveryplan")
 	if err != nil {
@@ -424,7 +399,6 @@ func (s Service) createPlan(ctx context.Context, actor contract.ActorContext, pr
 		return DeliveryPlan{}, err
 	}
 	plan := planProjectionFromPlatformVersion(id, actor, projectID, version, now)
-	plan.TourRunID, plan.TourOwnerID, plan.TourCase = tourRunID, tourOwnerID, tourCase
 	return s.Repository.CreatePlan(ctx, plan, version)
 }
 
@@ -445,16 +419,14 @@ func (s Service) UpdatePlan(ctx context.Context, actor contract.ActorContext, pr
 	if plan.Status != DeliveryPlanDraft {
 		return DeliveryPlan{}, ErrInvalidState
 	}
-	if plan.CurrentVersion.ReadOnly || !plan.CurrentVersion.IsPlatformConfigurationV2() {
+	if plan.TourRunID != "" || plan.CurrentVersion.ReadOnly || !plan.CurrentVersion.IsPlatformConfigurationV2() {
 		return DeliveryPlan{}, ErrLegacyConfigurationUnsupported
 	}
 	if err := request.Validate(); err != nil {
 		return DeliveryPlan{}, ErrInvalidRequest
 	}
-	if plan.TourRunID == "" {
-		if err := s.validateProjectAccount(ctx, actor, projectID, request.PlatformConfiguration); err != nil {
-			return DeliveryPlan{}, err
-		}
+	if err := s.validateProjectAccount(ctx, actor, projectID, request.PlatformConfiguration); err != nil {
+		return DeliveryPlan{}, err
 	}
 	version, err := newPlatformPlanVersion(plan.ID, actor, projectID, request.ExpectedVersion+1, *request.Intent, *request.PlatformConfiguration, s.now())
 	if err != nil {
@@ -465,6 +437,9 @@ func (s Service) UpdatePlan(ctx context.Context, actor contract.ActorContext, pr
 
 func (s Service) validateProjectAccount(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, configuration *PlatformConfiguration) error {
 	if s.ConnectorAccounts == nil {
+		return nil
+	}
+	if configuration != nil && configuration.Payload.MagneticEngine != nil {
 		return nil
 	}
 	if configuration == nil || configuration.Payload.OceanEngine == nil || configuration.Payload.OceanEngine.Project == nil {
@@ -554,7 +529,7 @@ func (s Service) RunPlanPreflight(ctx context.Context, actor contract.ActorConte
 	if err != nil {
 		return PreflightResult{}, err
 	}
-	if plan.CurrentVersion.ReadOnly || !plan.CurrentVersion.IsPlatformConfigurationV2() {
+	if plan.TourRunID != "" || plan.CurrentVersion.ReadOnly || !plan.CurrentVersion.IsPlatformConfigurationV2() {
 		return PreflightResult{}, ErrLegacyConfigurationUnsupported
 	}
 	checks := RunPreflight(plan.CurrentVersion)
@@ -1042,6 +1017,13 @@ func (s Service) Execute(ctx context.Context, actor contract.ActorContext, proje
 			return ExecutionResult{}, false, ErrApprovalContentMismatch
 		}
 	}
+	adapter := s.Adapter
+	if adapter == nil {
+		return ExecutionResult{}, false, ErrExecutionUnavailable
+	}
+	if adapter.Source() != SourceMock {
+		return ExecutionResult{}, false, fmt.Errorf("%w: A04 only permits the mock platform adapter", ErrInvalidRequest)
+	}
 	executionID, err := s.idGenerator()("deliveryexecution")
 	if err != nil {
 		return ExecutionResult{}, false, err
@@ -1064,10 +1046,6 @@ func (s Service) Execute(ctx context.Context, actor contract.ActorContext, proje
 		steps[index].Effect = "none"
 		steps[index].OutcomeSummary = "queued; no adapter call has occurred"
 		steps[index].Version = 1
-	}
-	adapter := s.platformAdapter()
-	if adapter.Source() != SourceMock {
-		return ExecutionResult{}, false, fmt.Errorf("%w: A04 only permits the mock platform adapter", ErrInvalidRequest)
 	}
 	execution := Execution{
 		ID: executionID, OrganizationID: actor.OrganizationID, ProjectID: projectID,
@@ -1268,6 +1246,13 @@ func (s Service) ExecutePlan(ctx context.Context, actor contract.ActorContext, p
 		existing, err = s.hydrateExecutionResult(ctx, actor.OrganizationID, projectID, existing)
 		return existing, true, err
 	}
+	adapter := s.Adapter
+	if adapter == nil {
+		return ExecutionResult{}, false, ErrExecutionUnavailable
+	}
+	if adapter.Source() != SourceMock {
+		return ExecutionResult{}, false, fmt.Errorf("%w: only the mock platform adapter is permitted", ErrInvalidRequest)
+	}
 	executionID, err := s.idGenerator()("deliveryexecution")
 	if err != nil {
 		return ExecutionResult{}, false, err
@@ -1290,10 +1275,6 @@ func (s Service) ExecutePlan(ctx context.Context, actor contract.ActorContext, p
 		steps[index].Effect = "none"
 		steps[index].OutcomeSummary = "queued; no adapter call has occurred"
 		steps[index].Version = 1
-	}
-	adapter := s.platformAdapter()
-	if adapter.Source() != SourceMock {
-		return ExecutionResult{}, false, fmt.Errorf("%w: only the mock platform adapter is permitted", ErrInvalidRequest)
 	}
 	// Build an audit ChangeSet bound to this direct write. The ChangeSet is an
 	// operatation log only; daily direct writes do not create an Approval.
@@ -1461,33 +1442,6 @@ func (s Service) hydrateExecutionResult(ctx context.Context, organizationID cont
 		value.Execution.Steps = []ExecutionStep{}
 	}
 	return value, nil
-}
-
-func (s Service) CreateDemoMetricSnapshot(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, executionID string, request CreateMetricSnapshotRequest) (DeliveryMetricSnapshot, error) {
-	if err := s.ready(actor, projectID, ScopeWrite); err != nil {
-		return DeliveryMetricSnapshot{}, err
-	}
-	if strings.TrimSpace(executionID) == "" {
-		return DeliveryMetricSnapshot{}, ErrInvalidRequest
-	}
-	if err := request.Validate(); err != nil {
-		return DeliveryMetricSnapshot{}, err
-	}
-	if _, err := s.Projects.RequireActiveContext(ctx, actor, projectID); err != nil {
-		return DeliveryMetricSnapshot{}, err
-	}
-	execution, err := s.findExecution(ctx, actor.OrganizationID, projectID, executionID)
-	if err != nil {
-		return DeliveryMetricSnapshot{}, err
-	}
-	if execution.Execution.Mode != ExecutionModeLocalSimulation || execution.Execution.Status != "succeeded" {
-		return DeliveryMetricSnapshot{}, ErrInvalidState
-	}
-	result, err := s.CreateOutcomeSimulation(ctx, actor, projectID, execution.Execution.ID, CreateOutcomeSimulationRequest{Scenario: OutcomeScenarioCostPressure})
-	if err != nil {
-		return DeliveryMetricSnapshot{}, err
-	}
-	return result.MetricSnapshots[len(result.MetricSnapshots)-1], nil
 }
 
 func minInt(left, right int) int {

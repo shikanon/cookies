@@ -22,26 +22,6 @@ test('delivery execution client starts a real Browser RPA run from one plan vers
   assert.equal(result.browser_rpa_run.run_id, 'curun_1')
 })
 
-test('delivery execution client sends the frozen idempotent execute request', async t => {
-  const originalFetch = globalThis.fetch
-  const calls: Array<{ url: string; init?: RequestInit }> = []
-  globalThis.fetch = async (url, init) => {
-    calls.push({ url: String(url), init })
-    return jsonResponse(sampleExecutionRecord())
-  }
-  t.after(() => { globalThis.fetch = originalFetch })
-
-  const record = await deliveryExecutionApi.execute('project_1', 'changeset_1', 4, 'partial', 'idem-123')
-
-  assert.equal(calls[0].url, '/api/delivery/v1/projects/project_1/change-sets/changeset_1:execute')
-  assert.equal(calls[0].init?.method, 'POST')
-  assert.equal(new Headers(calls[0].init?.headers).get('Idempotency-Key'), 'idem-123')
-  assert.deepEqual(JSON.parse(calls[0].init?.body as string), { expected_version: 4, scenario: 'partial' })
-  assert.equal(record.execution.status, 'partial')
-  assert.deepEqual(record.execution.compensationCandidates, ['remove_mock_delivery'])
-  assert.deepEqual(record.evidence.references, ['mock://execution/partial'])
-})
-
 test('delivery execution client reloads authoritative list and detail records with nullable arrays', async t => {
   const originalFetch = globalThis.fetch
   const urls: string[] = []
@@ -67,7 +47,7 @@ test('delivery execution client reloads authoritative list and detail records wi
   assert.deepEqual(detail.evidence.references, [])
 })
 
-test('delivery execution client runs and reads the same deterministic outcome simulation', async t => {
+test('delivery execution client reads historical outcome simulation records', async t => {
   const originalFetch = globalThis.fetch
   const calls: Array<{ url: string; init?: RequestInit }> = []
   globalThis.fetch = async (url, init) => {
@@ -76,17 +56,13 @@ test('delivery execution client runs and reads the same deterministic outcome si
   }
   t.after(() => { globalThis.fetch = originalFetch })
 
-  const created = await deliveryExecutionApi.runOutcomeSimulation('project_1', 'execution_1', 'cost_pressure', 'stable-1')
   const restored = await deliveryExecutionApi.getLatestOutcomeSimulation('project_1', 'execution_1')
 
-  assert.equal(calls[0].url, '/api/delivery/v1/projects/project_1/executions/execution_1/simulation-runs')
-  assert.equal(calls[0].init?.method, 'POST')
-  assert.deepEqual(JSON.parse(calls[0].init?.body as string), { scenario: 'cost_pressure', stable_seed: 'stable-1' })
-  assert.equal(calls[1].url, '/api/delivery/v1/projects/project_1/executions/execution_1/simulation-run')
-  assert.equal(created.run.modelVersion, 'delivery-outcome-scenario/v1')
-  assert.equal(created.run.parameters.factors[0].valueBP, 10000)
-  assert.equal(created.metricSnapshots[0].conversions, 12)
-  assert.equal(restored.run.id, created.run.id)
+  assert.equal(calls[0].url, '/api/delivery/v1/projects/project_1/executions/execution_1/simulation-run')
+  assert.equal(restored.run.modelVersion, 'delivery-outcome-scenario/v1')
+  assert.equal(restored.run.parameters.factors[0].valueBP, 10000)
+  assert.equal(restored.metricSnapshots[0].conversions, 12)
+  assert.equal(restored.run.id, 'simulation_1')
 })
 
 function jsonResponse(body: unknown) {

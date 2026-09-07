@@ -306,37 +306,6 @@ func TestExecutionHTTPRequiresIdempotencyKeyAndCreates(t *testing.T) {
 	}
 }
 
-func TestDeliveryTourHTTPUsesStableActionRoutes(t *testing.T) {
-	t.Parallel()
-	app := &applicationStub{tourRun: delivery.DeliveryTourRun{ID: "investor-tour-01", Status: delivery.TourRunPrepared}}
-	server := New(app)
-
-	response := httptest.NewRecorder()
-	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/tour-runs/investor-tour-01:prepare", ""))
-	if response.Code != http.StatusCreated || app.tourRunID != "investor-tour-01" || !strings.Contains(response.Body.String(), `"status":"prepared"`) {
-		t.Fatalf("prepare status=%d run=%q body=%s", response.Code, app.tourRunID, response.Body.String())
-	}
-
-	app.tourReplay = true
-	response = httptest.NewRecorder()
-	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/tour-runs/investor-tour-01:prepare", ""))
-	if response.Code != http.StatusOK {
-		t.Fatalf("replay status=%d body=%s", response.Code, response.Body.String())
-	}
-
-	response = httptest.NewRecorder()
-	server.ServeHTTP(response, authenticatedRequest(http.MethodGet, "/api/delivery/v1/projects/project_1/tour-runs/investor-tour-01", ""))
-	if response.Code != http.StatusOK || app.tourRunID != "investor-tour-01" {
-		t.Fatalf("get status=%d run=%q body=%s", response.Code, app.tourRunID, response.Body.String())
-	}
-
-	response = httptest.NewRecorder()
-	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/tour-runs/investor-tour-01:reset", ""))
-	if response.Code != http.StatusOK || app.tourRunID != "investor-tour-01" {
-		t.Fatalf("reset status=%d run=%q body=%s", response.Code, app.tourRunID, response.Body.String())
-	}
-}
-
 func TestDeliveryTourHTTPMapsOwnerMismatch(t *testing.T) {
 	t.Parallel()
 	response := httptest.NewRecorder()
@@ -421,7 +390,6 @@ type applicationStub struct {
 	createdPlanID       string
 	tourRun             delivery.DeliveryTourRun
 	tourRunID           string
-	tourReplay          bool
 	decision            delivery.DeliveryDecision
 	selection           delivery.DecisionSelection
 	observatoryRun      delivery.DeliveryObservatoryRun
@@ -606,19 +574,10 @@ func (s *applicationStub) Rollback(context.Context, contract.ActorContext, contr
 	return s.changeSet, nil
 }
 
-func (s *applicationStub) GenerateRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string, int) (delivery.DeliveryRecommendation, error) {
-	return delivery.DeliveryRecommendation{}, nil
-}
 func (s *applicationStub) ListRecommendations(context.Context, contract.ActorContext, contract.ProjectID, int) ([]delivery.DeliveryRecommendation, error) {
 	return nil, nil
 }
 func (s *applicationStub) GetRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DeliveryRecommendation, error) {
-	return delivery.DeliveryRecommendation{}, nil
-}
-func (s *applicationStub) AcceptRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string, string, int64) (delivery.RecommendationAcceptance, bool, error) {
-	return delivery.RecommendationAcceptance{}, false, nil
-}
-func (s *applicationStub) RejectRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string, int64) (delivery.DeliveryRecommendation, error) {
 	return delivery.DeliveryRecommendation{}, nil
 }
 func (s *applicationStub) GetManualActionPackage(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.ManualActionPackage, error) {
@@ -630,20 +589,11 @@ func (s *applicationStub) ListExecutions(context.Context, contract.ActorContext,
 func (s *applicationStub) GetExecution(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.ExecutionResult, error) {
 	return delivery.ExecutionResult{}, nil
 }
-func (s *applicationStub) CreateOutcomeSimulation(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.CreateOutcomeSimulationRequest) (delivery.OutcomeSimulationResult, error) {
-	return delivery.OutcomeSimulationResult{Run: delivery.OutcomeSimulationRun{ID: "deliverysimulationrun_1"}}, nil
-}
 func (s *applicationStub) GetLatestOutcomeSimulation(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.OutcomeSimulationResult, error) {
 	return delivery.OutcomeSimulationResult{Run: delivery.OutcomeSimulationRun{ID: "deliverysimulationrun_1"}, Replay: true}, nil
 }
-func (s *applicationStub) CreateDemoMetricSnapshot(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.CreateMetricSnapshotRequest) (delivery.DeliveryMetricSnapshot, error) {
-	return delivery.DeliveryMetricSnapshot{ID: "deliverymetric_1", IsSimulated: true}, nil
-}
 func (s *applicationStub) ListMetricSnapshots(context.Context, contract.ActorContext, contract.ProjectID, string, int) ([]delivery.DeliveryMetricSnapshot, error) {
 	return []delivery.DeliveryMetricSnapshot{{ID: "deliverymetric_1", IsSimulated: true}}, nil
-}
-func (s *applicationStub) EvaluateAlerts(context.Context, contract.ActorContext, contract.ProjectID, delivery.EvaluateAlertsRequest) (delivery.EvaluateAlertsResponse, error) {
-	return delivery.EvaluateAlertsResponse{Items: []delivery.DeliveryAlert{}}, nil
 }
 func (s *applicationStub) InspectConnectorAlerts(context.Context, contract.ActorContext, contract.ProjectID, delivery.ConnectorInspectionRequest) (delivery.ConnectorInspectionResponse, error) {
 	return delivery.ConnectorInspectionResponse{Items: []delivery.DeliveryAlert{}, Source: "connector"}, nil
@@ -654,15 +604,7 @@ func (s *applicationStub) ListAlerts(context.Context, contract.ActorContext, con
 func (s *applicationStub) UpdateAlert(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.UpdateAlertRequest) (delivery.DeliveryAlert, error) {
 	return delivery.DeliveryAlert{}, nil
 }
-func (s *applicationStub) PrepareTourRun(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, runID string) (delivery.DeliveryTourRun, bool, error) {
-	s.tourRunID = runID
-	return s.tourRun, s.tourReplay, nil
-}
 func (s *applicationStub) GetTourRun(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, runID string) (delivery.DeliveryTourRun, error) {
 	s.tourRunID = runID
 	return s.tourRun, nil
-}
-func (s *applicationStub) ResetTourRun(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, runID string) (delivery.DeliveryTourResetResult, error) {
-	s.tourRunID = runID
-	return delivery.DeliveryTourResetResult{Run: s.tourRun}, nil
 }

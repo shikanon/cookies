@@ -128,7 +128,7 @@ test("platform client uses project-scoped /platform/v1 endpoints", async () => {
         return jsonResponse(sampleProjectDetail().tasks[0], 201);
       }
       if (String(url).endsWith("/projects/project_demo/change-sets")) {
-        return jsonResponse(sampleProjectDetail().change_sets[0], 201);
+        return jsonResponse({ items: sampleProjectDetail().change_sets });
       }
       if (String(url).endsWith("/projects/project_demo/model/jobs")) {
         return jsonResponse(sampleProviderJob(), 202);
@@ -143,7 +143,7 @@ test("platform client uses project-scoped /platform/v1 endpoints", async () => {
   await client.createArtifact("project_demo", { kind: "brief", content: "首版策略 Brief", status: "draft" });
   await client.updateArtifact("project_demo", "artifact_1", { content: "已确认策略 Brief", status: "ready", version: 1 });
   await client.createTask("project_demo", { type: "creative", name: "生成创意", objective: "产出可投放素材" });
-  await client.createChangeSet("project_demo", { name: "素材组合与探索预算优化", artifactIds: ["asset_1"], budgetLimit: 88000 });
+  await client.listChangeSets("project_demo");
   await client.createMedia("project_demo", "image", "launch poster", "brief_1");
 
   assert.deepEqual(calls.map(call => call.url), [
@@ -167,9 +167,6 @@ test("platform client uses project-scoped /platform/v1 endpoints", async () => {
   assert.equal(calls[5].init.method, "POST");
   assert.equal(new Headers(calls[5].init.headers).get("Idempotency-Key"), "test-key");
   assert.equal(JSON.parse(calls[5].init.body as string).source_task_ids.length, 0);
-  assert.deepEqual(JSON.parse(calls[6].init.body as string).artifact_refs, [
-    { project_id: "project_demo", asset_version: { asset_id: "asset_1", version: 1 } },
-  ]);
   assert.equal(JSON.parse(calls[7].init.body as string).capability, "image.generate");
 });
 

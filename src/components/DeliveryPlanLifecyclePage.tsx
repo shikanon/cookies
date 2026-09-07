@@ -64,7 +64,7 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
   const [connectorAccounts, setConnectorAccounts] = useState<ApiConnectorAccount[]>([])
   const requestedPlanId = useRef(new URLSearchParams(window.location.search).get('plan_id') ?? '')
   const [selectedId, setSelectedId] = useState(requestedPlanId.current)
-  const [draft, setDraft] = useState<DeliveryPlanDraft>(() => newMockDraft(currentProject, agencyWorkbench))
+  const [draft, setDraft] = useState<DeliveryPlanDraft>(() => newPlanDraft(currentProject, agencyWorkbench))
   const [section, setSection] = useState<PlanSection>('目标与账户')
   const [isNew, setIsNew] = useState(true)
   const [dirty, setDirty] = useState(false)
@@ -92,6 +92,7 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
   const confirmedAssets = useMemo(() => (agencyWorkbench?.assetVersionPointers ?? []).filter(pointer => pointer.projectId === projectId && pointer.humanConfirmedVersion), [agencyWorkbench, projectId])
   const missingPlatformFields = useMemo(() => {
     const missing: string[] = []
+    if (!Number.isFinite(draft.budget.totalMinor) || draft.budget.totalMinor <= 0) missing.push('大于 0 的预算')
     if (!draft.advertiser.id) missing.push('账户边界')
     if (!draft.strategyReference.taskId) missing.push('策略来源')
     if (!draft.marketingPurpose) missing.push('巨量营销目的')
@@ -132,7 +133,7 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
         setNotice(`已从服务端恢复 ${records.length} 份计划草稿。`)
       } else {
         setSelectedId('')
-        setDraft(newMockDraft(currentProject, agencyWorkbench, verifiedAccounts))
+        setDraft(newPlanDraft(currentProject, agencyWorkbench, verifiedAccounts))
         setIsNew(true)
         setInspectedVersionNumber(undefined)
         setNotice('当前 Project 尚无投放计划，可创建第一份计划草稿。')
@@ -161,7 +162,7 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
   const beginNew = () => {
     preserveEditorState.current = true
     setSelectedId('')
-    setDraft(newMockDraft(currentProject, agencyWorkbench, connectorAccounts))
+    setDraft(newPlanDraft(currentProject, agencyWorkbench, connectorAccounts))
     setSection('目标与账户')
     setIsNew(true)
     setDirty(true)
@@ -230,7 +231,7 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
           <div>
             <span className="section-label">{isNew ? '新计划' : `${selectedPlan?.id} · V${selectedPlan?.currentVersionNumber}`}</span>
             <h2>{draft.name || '未命名投放计划'}</h2>
-            <p>保存只写入 cookies Delivery 草稿并触发服务端校验；平台配置页可查看编译结果并确认投放。</p>
+            <p>保存只写入 cookies Delivery 草稿并触发服务端校验；平台配置页可查看编译结果，真实操作在受控执行中心完成。</p>
           </div>
         </header>
 
@@ -305,7 +306,7 @@ function TargetAccountFields({ draft, changeDraft, strategyTasks = [], products 
 
 function BudgetScheduleFields({ draft, changeDraft }: FieldProps) {
   return <div className="delivery-field-grid">
-    <label>{draft.schedule.mode === 'long_term' ? '日预算（CNY）' : '总预算（CNY）'}<input id="budget_total" aria-label={draft.schedule.mode === 'long_term' ? '日预算' : '总预算'} type="number" min="0" step="100" value={draft.budget.totalMinor / 100} onChange={event => changeDraft(current => ({
+    <label>{draft.schedule.mode === 'long_term' ? '日预算（CNY）' : '总预算（CNY）'}<input id="budget_total" aria-label={draft.schedule.mode === 'long_term' ? '日预算' : '总预算'} type="number" min="0" step="100" value={draft.budget.totalMinor > 0 ? draft.budget.totalMinor / 100 : ''} onChange={event => changeDraft(current => ({
       ...current,
       budget: { ...current.budget, totalMinor: Math.max(0, Math.round(Number(event.target.value) * 100)) },
     }))}/></label>
@@ -417,8 +418,7 @@ function marketingPurposeLabel(value: OceanEngineMarketingPurpose) {
   return ({ ecommerce: '电商', lead_generation: '销售线索', application: '应用', product_catalog: '商品', content_marketing: '内容营销' } as const)[value]
 }
 
-function newMockDraft(project: ProjectRecord, workbench: ReturnType<typeof useProject>['agencyWorkbench'], accounts: ApiConnectorAccount[] = []): DeliveryPlanDraft {
-  const code = project.code && project.code !== '—' ? project.code : 'LOCAL'
+function newPlanDraft(project: ProjectRecord, workbench: ReturnType<typeof useProject>['agencyWorkbench'], accounts: ApiConnectorAccount[] = []): DeliveryPlanDraft {
   const strategy = project.tasks.find(task => task.type === 'strategy' && (task.status === 'ready' || task.status === 'completed'))
   const creative = workbench?.assetVersionPointers.find(pointer => pointer.projectId === project.id && pointer.humanConfirmedVersion)
   return {
@@ -427,7 +427,7 @@ function newMockDraft(project: ProjectRecord, workbench: ReturnType<typeof usePr
     marketingPurpose: '',
     marketingProduct: { id: '', name: '', activityType: '', activityName: '', brandName: '' },
     advertiser: { id: accounts[0]?.id ?? '', name: accounts[0]?.display_label ?? '', platform: 'ocean_engine' },
-    budget: { totalMinor: Math.max(project.budget || 3000, 0) * 100, currency: 'CNY' },
+    budget: { totalMinor: Math.max(project.budget || 0, 0) * 100, currency: 'CNY' },
     schedule: {
       mode: 'long_term',
       startAt: todayInShanghaiISO(),
@@ -436,9 +436,9 @@ function newMockDraft(project: ProjectRecord, workbench: ReturnType<typeof usePr
     },
     tracking: {
       deliveryCarrier: '',
-      landingPage: `https://demo.cookies.local/lead/${code.toLowerCase()}`,
-      pixelId: `PX-${code}-LEAD`,
-      conversionEvent: 'lead_submit',
+      landingPage: '',
+      pixelId: '',
+      conversionEvent: '',
       optimizationTargetId: '', optimizationTargetName: '', optimizationTargetSemanticKey: '', eventAssetName: '', eventAssetType: '',
       searchKeywords: '', searchBidCoefficient: 1.1, searchTargetingExpansion: false,
       monitoringImpression: '', monitoringValidTouch: '', monitoringVideoPlay: '', monitoringVideoComplete: '', monitoringValidVideoPlay: '',
