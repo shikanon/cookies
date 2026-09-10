@@ -171,6 +171,12 @@ type driftedStagedWorkerAdapter struct{}
 
 type unavailableWorkerAdapter struct{}
 
+type calibrationBlockedWorkerAdapter struct{ probeCountingWorkerAdapter }
+
+func (*calibrationBlockedWorkerAdapter) Submit(context.Context, BrowserRpaRun, ControlledActionAttempt, string) (WorkerOutcome, PreparedPage, error) {
+	return WorkerFailed, PreparedPage{Readback: map[string]string{"final_click_performed": "false", "runner_error_code": "native_promotion_submit_not_calibrated"}}, ErrNativePromotionSubmitNotCalibrated
+}
+
 type probeCountingWorkerAdapter struct {
 	probeCalls   int
 	prepareCalls int
@@ -470,6 +476,27 @@ func TestWorkerDoesNotReportRunnerInfrastructureFailureAsPageDrift(t *testing.T)
 	}
 	if result.State != RunFailed || result.BlockingReason != BlockRunnerFailure {
 		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestWorkerPreservesNativePromotionCalibrationBlock(t *testing.T) {
+	worker, service, repo, run, _ := fakeWorkerFixture(WorkerSuccess)
+	worker.Adapter = &calibrationBlockedWorkerAdapter{}
+	prepared, err := worker.Prepare(context.Background(), run.OrganizationID, run.ProjectID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := service.IssueFinalConfirmation(context.Background(), run.OrganizationID, run.ProjectID, run.ID, prepared.Version, prepared.Authority.ApprovalActionHash, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := worker.Submit(context.Background(), WorkerSubmitRequest{Authorize: AuthorizeActionRequest{OrganizationID: run.OrganizationID, ProjectID: run.ProjectID, RunID: run.ID, StepID: "submit_native", ConfirmationID: issued.Confirmation.ID, Token: issued.Token, LeaseID: "lease_1", FencingToken: 1, IdempotencyKey: "attempt_native"}})
+	if err != nil || result.State != RunFailed || result.BlockingReason != BlockNativePromotionSubmitNotCalibrated {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	evidence, err := repo.ListEvidence(context.Background(), run.OrganizationID, run.ProjectID, run.ID)
+	if err != nil || len(evidence) != 2 || evidence[1].FieldReadback["final_click_performed"] != "false" {
+		t.Fatalf("evidence=%#v err=%v", evidence, err)
 	}
 }
 

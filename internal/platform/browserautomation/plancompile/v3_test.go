@@ -105,6 +105,25 @@ func TestV3CompilerHydratesGenericOptimizationTargetFromCollector(t *testing.T) 
 	}
 }
 
+func TestParentContextResolvesEcommerceOrderExternalAction(t *testing.T) {
+	for _, target := range []struct{ id, expected string }{
+		{"builtin:in_app_order", "20"},
+		{"in_app_order", "20"},
+		{"20", "20"},
+		{"9001", "9001"},
+	} {
+		t.Run(target.id, func(t *testing.T) {
+			parent, err := parentContext(delivery.OceanEngineProjectDraft{
+				MarketingPurpose:            "ecommerce",
+				OptimizationTargetReference: &delivery.StableReference{ID: target.id, SemanticKey: "in_app_order"},
+			})
+			if err != nil || parent.OptimizationTargetExternalAction != target.expected {
+				t.Fatalf("parent = %#v, error = %v", parent, err)
+			}
+		})
+	}
+}
+
 func TestParentContextInfersKnownOptimizationTargetFromDisplayName(t *testing.T) {
 	project := delivery.OceanEngineProjectDraft{
 		MarketingPurpose: "lead_generation", DeliveryMode: "ubmax", PlacementStrategy: "preferred_media",
@@ -119,6 +138,75 @@ func TestParentContextInfersKnownOptimizationTargetFromDisplayName(t *testing.T)
 	}
 	if parent.OptimizationTarget != "impression" || parent.OptimizationTargetExternalAction != "-1" {
 		t.Fatalf("parent context = %#v", parent)
+	}
+}
+
+func TestV3CompilerHydratesContentOptimizationTargetsFromCollector(t *testing.T) {
+	for _, target := range []struct{ id, label, semantic string }{
+		{"102", "互动", "interaction"},
+		{"46", "账号关注", "follow"},
+		{"102", "未校准目标", ""},
+	} {
+		t.Run(target.label, func(t *testing.T) {
+			configuration, _ := executableConfigurationFixture(time.Now())
+			project := configuration.Payload.OceanEngine.Project
+			project.MarketingPurpose = "content_marketing"
+			project.Carrier = "douyin_account"
+			reference := project.OptimizationTargetReference
+			reference.ID = target.id
+			reference.Scope = "account:account_internal"
+			reference.SemanticKey = "external_action:" + target.id
+			reference.DisplayNameSnapshot = ""
+			reference.AuditAttributes = map[string]string{"capability_snapshot_id": "snapshot-1", "capability_context_hash": strings.Repeat("a", 64)}
+			source := &v3PlatformObjectSourceStub{objects: []connector.PlatformObject{{Kind: connector.PlatformObjectOptimizationTarget, PlatformObjectID: target.id, DisplayName: target.label}}}
+			compiler := V3Compiler{PlatformObjects: source}
+			hydrated, err := compiler.hydrateOptimizationTargetEvidence(context.Background(), browserautomation.BrowserRpaRun{OrganizationID: "org_1", ProjectID: "project_1"}, configuration)
+			if target.semantic == "" {
+				if err == nil || !strings.Contains(err.Error(), "no calibrated Collector label") {
+					t.Fatalf("unknown label must remain blocked: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, err := parentContext(*hydrated.Payload.OceanEngine.Project)
+			if err != nil || parent.OptimizationTarget != target.semantic || parent.OptimizationTargetExternalAction != target.id {
+				t.Fatalf("parent=%#v err=%v", parent, err)
+			}
+			if reference.SemanticKey != "external_action:"+target.id || reference.DisplayNameSnapshot != "" {
+				t.Fatal("hydration mutated the saved configuration")
+			}
+		})
+	}
+}
+
+func TestV3CompilerUsesContentCapabilityEvidenceWithoutCatalogObject(t *testing.T) {
+	configuration, _ := executableConfigurationFixture(time.Now())
+	project := configuration.Payload.OceanEngine.Project
+	project.MarketingPurpose = "content_marketing"
+	project.Carrier = "douyin_account"
+	project.OptimizationTargetReference = &delivery.StableReference{
+		Namespace: "oceanengine_capability", ObjectKind: "optimization_target", Scope: "account:account_internal",
+		ID: "102", SemanticKey: "external_action:102", DisplayNameSnapshot: "互动", State: delivery.ReferenceResolved,
+		AuditAttributes: map[string]string{"capability_snapshot_id": "snapshot-1", "capability_context_hash": strings.Repeat("a", 64)},
+	}
+	source := &v3PlatformObjectSourceStub{}
+	compiler := V3Compiler{PlatformObjects: source}
+	hydrated, err := compiler.hydrateOptimizationTargetEvidence(context.Background(), browserautomation.BrowserRpaRun{}, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.query.Kind != "" {
+		t.Fatal("account capability must not be looked up in the general catalog")
+	}
+	parent, err := parentContext(*hydrated.Payload.OceanEngine.Project)
+	if err != nil || parent.OptimizationTarget != "interaction" || parent.OptimizationTargetExternalAction != "102" {
+		t.Fatalf("parent=%#v err=%v", parent, err)
+	}
+	delete(project.OptimizationTargetReference.AuditAttributes, "capability_snapshot_id")
+	if _, err := parentContext(*project); err == nil || !strings.Contains(err.Error(), "no account capability snapshot") {
+		t.Fatalf("missing capability snapshot must remain blocked: %v", err)
 	}
 }
 
@@ -275,12 +363,23 @@ func TestV3CompilerAdvancesThroughMappedProjectAndPromotions(t *testing.T) {
 	second.PromotionName = "第二个测试单元"
 	configuration.Payload.OceanEngine.Promotions = append(configuration.Payload.OceanEngine.Promotions, second)
 	planHash := strings.Repeat("a", 64)
-	projectMapping := delivery.PlatformEntityMapping{ID: "mapping-project", ConfigurationID: configuration.ConfigurationID, AccountReferenceID: "1855554434276391", InternalObjectKind: "project", InternalObjectID: "project-draft-1", PlatformObjectKind: "project", PlatformObjectID: "7677595885572784182", Status: delivery.PlatformEntityMappingConfirmed}
-	firstPromotionMapping := delivery.PlatformEntityMapping{ID: "mapping-promotion-1", ConfigurationID: configuration.ConfigurationID, AccountReferenceID: "1855554434276391", InternalObjectKind: "promotion", InternalObjectID: "promotion-draft-1", PlatformObjectKind: "promotion", PlatformObjectID: "7683558668450021382", Status: delivery.PlatformEntityMappingConfirmed}
+	projectMapping := delivery.PlatformEntityMapping{ID: "mapping-project", PlanID: "plan_1", ConfigurationID: configuration.ConfigurationID, AccountReferenceID: "1855554434276391", InternalObjectKind: "project", InternalObjectID: "project-draft-1", PlatformObjectKind: "project", PlatformObjectID: "7677595885572784182", Status: delivery.PlatformEntityMappingConfirmed}
+	firstPromotionMapping := delivery.PlatformEntityMapping{ID: "mapping-promotion-1", PlanID: "plan_1", ConfigurationID: configuration.ConfigurationID, AccountReferenceID: "1855554434276391", InternalObjectKind: "promotion", InternalObjectID: "promotion-draft-1", PlatformObjectKind: "promotion", PlatformObjectID: "7683558668450021382", Status: delivery.PlatformEntityMappingConfirmed}
 	run := browserautomation.BrowserRpaRun{OrganizationID: "org_1", ProjectID: "project_1", AccountID: "1855554434276391", Authority: browserautomation.AuthorityBinding{Action: "create_project_and_promotions", PlanID: "plan_1", PlanVersion: 1, PlanCanonicalHash: planHash, ConfigurationCanonicalHash: configuration.CanonicalHash}}
 	policy := browserautomation.SitePolicy{AllowedProtocols: []string{"https"}, AllowedHosts: []string{"ad.oceanengine.com"}, AllowedPageKinds: []string{"project_create", "promotion_create"}}
 
 	compiler := V3Compiler{Source: v3SourceStub{version: delivery.DeliveryPlanVersion{CanonicalHash: planHash, DeliveryIntent: &intent, PlatformConfiguration: &configuration}, mappings: []delivery.PlatformEntityMapping{projectMapping}}, Now: func() time.Time { return now }}
+	target := browserautomation.PreparedPage{InternalObjectKind: "project", InternalObjectID: "project-draft-1", Readback: map[string]string{"platform_object_id": projectMapping.PlatformObjectID}}
+	recovery, recoveryErr := compiler.CompileReconciliationV3(context.Background(), run, policy, target)
+	var recoveryPlan v3Plan
+	_ = json.Unmarshal(recovery, &recoveryPlan)
+	if recoveryErr != nil || recoveryPlan.PlanKind != "project_create" || recoveryPlan.ObjectReference != projectMapping.PlatformObjectID || recoveryPlan.AllowRemoteWrite || recoveryPlan.MaximumFinalClicks != 0 {
+		t.Fatalf("recovery = %#v, error = %v", recoveryPlan, recoveryErr)
+	}
+	target.Readback["platform_object_id"] = "12345"
+	if _, err := compiler.CompileReconciliationV3(context.Background(), run, policy, target); err == nil {
+		t.Fatal("reconciliation accepted a different platform project")
+	}
 	raw, err := compiler.CompilePrepareV3(context.Background(), run, policy)
 	if err != nil {
 		t.Fatal(err)

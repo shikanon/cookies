@@ -2,6 +2,7 @@ package plancompile
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,137 @@ func TestCompileConfigurationV3CreatesAndEditsBoundObjects(t *testing.T) {
 	assertPlanKind(t, edited.Forms[1].Plan, "promotion_edit", "7683558668450021382")
 	if edited.Forms[1].DependsOn != "" {
 		t.Fatalf("bound promotion dependency = %q", edited.Forms[1].DependsOn)
+	}
+}
+
+func TestApplicationExecutionIsTemporarilyUnsupported(t *testing.T) {
+	now := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	configuration, intent := executableConfigurationFixture(now)
+	configuration.Payload.OceanEngine.Project.MarketingPurpose = "application"
+	_, err := CompileConfigurationV3(configuration, &intent, "1855554434276391", V3ObjectBindings{}, now)
+	if err == nil || !strings.Contains(err.Error(), "应用暂不支持") {
+		t.Fatalf("expected application execution gate, got %v", err)
+	}
+}
+
+func TestCompileConfigurationV3KeepsMaterialsWithinEachPromotion(t *testing.T) {
+	now := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	configuration, intent := executableConfigurationFixture(now)
+	ocean := configuration.Payload.OceanEngine
+	materials := []delivery.StableReference{}
+	for index, kind := range []string{"video_material", "video_material", "image_material", "image_material"} {
+		ref := ocean.Promotions[0].BaseMaterialReferences[0]
+		ref.ObjectKind = kind
+		ref.ID = fmt.Sprintf("200%d", index)
+		ref.DisplayNameSnapshot = "素材" + ref.ID
+		materials = append(materials, ref)
+	}
+	ocean.Promotions[0].BaseMaterialReferences = materials
+	second := ocean.Promotions[0]
+	second.PromotionDraftID = "promotion-draft-2"
+	second.PromotionName = "第二个单元"
+	second.BaseMaterialReferences = materials[:1]
+	ocean.Promotions = append(ocean.Promotions, second)
+	intent.Payload.MaterialReferences = append(intent.Payload.MaterialReferences, materials...)
+	plans, err := CompileConfigurationV3(configuration, &intent, "1855554434276391", V3ObjectBindings{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plans.Forms) != 3 || plans.Forms[1].InternalObjectID != "promotion-draft-1" || plans.Forms[2].InternalObjectID != "promotion-draft-2" {
+		t.Fatalf("promotion forms = %#v", plans.Forms)
+	}
+	var projectPlan v3Plan
+	if err := json.Unmarshal(plans.Forms[0].Plan, &projectPlan); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range projectPlan.Steps {
+		if step.FieldKey == "project.bid" {
+			t.Fatal("manual ecommerce bids belong to promotions, not the project budget input")
+		}
+	}
+	for index, expected := range []int{4, 1} {
+		var plan v3Plan
+		if err := json.Unmarshal(plans.Forms[index+1].Plan, &plan); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, step := range plan.Steps {
+			if step.FieldKey != "promotion.base_materials" {
+				continue
+			}
+			found = true
+			if expected == 4 {
+				values, ok := step.Value.([]any)
+				if !ok || len(values) != expected {
+					t.Fatalf("first promotion materials = %#v", step.Value)
+				}
+				for materialIndex, value := range values {
+					spec := value.(map[string]any)
+					if spec["object_id"] != materials[materialIndex].ID || spec["material_type"] != materials[materialIndex].ObjectKind {
+						t.Fatalf("material spec = %#v", spec)
+					}
+				}
+			} else if spec, ok := step.Value.(map[string]any); !ok || spec["object_id"] != materials[0].ID {
+				t.Fatalf("second promotion material = %#v", step.Value)
+			}
+		}
+		if !found {
+			t.Fatal("base material step is missing")
+		}
+	}
+	ocean.Promotions[0].BaseMaterialReferences = append(materials, materials[0])
+	if _, err := CompileConfigurationV3(configuration, &intent, "1855554434276391", V3ObjectBindings{}, now); err == nil || !strings.Contains(err.Error(), "duplicate base material") {
+		t.Fatalf("duplicate material error = %v", err)
+	}
+}
+
+func TestApplicationPlanSelectsScenarioAndCarrierBeforeApplication(t *testing.T) {
+	configuration, intent := executableConfigurationFixture(time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC))
+	project := *configuration.Payload.OceanEngine.Project
+	project.MarketingPurpose = "application"
+	project.OperatingSystem = "android"
+	project.ApplicationReference = &delivery.StableReference{Namespace: "oceanengine", ObjectKind: "application", ID: "191511", State: delivery.ReferenceResolved, AuditAttributes: map[string]string{"basic_package_id": "package-hash", "package_name": "com.example.app"}}
+	for _, scenario := range []string{"app_download", "app_launch", "app_appointment_download"} {
+		project.ApplicationScenario = scenario
+		project.ApplicationDownloadMode = "landing_page_download"
+		project.ApplicationLaunchMode = "landing_page_launch"
+		values, err := projectPlanValues(project, &intent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec := values["project.application_reference"].(map[string]any)
+		if spec["object_id"] != "191511" || spec["basic_package_id"] != "package-hash" {
+			t.Fatalf("application spec=%v", spec)
+		}
+		positions := map[string]int{}
+		for index, field := range orderedProjectFields(project, v3ParentContext{}) {
+			positions[field.Key] = index
+		}
+		if positions["project.application_scenario"] >= positions["project.operating_system"] || positions["project.operating_system"] >= positions["project.application_reference"] {
+			t.Fatalf("application order=%v", positions)
+		}
+		_, hasDownload := positions["project.application_download_mode"]
+		_, hasLaunch := positions["project.application_launch_mode"]
+		if hasDownload != (scenario == "app_download") || hasLaunch != (scenario == "app_launch") {
+			t.Fatalf("scenario fields=%v", positions)
+		}
+	}
+	project.ApplicationScenario = "app_download"
+	project.ApplicationDownloadMode = "reservation_download"
+	if _, err := projectPlanValues(project, &intent); err == nil {
+		t.Fatal("incorrect download mode must not compile")
+	}
+	project.ApplicationDownloadMode = "direct_download"
+	project.ApplicationReference = &delivery.StableReference{Namespace: "oceanengine", ObjectKind: "application", ID: "https://example.test/application.apk", State: delivery.ReferenceResolved}
+	values, err := projectPlanValues(project, &intent)
+	if err != nil || values["project.application_reference"].(map[string]any)["object_id"] != project.ApplicationReference.ID {
+		t.Fatalf("download URL plan=%v err=%v", values, err)
+	}
+	configuration.Payload.OceanEngine.Project = &project
+	for _, item := range configurationObjectAvailability(*configuration.Payload.OceanEngine) {
+		if item.FieldKey == "project.application_reference" && (!item.Available || item.PlatformObjectID != "") {
+			t.Fatalf("download URL availability=%v", item)
+		}
 	}
 }
 
@@ -434,20 +566,20 @@ func TestV3BindingsFromMappingsUsesConfirmedObjectsAndSkipsPendingStages(t *test
 		{ID: "mapping-promotion", ConfigurationID: configuration.ConfigurationID, AccountReferenceID: "1855554434276391", InternalObjectKind: "promotion", InternalObjectID: "promotion-draft-1", PlatformObjectKind: "promotion", PlatformObjectID: "7683558668450021382", Status: delivery.PlatformEntityMappingConfirmed},
 	}
 	staleOnly, err := V3BindingsFromMappings(configuration, "1855554434276391", mappings[:1])
-	if err != nil || staleOnly.ProjectPlatformID != "" || len(staleOnly.PromotionPlatformIDs) != 0 {
+	if err != nil || staleOnly.ProjectPlatformID != "7677595885572784999" || len(staleOnly.PromotionPlatformIDs) != 0 {
 		t.Fatalf("stale bindings=%#v err=%v", staleOnly, err)
 	}
-	bindings, err := V3BindingsFromMappings(configuration, "1855554434276391", mappings)
+	bindings, err := V3BindingsFromMappings(configuration, "1855554434276391", mappings[1:])
 	if err != nil || bindings.ProjectPlatformID != "7677595885572784182" || bindings.PromotionPlatformIDs["promotion-draft-1"] != "7683558668450021382" {
 		t.Fatalf("bindings=%#v err=%v", bindings, err)
 	}
 	mappings[2].Status = delivery.PlatformEntityMappingPending
-	pending, err := V3BindingsFromMappings(configuration, "1855554434276391", mappings)
+	pending, err := V3BindingsFromMappings(configuration, "1855554434276391", mappings[1:])
 	if err != nil || pending.ProjectPlatformID == "" || pending.PromotionPlatformIDs["promotion-draft-1"] != "" {
 		t.Fatalf("pending bindings=%#v err=%v", pending, err)
 	}
 	mappings = append(mappings, delivery.PlatformEntityMapping{ID: "other-plan", AccountReferenceID: "1855554434276391", InternalObjectKind: "promotion", InternalObjectID: "other-draft", PlatformObjectKind: "promotion", PlatformObjectID: "7683558668450021999", Status: delivery.PlatformEntityMappingConfirmed})
-	if _, err := V3BindingsFromMappings(configuration, "1855554434276391", mappings); err != nil {
+	if _, err := V3BindingsFromMappings(configuration, "1855554434276391", mappings[1:]); err != nil {
 		t.Fatalf("unrelated mapping blocked current configuration: %v", err)
 	}
 }
@@ -470,12 +602,14 @@ func TestCompileConfigurationV3RejectsLimitsReferencesAndAccountPaths(t *testing
 		}, "1855554434276391", "bid is outside"},
 		{"cost cap project bid", func(c *delivery.PlatformConfiguration, _ *delivery.DeliveryIntent) {
 			value := int64(30001)
+			c.Payload.OceanEngine.Project.DeliveryMode = "ubmax"
 			c.Payload.OceanEngine.Project.BudgetAndBidding.BiddingStrategy = "cost_cap"
 			c.Payload.OceanEngine.Project.BudgetAndBidding.ChargingMode = "CPM"
 			c.Payload.OceanEngine.Project.BudgetAndBidding.BidMinor = &value
 		}, "1855554434276391", "project: bid is outside"},
 		{"impression project bid", func(c *delivery.PlatformConfiguration, _ *delivery.DeliveryIntent) {
 			value := int64(1)
+			c.Payload.OceanEngine.Project.DeliveryMode = "ubmax"
 			c.Payload.OceanEngine.Project.OptimizationTargetReference.SemanticKey = ""
 			c.Payload.OceanEngine.Project.OptimizationTargetReference.DisplayNameSnapshot = "展示量"
 			c.Payload.OceanEngine.Project.BudgetAndBidding.BiddingStrategy = "cost_cap"
@@ -590,5 +724,61 @@ func assertPlanKind(t *testing.T, raw json.RawMessage, kind, objectID string) {
 	}
 	if objectID != "" && value["object_reference"] != objectID {
 		t.Fatalf("object reference = %v", value["object_reference"])
+	}
+}
+
+func TestContentMarketingNativePromotionUsesNativeFields(t *testing.T) {
+	now := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	configuration, _ := executableConfigurationFixture(now)
+	project := configuration.Payload.OceanEngine.Project
+	project.MarketingPurpose = "content_marketing"
+	project.Carrier = "douyin_account"
+	project.DeliveryMode = "ubmax"
+	project.BudgetAndBidding.BiddingStrategy = "stable_cost"
+	project.DeepOptimizationMode = "disabled"
+	project.OptimizationTargetReference.SemanticKey = "external_action:102"
+	project.OptimizationTargetReference.ID = "102"
+	project.OptimizationTargetReference.DisplayNameSnapshot = "互动"
+	project.OptimizationTargetReference.AuditAttributes = map[string]string{"capability_snapshot_id": "snapshot", "capability_context_hash": "context"}
+	promotion := &configuration.Payload.OceanEngine.Promotions[0]
+	promotion.DeliveryIdentity.Mode = "all_douyin_accounts"
+	promotion.LandingPageReference = nil
+	promotion.BaseMaterialReferences[0].ObjectKind = "douyin_video"
+	promotion.CopyItems = nil
+	promotion.Settings.CallToAction = nil
+	promotion.Settings.SearchTerms = []string{"淘宝闪购"}
+	promotion.ProductImageReferences[0].State = delivery.ReferenceUnresolved
+	compiled, err := CompileConfigurationV3(configuration, nil, "1855554434276391", V3ObjectBindings{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan v3Plan
+	if err := json.Unmarshal(compiled.Forms[1].Plan, &plan); err != nil {
+		t.Fatal(err)
+	}
+	fields := map[string]any{}
+	for _, step := range plan.Steps {
+		fields[step.FieldKey] = step.Value
+	}
+	if fields["promotion.title_mode"] != "投放原视频标题" {
+		t.Fatalf("title mode = %v", fields["promotion.title_mode"])
+	}
+	for _, field := range []string{"promotion.copy_materials", "promotion.product_image_references", "promotion.call_to_action", "promotion.daily_budget", "promotion.bid", "promotion.comments_enabled", "promotion.direct_link_mode"} {
+		if _, exists := fields[field]; exists {
+			t.Fatalf("native plan contains %s", field)
+		}
+	}
+	material := fields["promotion.base_materials"].(map[string]any)
+	if material["material_type"] != "douyin_video" {
+		t.Fatalf("material = %#v", material)
+	}
+	promotion.Settings.TitleMode = "manual"
+	if _, err := CompileConfigurationV3(configuration, nil, "1855554434276391", V3ObjectBindings{}, now); err == nil {
+		t.Fatal("manual title without copy must fail")
+	}
+	promotion.Settings.TitleMode = "original_video"
+	promotion.BaseMaterialReferences[0].ObjectKind = "material"
+	if _, err := CompileConfigurationV3(configuration, nil, "1855554434276391", V3ObjectBindings{}, now); err == nil {
+		t.Fatal("uploaded video must not enter native picker")
 	}
 }

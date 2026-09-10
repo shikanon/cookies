@@ -21,6 +21,9 @@ const OBJECT_KIND_LABELS: Record<string, string> = {
   delivery_identity: '投放身份',
   direct_link: '直达链接',
   industry_category: '行业分类',
+  image_material: '图片素材',
+  aweme_photo_material: '图文素材',
+  douyin_video: '抖音视频',
   landing_page: '落地页',
   material: '视频素材',
   native_anchor: '原生锚点',
@@ -51,7 +54,7 @@ function urlHost(value: string): string {
 
 function kindLabel(item: ObjectAvailabilityItem): string {
   if (item.field_key === 'project.marketing_product_reference') return '营销商品'
-  if (item.field_key.includes('base_material_references')) return '视频素材'
+  if (item.field_key.includes('base_material_references')) return OBJECT_KIND_LABELS[item.object_kind] || '基础素材'
   return OBJECT_KIND_LABELS[item.object_kind] || '平台对象'
 }
 
@@ -152,6 +155,10 @@ export function presentConfigurationIssue(issue: string): string {
   if (/exactly one bound base material/i.test(issue)) {
     return '投放单元的基础素材数量不正确。请选择一个可用素材。'
   }
+  if (/requires at least one bound base material/i.test(issue)) return '投放单元缺少基础素材。请至少选择一个可用素材。'
+  if (/multiple base materials require explicit video_material or image_material types/i.test(issue)) return '多素材执行需要明确的视频或图片类型。请从巨量素材目录重新选择。'
+  if (/duplicate base material/i.test(issue)) return '同一个单元中重复选择了基础素材。请检查该单元的素材列表。'
+  if (/base materials allow at most 30 videos and 50 images/i.test(issue)) return '每个单元最多可选择 30 个视频和 50 张图片。'
   if (/daily budget must be at least CNY 300/i.test(issue)) {
     return '日预算过低。请将对应项目或单元的日预算设为至少 300 元。'
   }

@@ -33,8 +33,9 @@ type StatQueryRequest struct {
 }
 
 type AssetPageRequest struct {
-	Page  int
-	Limit int
+	Page   int
+	Limit  int
+	Cursor string
 }
 
 const (
@@ -73,6 +74,7 @@ type OptimizationTargetContext struct {
 	CampaignType       int    `json:"campaign_type"`
 	LandingType        int    `json:"landing_type"`
 	AssetType          int    `json:"asset_type"`
+	DeliveryProduct    int    `json:"delivery_product,omitempty"`
 	MicroAppID         string `json:"micro_app_id"`
 	CDPMarketingGoal   int    `json:"cdp_marketing_goal"`
 	DPAAdType          int    `json:"dpa_ad_type"`
@@ -209,6 +211,77 @@ func (c *Client) VideoMaterialsPage(ctx context.Context, request AssetPageReques
 	return c.getJSON(ctx, "/superior/api/v2/video/list?"+query.Encode())
 }
 
+type DouyinVideoFilter struct {
+	IESCoreUserID string
+	ItemURL       string
+}
+
+// DouyinVideosPage reads published videos available to content-marketing ads.
+func (c *Client) DouyinVideosPage(ctx context.Context, request AssetPageRequest, filter DouyinVideoFilter) (map[string]any, error) {
+	page, limit := normalizeAssetPage(request)
+	if limit > 32 {
+		limit = 32
+	}
+	userID := strings.TrimSpace(filter.IESCoreUserID)
+	if userID == "" {
+		userID = "0"
+	}
+	if _, err := strconv.ParseUint(userID, 10, 64); err != nil {
+		return nil, fmt.Errorf("Douyin user ID must be numeric")
+	}
+	body := map[string]any{
+		"landing_type": 7, "external_action": 102, "promotion_type": 3, "bussiness_id": 0,
+		"need_image_url": true, "need_origin_vid_info": true, "need_sort": false, "order_type": 2,
+		"page_size": limit, "page": page, "ies_core_user_id": userID, "transform_md5": true,
+	}
+	if userID == "0" {
+		body["item_filter"] = map[string]any{"ies_core_user_ids": []string{}, "aweme_related_scope": 2}
+		body["need_aweme_user_info"] = true
+	} else {
+		body["ignore_auth"] = false
+	}
+	if filter.ItemURL != "" {
+		body["item_url"] = filter.ItemURL
+	}
+	if request.Cursor != "" {
+		body["last_index"] = request.Cursor
+	}
+	var payload map[string]any
+	for attempt := 1; ; attempt++ {
+		var err error
+		payload, err = c.postJSON(ctx, "/superior/api/v2/creative/material/video/list", body)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := payload["data"].(map[string]any)
+		base, _ := data["base_resp"].(map[string]any)
+		code, _ := base["status_code"].(float64)
+		if code == 0 {
+			break
+		}
+		// Native video reads can report a timeout inside an outer success response.
+		if code != 1204 || attempt >= c.MaxAttempts {
+			return nil, BusinessCodeError{Code: int(code)}
+		}
+		if err := waitRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+	data, _ := payload["data"].(map[string]any)
+	_, hasMore := data["has_more"].(bool)
+	_, hasItems := data["items"].([]any)
+	if !hasMore || !hasItems {
+		return nil, fmt.Errorf("Douyin video response is missing items or has_more")
+	}
+	if data["has_more"] == true {
+		cursor, ok := data["last_index"].(string)
+		if !ok || strings.TrimSpace(cursor) == "" || cursor == request.Cursor {
+			return nil, fmt.Errorf("Douyin video pagination cursor did not advance")
+		}
+	}
+	return payload, nil
+}
+
 // AwemePhotoMaterialsPage reads one Douyin image-text material page.
 func (c *Client) AwemePhotoMaterialsPage(ctx context.Context, request AssetPageRequest) (map[string]any, error) {
 	page, limit := normalizeAssetPage(request)
@@ -224,6 +297,21 @@ func (c *Client) MarketingProductsPage(ctx context.Context, request AssetPageReq
 	page, _ := normalizeAssetPage(request)
 	body := map[string]any{"keywords": "", "category_id": "", "page": page, "ebp_asset_scope": 3}
 	return c.postJSON(ctx, "/superior/api/v2/ad/product/clue_product_list", body)
+}
+
+// ApplicationsPage reads the existing Android application picker, including packages.
+func (c *Client) ApplicationsPage(ctx context.Context, request AssetPageRequest) (map[string]any, error) {
+	page, limit := normalizeAssetPage(request)
+	pageInfo, err := json.Marshal(map[string]int{"page": page, "size": limit})
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{
+		"app": {""}, "status": {"4"}, "with_no_pkg": {"1"},
+		"page_info": {string(pageInfo)}, "order_type": {"4"}, "version_type": {"2"},
+		"operation_type": {"2"}, "need_pkg_force_detail": {"true"}, "search_type": {"0"},
+	}
+	return c.getJSON(ctx, "/superior/api/v2/agw/ad/get_app_list_for_ebp?"+query.Encode())
 }
 
 // OrangeLandingPagesPage reads one Orange third-party landing-page page.

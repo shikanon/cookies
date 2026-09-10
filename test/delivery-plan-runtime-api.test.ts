@@ -5,7 +5,9 @@ import { deliveryPlanApi, type DeliveryPlanDraft } from '../src/api/delivery.ts'
 test('delivery plan client writes DeliveryIntent plus tagged PlatformConfiguration and reads v2 history', async t => {
   const originalFetch = globalThis.fetch
   let written: any
+  let storedPlan: any
   globalThis.fetch = async (_url, init) => {
+    if (!init?.body) return new Response(JSON.stringify(storedPlan), { headers: { 'Content-Type': 'application/json' } })
     written = JSON.parse(String(init?.body))
     const hash = 'a'.repeat(64)
     written.intent.canonical_hash = hash
@@ -27,11 +29,12 @@ test('delivery plan client writes DeliveryIntent plus tagged PlatformConfigurati
       platform: 'ocean_engine', source: 'mock', scenario: 'platform_configuration',
       created_by: { kind: 'user', id: 'user_1' }, created_at: '2026-08-10T00:00:00Z',
     }
-    return new Response(JSON.stringify({
+    storedPlan = {
       id: 'plan_1', organization_id: 'org_1', project_id: 'project_1', status: 'draft', platform: 'ocean_engine',
       source: 'mock', scenario: 'platform_configuration', current_version_number: 1, current_version: version, versions: [version],
       created_by: 'user_1', created_at: version.created_at, updated_at: version.created_at,
-    }), { headers: { 'Content-Type': 'application/json' } })
+    }
+    return new Response(JSON.stringify(storedPlan), { headers: { 'Content-Type': 'application/json' } })
   }
   t.after(() => { globalThis.fetch = originalFetch })
 
@@ -82,12 +85,24 @@ test('delivery plan client writes DeliveryIntent plus tagged PlatformConfigurati
   assert.equal(written.platform_configuration.payload.ocean_engine.project.optimization_target_reference.semantic_key, 'in_app_order')
   assert.equal(written.platform_configuration.payload.ocean_engine.promotions[0].settings.call_to_action, undefined)
 
+  storedPlan.current_version_number = 4
+  storedPlan.current_version.version_number = 4
+  const stableProjectId = storedPlan.current_version.platform_configuration.payload.ocean_engine.project.project_draft_id
+  const stablePromotionId = storedPlan.current_version.platform_configuration.payload.ocean_engine.promotions[0].promotion_draft_id
+  storedPlan.current_version.platform_configuration.payload.ocean_engine.project.targeting.regions = ['上海']
+  storedPlan.current_version.platform_configuration.payload.ocean_engine.promotions[0].settings.source_label = '保留单元设置'
   await deliveryPlanApi.update('project_1', 'plan_1', 4, draft())
   assert.equal(written.expected_version, 4)
   assert.equal(written.intent.intent_id, 'intent-plan_1-plan-v5')
   assert.equal(written.platform_configuration.configuration_id, 'configuration-plan_1-plan-v5')
-  assert.equal(written.platform_configuration.payload.ocean_engine.project.project_draft_id, 'project-plan_1-5')
-  assert.equal(written.platform_configuration.payload.ocean_engine.promotions[0].promotion_draft_id, 'promotion-plan_1-5-1')
+  assert.equal(written.platform_configuration.payload.ocean_engine.project.project_draft_id, stableProjectId)
+  assert.equal(written.platform_configuration.payload.ocean_engine.promotions[0].promotion_draft_id, stablePromotionId)
+  assert.deepEqual(written.platform_configuration.payload.ocean_engine.project.targeting.regions, ['上海'])
+  assert.equal(written.platform_configuration.payload.ocean_engine.promotions[0].settings.source_label, '保留单元设置')
+
+  const materialEdit = draft()
+  materialEdit.creativeReferences[0].assetId = 'replacement-material'
+  await assert.rejects(deliveryPlanApi.update('project_1', 'plan_1', storedPlan.current_version_number, materialEdit), { code: 'OBJECT_EDITOR_REQUIRED' })
 
   plan.currentVersion.deliveryIntent!.payload.product_references = []
   const editedConfiguration = structuredClone(plan.currentVersion.platformConfiguration!)
@@ -101,8 +116,8 @@ test('delivery plan client writes DeliveryIntent plus tagged PlatformConfigurati
   assert.deepEqual(written.intent.payload.product_references.map((reference: { id?: string }) => reference.id), ['product-1'])
   assert.deepEqual(written.intent.payload.material_references.map((reference: { id?: string }) => reference.id), ['asset-1', 'video-1', 'image-1'])
   assert.equal(written.intent.intent_id, written.platform_configuration.intent.intent_id)
-  assert.equal(written.platform_configuration.payload.ocean_engine.project.project_draft_id, 'project-plan_1-2')
-  assert.equal(written.platform_configuration.payload.ocean_engine.promotions[0].promotion_draft_id, 'promotion-plan_1-2-1')
+  assert.equal(written.platform_configuration.payload.ocean_engine.project.project_draft_id, plan.currentVersion.platformConfiguration!.payload.ocean_engine!.project.project_draft_id)
+  assert.equal(written.platform_configuration.payload.ocean_engine.promotions[0].promotion_draft_id, plan.currentVersion.platformConfiguration!.payload.ocean_engine!.promotions[0].promotion_draft_id)
 })
 
 function draft(): DeliveryPlanDraft {

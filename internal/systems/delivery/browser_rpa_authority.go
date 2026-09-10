@@ -119,7 +119,33 @@ func (p BrowserRpaAuthorityProvider) initializeStagedMappings(ctx context.Contex
 			currentConfiguration := existing.PlanID == authority.PlanID && existing.ConfigurationID == version.PlatformConfiguration.ConfigurationID
 			if existing.Status == PlatformEntityMappingConfirmed {
 				if !currentConfiguration {
-					return browserautomation.ErrInvalidContract
+					history, ok := p.Repository.(interface {
+						ListPlanVersions(context.Context, contract.OrganizationID, contract.ProjectID, string) ([]DeliveryPlanVersion, error)
+					})
+					if !ok || existing.PlanID != authority.PlanID {
+						return browserautomation.ErrInvalidContract
+					}
+					versions, loadErr := history.ListPlanVersions(ctx, authority.OrganizationID, authority.ProjectID, authority.PlanID)
+					if loadErr != nil {
+						return mapBrowserRpaAuthorityError(loadErr)
+					}
+					budgets, budgetErr := mappingBudgetBaselines(ctx, p.Repository, []PlatformEntityMapping{existing})
+					if budgetErr != nil {
+						return mapBrowserRpaAuthorityError(budgetErr)
+					}
+					preview, previewErr := buildPlanObjectPreview(DeliveryPlan{ID: authority.PlanID, CurrentVersion: version}, []PlatformEntityMapping{existing}, versions, budgets)
+					if previewErr != nil {
+						return browserautomation.ErrInvalidContract
+					}
+					unchanged := false
+					for _, object := range preview.Objects {
+						if object.MappingID == existing.ID && object.Action == "unchanged" {
+							unchanged = true
+						}
+					}
+					if !unchanged {
+						return browserautomation.ErrInvalidContract
+					}
 				}
 				continue
 			}

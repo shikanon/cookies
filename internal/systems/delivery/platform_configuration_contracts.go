@@ -558,6 +558,8 @@ type OceanEngineCopyItem struct {
 }
 
 type OceanEnginePromotionSettings struct {
+	TitleMode              string           `json:"title_mode,omitempty"`
+	SearchTerms            []string         `json:"search_terms,omitempty"`
 	CallToAction           []string         `json:"call_to_action,omitempty"`
 	SourceLabel            string           `json:"source_label,omitempty"`
 	CommentsEnabled        *bool            `json:"comments_enabled,omitempty"`
@@ -690,6 +692,8 @@ type canonicalOceanEngineProject struct {
 }
 
 type canonicalOceanEnginePromotionSettings struct {
+	TitleMode              string                    `json:"title_mode,omitempty"`
+	SearchTerms            []string                  `json:"search_terms,omitempty"`
 	CallToAction           []string                  `json:"call_to_action,omitempty"`
 	SourceLabel            string                    `json:"source_label,omitempty"`
 	CommentsEnabled        *bool                     `json:"comments_enabled,omitempty"`
@@ -786,6 +790,7 @@ func canonicalOceanConfiguration(value *OceanEngineConfiguration) *canonicalOcea
 			DirectLinkReference: canonicalReferencePointer(promotion.DirectLinkReference), ProductReference: canonicalReferencePointer(promotion.ProductReference),
 			CreativeComponentReferences: canonicalReferences(promotion.CreativeComponentReferences), PromotionName: strings.TrimSpace(promotion.PromotionName),
 			Settings: canonicalOceanEnginePromotionSettings{
+				TitleMode: strings.TrimSpace(promotion.Settings.TitleMode), SearchTerms: canonicalStrings(promotion.Settings.SearchTerms),
 				CallToAction: canonicalStrings(promotion.Settings.CallToAction), SourceLabel: strings.TrimSpace(promotion.Settings.SourceLabel), CommentsEnabled: promotion.Settings.CommentsEnabled,
 				SmartGenerationEnabled: promotion.Settings.SmartGenerationEnabled, ClientDownloadEnabled: promotion.Settings.ClientDownloadEnabled, DirectLinkMode: strings.TrimSpace(promotion.Settings.DirectLinkMode),
 				CategoryReference: canonicalReferencePointer(promotion.Settings.CategoryReference), BrandReference: canonicalReferencePointer(promotion.Settings.BrandReference),
@@ -1022,7 +1027,24 @@ func validateOceanEngineConfiguration(configuration OceanEngineConfiguration, st
 			}
 			seenCallToAction[value] = true
 		}
-		if promotion.DeliveryIdentity.Mode != "account_info" && promotion.DeliveryIdentity.Mode != "douyin_account" {
+		if promotion.Settings.TitleMode != "" && promotion.Settings.TitleMode != "original_video" && promotion.Settings.TitleMode != "manual" {
+			return contractFailure(ContractErrorInvalidPromotion, field+".settings.title_mode", "title mode must be original_video or manual")
+		}
+		if len(promotion.Settings.SearchTerms) > 3 {
+			return contractFailure(ContractErrorInvalidPromotion, field+".settings.search_terms", "at most 3 search terms are allowed")
+		}
+		seenSearchTerms := map[string]bool{}
+		for _, term := range promotion.Settings.SearchTerms {
+			if strings.TrimSpace(term) == "" || len([]rune(term)) > 14 {
+				return contractFailure(ContractErrorInvalidPromotion, field+".settings.search_terms", "search terms must contain 1 to 14 characters")
+			}
+			if seenSearchTerms[strings.TrimSpace(term)] {
+				return contractFailure(ContractErrorInvalidPromotion, field+".settings.search_terms", "search terms must be unique")
+			}
+			seenSearchTerms[strings.TrimSpace(term)] = true
+		}
+		allDouyinAccounts := promotion.DeliveryIdentity.Mode == "all_douyin_accounts" && project.MarketingPurpose == "content_marketing" && project.Carrier == "douyin_account"
+		if promotion.DeliveryIdentity.Mode != "account_info" && promotion.DeliveryIdentity.Mode != "douyin_account" && !allDouyinAccounts {
 			return contractFailure(ContractErrorInvalidPromotion, field+".delivery_identity.mode", "identity must be account_info or douyin_account")
 		}
 		if promotion.DeliveryIdentity.Mode == "account_info" && promotion.DeliveryIdentity.AuthorizedIdentity != nil {

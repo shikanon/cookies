@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,5 +178,26 @@ func TestMySQLRepositoryListPlatformObjectsSupportsUnicodeSearch(t *testing.T) {
 	}
 	if len(values) != 1 || values[0].DisplayName != "菜鸟物流产品" {
 		t.Fatalf("values=%#v", values)
+	}
+	title := strings.Repeat("原", 512)
+	_, err = repository.ReconcilePlatformObjects(ctx, organizationID, projectID, accountID, "sync_native_"+suffix, PlatformObjectDouyinVideo, observedAt, []PlatformObjectCandidate{{
+		Kind: PlatformObjectDouyinVideo, PlatformObjectID: "7681605279024303402", DisplayName: title,
+		Metadata: map[string]any{"ies_core_user_id": "7500877386264609852", "aweme_nickname": "测试作者"},
+	}})
+	if err != nil {
+		t.Fatalf("512-character native title: %v", err)
+	}
+	for _, authorID := range []string{"7500877386264609852", "999"} {
+		videos, err := repository.ListPlatformObjects(ctx, PlatformObjectQuery{OrganizationID: organizationID, ProjectID: projectID, AccountID: accountID, Kind: PlatformObjectDouyinVideo, IESCoreUserID: authorID, Search: "测试作者"})
+		if err != nil || (len(videos) == 1) != (authorID == "7500877386264609852") {
+			t.Fatalf("author=%s videos=%v err=%v", authorID, videos, err)
+		}
+		if len(videos) == 1 && videos[0].DisplayName != title {
+			t.Fatal("native title was truncated")
+		}
+	}
+	_, err = repository.ReconcilePlatformObjects(ctx, organizationID, projectID, accountID, "sync_native_long_"+suffix, PlatformObjectDouyinVideo, observedAt, []PlatformObjectCandidate{{Kind: PlatformObjectDouyinVideo, PlatformObjectID: "7681605279024303402", DisplayName: title + "长"}})
+	if err == nil {
+		t.Fatal("513-character title must still be rejected")
 	}
 }

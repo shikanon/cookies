@@ -75,20 +75,21 @@ const (
 type BlockingReason string
 
 const (
-	BlockFinalConfirmationRequired BlockingReason = "FINAL_CONFIRMATION_REQUIRED"
-	BlockFinalConfirmationInvalid  BlockingReason = "FINAL_CONFIRMATION_INVALID"
-	BlockApprovalInvalid           BlockingReason = "APPROVAL_INVALID"
-	BlockLeaseInvalid              BlockingReason = "LEASE_INVALID"
-	BlockKillSwitchActive          BlockingReason = "KILL_SWITCH_ACTIVE"
-	BlockAccountMismatch           BlockingReason = "ACCOUNT_MISMATCH"
-	BlockProjectNotAllowed         BlockingReason = "PROJECT_NOT_ALLOWED"
-	BlockSiteNotAllowed            BlockingReason = "SITE_NOT_ALLOWED"
-	BlockPageDrift                 BlockingReason = "PAGE_DRIFT"
-	BlockRunnerFailure             BlockingReason = "RUNNER_FAILURE"
-	BlockWorkflowDrift             BlockingReason = "WORKFLOW_DRIFT"
-	BlockSkillDrift                BlockingReason = "SKILL_DRIFT"
-	BlockResultReconciliation      BlockingReason = "RESULT_RECONCILIATION_REQUIRED"
-	BlockTargetEffectNotObserved   BlockingReason = "TARGET_EFFECT_NOT_OBSERVED"
+	BlockFinalConfirmationRequired          BlockingReason = "FINAL_CONFIRMATION_REQUIRED"
+	BlockFinalConfirmationInvalid           BlockingReason = "FINAL_CONFIRMATION_INVALID"
+	BlockApprovalInvalid                    BlockingReason = "APPROVAL_INVALID"
+	BlockLeaseInvalid                       BlockingReason = "LEASE_INVALID"
+	BlockKillSwitchActive                   BlockingReason = "KILL_SWITCH_ACTIVE"
+	BlockAccountMismatch                    BlockingReason = "ACCOUNT_MISMATCH"
+	BlockProjectNotAllowed                  BlockingReason = "PROJECT_NOT_ALLOWED"
+	BlockSiteNotAllowed                     BlockingReason = "SITE_NOT_ALLOWED"
+	BlockPageDrift                          BlockingReason = "PAGE_DRIFT"
+	BlockNativePromotionSubmitNotCalibrated BlockingReason = "NATIVE_PROMOTION_SUBMIT_NOT_CALIBRATED"
+	BlockRunnerFailure                      BlockingReason = "RUNNER_FAILURE"
+	BlockWorkflowDrift                      BlockingReason = "WORKFLOW_DRIFT"
+	BlockSkillDrift                         BlockingReason = "SKILL_DRIFT"
+	BlockResultReconciliation               BlockingReason = "RESULT_RECONCILIATION_REQUIRED"
+	BlockTargetEffectNotObserved            BlockingReason = "TARGET_EFFECT_NOT_OBSERVED"
 )
 
 type Platform string
@@ -623,7 +624,8 @@ var runTransitions = map[RunState][]RunState{
 	RunAwaitingConfirmation: {RunAwaitingTakeover, RunPreparing, RunSubmitting, RunFailed, RunCancelled},
 	RunSubmitting:           {RunVerifying, RunFailed, RunPartial, RunResultUnknown},
 	RunVerifying:            {RunEnvironmentCheck, RunSucceeded, RunFailed, RunPartial, RunResultUnknown},
-	RunSucceeded:            {}, RunFailed: {}, RunPartial: {},
+	RunSucceeded:            {}, RunFailed: {},
+	RunPartial:       {RunEnvironmentCheck, RunSucceeded},
 	RunResultUnknown: {RunEnvironmentCheck, RunSucceeded, RunFailed},
 	RunCancelled:     {},
 }

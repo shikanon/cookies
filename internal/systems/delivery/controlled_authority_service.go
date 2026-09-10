@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shikanon/cookies/internal/platform/browserautomation"
 	"github.com/shikanon/cookies/internal/platform/contract"
 	"github.com/shikanon/cookies/internal/systems/delivery/platformskills"
 )
@@ -127,6 +128,10 @@ func (s Service) ListPlatformEntityMappings(ctx context.Context, actor contract.
 	if err := s.ready(actor, projectID, ScopeRead); err != nil {
 		return nil, err
 	}
+	return s.listPlatformEntityMappings(ctx, actor, projectID, accountReferenceID)
+}
+
+func (s Service) listPlatformEntityMappings(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, accountReferenceID string) ([]PlatformEntityMapping, error) {
 	if strings.TrimSpace(accountReferenceID) == "" {
 		return nil, ErrInvalidRequest
 	}
@@ -293,6 +298,9 @@ func (s Service) CompileMappedControlledChangeSet(ctx context.Context, actor con
 	if strings.TrimSpace(mappingID) == "" || request.ExpectedMappingVersion < 2 || !request.Action.ModifiesExistingPromotion() {
 		return ControlledChangeSet{}, false, ErrInvalidRequest
 	}
+	if request.Action == ControlledActionUpdatePromotionBudget && request.TargetDailyBudgetMinor%100 != 0 {
+		return ControlledChangeSet{}, false, contractFailure("OBJECT_EDIT_CONDITION_UNMET", "target_daily_budget_minor", "当前日预算编辑链路要求按整元填写。")
+	}
 	if _, err := s.Projects.RequireActiveContext(ctx, actor, projectID); err != nil {
 		return ControlledChangeSet{}, false, err
 	}
@@ -315,7 +323,25 @@ func (s Service) CompileMappedControlledChangeSet(ctx context.Context, actor con
 	if err != nil {
 		return ControlledChangeSet{}, false, err
 	}
-	if sourceChange.Status != ControlledChangeSetExecuted || sourceChange.Binding.AccountReferenceID != mapping.AccountReferenceID || sourceChange.Binding.PlanID != mapping.PlanID || sourceChange.Binding.ConfigurationID != mapping.ConfigurationID || sourceChange.Binding.ParentPlatformProjectID == "" {
+	if sourceChange.Status != ControlledChangeSetExecuted || sourceChange.Binding.AccountReferenceID != mapping.AccountReferenceID || sourceChange.Binding.PlanID != mapping.PlanID || sourceChange.Binding.ConfigurationID != mapping.ConfigurationID {
+		return ControlledChangeSet{}, false, ErrApprovalContentMismatch
+	}
+	parentID := sourceChange.Binding.ParentPlatformProjectID
+	if parentID == "" && sourceChange.Action == ControlledActionCreateProjectAndPromotions {
+		mappings, listErr := repo.ListPlatformEntityMappings(ctx, actor.OrganizationID, projectID, mapping.AccountReferenceID)
+		if listErr != nil {
+			return ControlledChangeSet{}, false, listErr
+		}
+		for _, candidate := range mappings {
+			if candidate.PlanID == mapping.PlanID && candidate.ConfigurationID == mapping.ConfigurationID && candidate.BusinessExecutionID == mapping.BusinessExecutionID && candidate.InternalObjectKind == "project" && candidate.PlatformObjectKind == "project" && candidate.Status == PlatformEntityMappingConfirmed && candidate.PlatformObjectID != "" {
+				if parentID != "" {
+					return ControlledChangeSet{}, false, ErrApprovalContentMismatch
+				}
+				parentID = candidate.PlatformObjectID
+			}
+		}
+	}
+	if parentID == "" {
 		return ControlledChangeSet{}, false, ErrApprovalContentMismatch
 	}
 	mutation, err := request.mutation()
@@ -360,6 +386,7 @@ func (s Service) CompileMappedControlledChangeSet(ctx context.Context, actor con
 		return ControlledChangeSet{}, false, err
 	}
 	binding := sourceChange.Binding
+	binding.ParentPlatformProjectID = parentID
 	binding.TargetMappingID = mapping.ID
 	binding.TargetMappingVersion = mapping.Version
 	binding.TargetPlatformObjectID = mapping.PlatformObjectID
@@ -368,6 +395,11 @@ func (s Service) CompileMappedControlledChangeSet(ctx context.Context, actor con
 	binding.SupersedesControlledChangeSetID = strings.TrimSpace(request.SupersedesControlledChangeSetID)
 	binding.PromotionBudgetLimitMinor = mutation.TargetDailyBudgetMinor
 	binding.ObjectFingerprint = fingerprint
+	if request.Action == ControlledActionUpdatePromotionBudget {
+		binding.ExecutionDriver = browserautomation.ExecutionDriverPlaywrightEdgeV3
+		binding.WorkflowID = "object-budget-" + mapping.ID
+		binding.WorkflowCanonicalHash = fingerprint
+	}
 	binding.PromotionMutation = &mutation
 	binding.PromotionControl = nil
 	binding.PromotionRestart = nil

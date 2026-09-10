@@ -6,6 +6,8 @@ import {
   deliveryExecutionApi,
   type DeliveryPlan,
   type DeliveryExecutionDriver,
+  type DeliveryPlanObjectPreview,
+  type DeliveryPlatformEntityMapping,
   type PlatformConfiguration,
   type StableReference,
 } from '../api/delivery'
@@ -18,6 +20,9 @@ import { isOceanEngineImageSourceIdentity, oceanEngineImageSourceIdentity } from
 import { oceanEngineLeadCaptureMode, oceanEngineOptimizationTargetContext, optimizationCapabilitySelectionMatches } from '../lib/oceanengineBranchConstraints'
 import { formatOceanEngineMoneyRange, resolveOceanEngineBidConstraint, resolveOceanEngineChargingMode } from '../lib/oceanengineBidConstraints'
 import { projectPath } from '../lib/router'
+import { PlatformEntityEditor } from '../features/delivery-platform-entities/PlatformEntityEditor'
+import { PlanObjectStatus } from '../features/delivery-platform-entities/PlanObjectActions'
+import '../features/delivery-platform-entities/delivery-platform-entities.css'
 import type { DataState } from '../types'
 import { StateBoundary } from './StateBoundary'
 
@@ -138,6 +143,17 @@ function requiredMultiLeadLandingAction(project: OceanConfiguration['project']):
   return project.optimization_target_reference?.id?.trim() ?? ''
 }
 
+function ecommerceLandingActions(metadata: Record<string, unknown> | undefined): string[] {
+  const actions = metadata?.ecommerce_external_actions
+  return Array.isArray(actions) ? actions.map(String) : typeof actions === 'string' ? actions.split(',') : []
+}
+
+function requiredEcommerceLandingAction(project: OceanConfiguration['project']): string {
+  if (project.marketing_purpose !== 'ecommerce' || !carrierUsesOrangeLandingPage(project.carrier)) return ''
+  const reference = project.optimization_target_reference
+  return reference?.semantic_key === 'in_app_order' || reference?.id === 'builtin:in_app_order' || reference?.id === 'in_app_order' ? '20' : reference?.id ?? ''
+}
+
 const promotionRequiredFieldLabels: Record<PromotionRequiredField, string> = {
   promotion_name: '单元名称',
   base_materials: '基础素材',
@@ -155,10 +171,19 @@ const promotionRequiredFieldLabels: Record<PromotionRequiredField, string> = {
 function missingPromotionRequiredFields(promotion: OceanPromotion, project: OceanConfiguration['project']): PromotionRequiredField[] {
   const missing: PromotionRequiredField[] = []
   if (!promotion.promotion_name.trim()) missing.push('promotion_name')
+  if (project.marketing_purpose === 'content_marketing' && project.carrier === 'douyin_account') {
+    if (promotion.base_material_references.length !== 1 || promotion.base_material_references[0].object_kind !== 'douyin_video') missing.push('base_materials')
+    if (promotion.settings.title_mode === 'manual' && !promotion.copy_items.some(item => item.text.trim())) missing.push('copy_items')
+    if (!promotion.settings.source_label?.trim()) missing.push('source_label')
+    if (!promotion.settings.category_reference?.id) missing.push('category')
+    return missing
+  }
   if (!promotion.base_material_references.length) missing.push('base_materials')
   if (!promotion.copy_items.some(item => item.text.trim())) missing.push('copy_items')
   const requiredLandingAction = requiredMultiLeadLandingAction(project)
   if ((carrierUsesOrangeLandingPage(project.carrier) || project.carrier === 'owned_landing_page') && (!promotion.landing_page_reference?.id || (requiredLandingAction && !referenceSupportsMultiLeadAction(promotion.landing_page_reference, requiredLandingAction)))) missing.push('landing_page')
+  const ecommerceAction = requiredEcommerceLandingAction(project)
+  if (ecommerceAction && !ecommerceLandingActions(promotion.landing_page_reference?.audit_attributes).includes(ecommerceAction) && !missing.includes('landing_page')) missing.push('landing_page')
   if (promotion.settings.direct_link_mode === 'manual' && !promotion.direct_link_reference?.id?.trim()) missing.push('direct_link')
   if (!promotion.product_name?.trim() && !project.marketing_product_reference?.display_name_snapshot?.trim()) missing.push('product_name')
   if (!promotion.product_image_references?.some(reference => reference.object_kind === 'product_image')) missing.push('product_images')
@@ -196,6 +221,7 @@ function configuredReferenceIntentIssues(configuration: PlatformConfiguration | 
     promotion.base_material_references.forEach(reference => {
       if (!intentHasReference(intent.material_references, reference)) issues.push(`推广单元 ${index + 1} · 基础素材`)
     })
+    if (ocean.project.marketing_purpose === 'content_marketing' && ocean.project.carrier === 'douyin_account') return
     promotion.product_image_references?.forEach(reference => {
       if (!intentHasReference(intent.material_references, reference)) issues.push(`推广单元 ${index + 1} · 产品主图`)
       if (!reference.audit_attributes?.image_src_identity) issues.push(`推广单元 ${index + 1} · 产品主图身份引用`)
@@ -222,9 +248,11 @@ function normalizeProjectExecutionDefaults(configuration: PlatformConfiguration)
 type PlatformObjectPage = { items: ApiConnectorPlatformObject[]; next_cursor: string }
 type PlatformObjectSort = 'created_at' | 'ctr' | 'conversions'
 type PlatformObjectLoader = (query: string, cursor: string | undefined, sortBy: PlatformObjectSort, sortOrder: 'asc' | 'desc') => Promise<PlatformObjectPage>
+type DouyinVideoLoader = (iesCoreUserID: string, query: string, cursor: string | undefined, sortBy: PlatformObjectSort, sortOrder: 'asc' | 'desc') => Promise<PlatformObjectPage>
 
 async function addProductImagePickerEvidence(configuration: PlatformConfiguration, loadProductImages: PlatformObjectLoader): Promise<PlatformConfiguration> {
   const ocean = configuration.payload.ocean_engine
+  if (ocean?.project.marketing_purpose === 'content_marketing' && ocean.project.carrier === 'douyin_account') return configuration
   const needsEvidence = ocean?.promotions.some(promotion => promotion.product_image_references?.some(reference => !isOceanEngineImageSourceIdentity(reference.audit_attributes?.image_src_identity)))
   if (!ocean || !needsEvidence) return configuration
 
@@ -618,7 +646,14 @@ function ReferenceObjectPicker({ label, pickerTitle, value, objectKind, loadPlat
       namespace: 'oceanengine', object_kind: objectKind, scope: `account:${item.account_id}`,
       id: item.platform_object_id, version: String(item.version), state: 'resolved',
       display_name_snapshot: item.display_name || item.platform_object_id,
-      audit_attributes: { connector_platform_object_id: item.id, platform_object_id: item.platform_object_id },
+      audit_attributes: {
+        connector_platform_object_id: item.id, platform_object_id: item.platform_object_id,
+        ...(objectKind === 'douyin_video' ? { ies_core_user_id: String(item.metadata.ies_core_user_id ?? ''), video_id: String(item.metadata.video_id ?? '') } : {}),
+        ...(objectKind === 'application' ? {
+          basic_package_id: String(item.metadata.basic_package_id ?? ''),
+          package_name: String(item.metadata.package_name ?? ''),
+        } : {}),
+      },
     })
     setOpen(false)
   }
@@ -627,10 +662,10 @@ function ReferenceObjectPicker({ label, pickerTitle, value, objectKind, loadPlat
     <div className="delivery-config-object-summary"><div className="delivery-product-summary">{value ? <><span><Package size={20} aria-hidden="true"/></span><div><b>{value.display_name_snapshot || value.id}</b><small>Connector · {value.id}</small></div></> : <small>尚未选择{label}</small>}</div><button className="secondary-button" type="button" onClick={() => { setSelectedID(value?.audit_attributes?.connector_platform_object_id ?? ''); setOpen(true) }}>{pickerTitle}</button></div>
     {open ? <div className="delivery-product-picker-backdrop" role="presentation" onClick={() => setOpen(false)}><section className="delivery-product-picker" role="dialog" aria-modal="true" aria-label={`${label}选择器`} onClick={event => event.stopPropagation()}>
       <header><div><span className="section-label">CONNECTOR OBJECT</span><h3>{label}</h3><p>从当前巨量账户已同步的对象中选择一个。</p></div><button className="text-button" type="button" onClick={() => setOpen(false)}>关闭</button></header>
-      <div className="delivery-product-picker-toolbar"><input autoFocus placeholder={`搜索${label}名称或平台 ID`} value={query} onChange={event => setQuery(event.target.value)}/><span>当前结果 {visibleItems.length} 个</span></div>
+      <div className="delivery-product-picker-toolbar"><input autoFocus placeholder={objectKind === 'douyin_video' ? '搜索视频标题、作者或视频 ID' : `搜索${label}名称或平台 ID`} value={query} onChange={event => setQuery(event.target.value)}/><span>当前结果 {visibleItems.length} 个</span></div>
       {loadError ? <div className="delivery-material-error" role="alert">{loadError}</div> : null}
       <div className="delivery-product-picker-grid">
-        {visibleItems.map(item => { const name = item.display_name || item.platform_object_id; return <label key={item.id} className={`delivery-product-card${selectedID === item.id ? ' selected' : ''}`}><input type="radio" name={`reference_${objectKind}`} checked={selectedID === item.id} onChange={() => setSelectedID(item.id)}/><span className="delivery-product-card-thumbnail">{item.preview_url ? <img src={item.preview_url} alt="" loading="lazy"/> : <Package size={26} aria-hidden="true"/>}</span><span className="delivery-product-card-body"><b title={name}>{name}</b><small>{label}</small><code>{item.platform_object_id}</code></span><span className="delivery-product-card-source">Connector</span></label> })}
+        {visibleItems.map(item => { const name = item.display_name || item.platform_object_id; return <label key={item.id} className={`delivery-product-card${selectedID === item.id ? ' selected' : ''}`}><input type="radio" name={`reference_${objectKind}`} checked={selectedID === item.id} onChange={() => setSelectedID(item.id)}/><span className="delivery-product-card-thumbnail">{item.preview_url ? <img src={item.preview_url} alt="" loading="lazy"/> : <Package size={26} aria-hidden="true"/>}</span><span className="delivery-product-card-body"><b title={name}>{name}</b><small>{objectKind === 'douyin_video' ? String(item.metadata.aweme_nickname ?? '抖音原生视频') : label}</small>{objectKind === 'douyin_video' ? <small>抖音号 ID：{String(item.metadata.ies_core_user_id ?? '未知')}</small> : null}<code>{item.platform_object_id}</code></span><span className="delivery-product-card-source">Connector</span></label> })}
         {!loading && !visibleItems.length ? <div className="delivery-product-picker-empty">没有匹配的{label}。</div> : null}
       </div>
       {nextCursor ? <button className="secondary-button delivery-product-picker-more" type="button" disabled={loading} onClick={() => void loadMore()}>{loading ? '读取中…' : '加载更多'}</button> : null}
@@ -714,7 +749,7 @@ function materialReferenceKind(reference: StableReference, assets: ApiAssetVersi
   return asset.mediaKind === 'video' ? 'video' : 'image'
 }
 
-function PromotionMaterialEditor({ promotion, carrier, requiredMultiLeadExternalAction, projectProductName, assets, platformObjects, loadVideos, loadImages, loadProductImages, loadPhotos, missingRequiredFields, onChange }: { promotion: OceanPromotion; carrier: string; requiredMultiLeadExternalAction: string; projectProductName: string; assets: ApiAssetVersionPointer[]; platformObjects: ApiConnectorPlatformObject[]; loadVideos: PlatformObjectLoader; loadImages: PlatformObjectLoader; loadProductImages: PlatformObjectLoader; loadPhotos: PlatformObjectLoader; missingRequiredFields: ReadonlySet<PromotionRequiredField>; onChange: (patch: Partial<OceanPromotion>) => void }) {
+function PromotionMaterialEditor({ promotion, carrier, requiredMultiLeadExternalAction, requiredEcommerceExternalAction, projectProductName, assets, platformObjects, loadVideos, loadImages, loadProductImages, loadPhotos, missingRequiredFields, onChange }: { promotion: OceanPromotion; carrier: string; requiredMultiLeadExternalAction: string; requiredEcommerceExternalAction: string; projectProductName: string; assets: ApiAssetVersionPointer[]; platformObjects: ApiConnectorPlatformObject[]; loadVideos: PlatformObjectLoader; loadImages: PlatformObjectLoader; loadProductImages: PlatformObjectLoader; loadPhotos: PlatformObjectLoader; missingRequiredFields: ReadonlySet<PromotionRequiredField>; onChange: (patch: Partial<OceanPromotion>) => void }) {
   const [tab, setTab] = useState<MaterialEditorTab>('video')
   const referencesFor = (kind: MaterialEditorTab) => promotion.base_material_references.filter(reference => materialReferenceKind(reference, assets) === kind)
   const updateReferences = (kind: MaterialEditorTab, next: StableReference[]) => onChange({ base_material_references: [...promotion.base_material_references.filter(reference => materialReferenceKind(reference, assets) !== kind), ...next] })
@@ -724,8 +759,8 @@ function PromotionMaterialEditor({ promotion, carrier, requiredMultiLeadExternal
     graphic: referencesFor('graphic').length,
   }
   const additionalProductName = promotion.product_name ?? ''
-  const eligibleLandingPages = platformObjects.filter(item => item.object_kind === 'orange_landing_page' && (!requiredMultiLeadExternalAction || multiLeadLandingActions(item.metadata).includes(requiredMultiLeadExternalAction)))
-  const selectedLandingIsEligible = !requiredMultiLeadExternalAction || referenceSupportsMultiLeadAction(promotion.landing_page_reference, requiredMultiLeadExternalAction)
+  const eligibleLandingPages = platformObjects.filter(item => item.object_kind === 'orange_landing_page' && (!requiredMultiLeadExternalAction || multiLeadLandingActions(item.metadata).includes(requiredMultiLeadExternalAction)) && (!requiredEcommerceExternalAction || ecommerceLandingActions(item.metadata).includes(requiredEcommerceExternalAction)))
+  const selectedLandingIsEligible = (!requiredMultiLeadExternalAction || referenceSupportsMultiLeadAction(promotion.landing_page_reference, requiredMultiLeadExternalAction)) && (!requiredEcommerceExternalAction || ecommerceLandingActions(promotion.landing_page_reference?.audit_attributes).includes(requiredEcommerceExternalAction))
   return <section className="delivery-config-material-editor" aria-label="单元素材">
     <h5>04 单元素材</h5>
     <div className="delivery-config-material-group">
@@ -742,7 +777,7 @@ function PromotionMaterialEditor({ promotion, carrier, requiredMultiLeadExternal
     <div className="delivery-config-material-group delivery-config-material-fields">
       <label><RequiredFieldLabel label={`文案素材（${promotion.copy_items.length}/10）`} missing={missingRequiredFields.has('copy_items')}/><LineListTextarea rows={2} values={promotion.copy_items.map(item => item.text)} limit={10} placeholder="每行一条文案" required invalid={missingRequiredFields.has('copy_items')} onValuesChange={values => onChange({ copy_items: values.map(text => ({ text })) })}/></label>
       <label><span className="delivery-config-required-label">原生锚点<em>平台条件字段</em></span><input value={promotion.native_anchor_reference?.id ?? ''} placeholder="不填写时不启用" onChange={event => onChange({ native_anchor_reference: updateReference(promotion.native_anchor_reference, event.target.value, 'native_anchor') })}/><small>当前配置只保存原生锚点引用。自动生成模式尚未接入 Runner。</small></label>
-      {carrierUsesOrangeLandingPage(carrier) ? <label><RequiredFieldLabel label="橙子落地页" missing={missingRequiredFields.has('landing_page')}/><select className={missingRequiredFields.has('landing_page') ? 'field-missing' : undefined} value={selectedLandingIsEligible ? promotion.landing_page_reference?.id ?? '' : ''} onChange={event => { const item = platformObjects.find(value => value.object_kind === 'orange_landing_page' && value.platform_object_id === event.target.value); const actions = multiLeadLandingActions(item?.metadata); onChange({ landing_page_reference: item ? { namespace: 'oceanengine', object_kind: 'orange_landing_page', scope: `account:${item.account_id}`, id: item.platform_object_id, version: String(item.version), state: 'resolved', display_name_snapshot: item.display_name || item.platform_object_id, audit_attributes: { connector_platform_object_id: item.id, platform_object_id: item.platform_object_id, ...(actions.length ? { multi_lead_external_actions: actions.join(',') } : {}), ...(actions.includes('100') ? { multi_conversion_eligible: 'true' } : {}) } } : undefined }) }}><option value="">{requiredMultiLeadExternalAction ? `请选择支持当前优化目标（${requiredMultiLeadExternalAction}）和多留资组件的落地页` : '请选择已导入落地页'}</option>{eligibleLandingPages.map(item => <option key={item.id} value={item.platform_object_id}>{item.display_name || item.platform_object_id}</option>)}</select>{requiredMultiLeadExternalAction && !eligibleLandingPages.length ? <small>当前账户没有支持优化目标 {requiredMultiLeadExternalAction} 和多留资组件的橙子落地页。请同步巨量对象，或更改投放分支。</small> : null}</label> : null}
+      {carrierUsesOrangeLandingPage(carrier) ? <label><RequiredFieldLabel label="橙子落地页" missing={missingRequiredFields.has('landing_page')}/><select className={missingRequiredFields.has('landing_page') ? 'field-missing' : undefined} value={selectedLandingIsEligible ? promotion.landing_page_reference?.id ?? '' : ''} onChange={event => { const item = platformObjects.find(value => value.object_kind === 'orange_landing_page' && value.platform_object_id === event.target.value); const actions = multiLeadLandingActions(item?.metadata); const ecommerceActions = ecommerceLandingActions(item?.metadata); onChange({ landing_page_reference: item ? { namespace: 'oceanengine', object_kind: 'orange_landing_page', scope: `account:${item.account_id}`, id: item.platform_object_id, version: String(item.version), state: 'resolved', display_name_snapshot: item.display_name || item.platform_object_id, audit_attributes: { connector_platform_object_id: item.id, platform_object_id: item.platform_object_id, ...(ecommerceActions.length ? { ecommerce_external_actions: ecommerceActions.join(',') } : {}), ...(actions.length ? { multi_lead_external_actions: actions.join(',') } : {}), ...(actions.includes('100') ? { multi_conversion_eligible: 'true' } : {}) } } : undefined }) }}><option value="">{requiredMultiLeadExternalAction ? `请选择支持当前优化目标（${requiredMultiLeadExternalAction}）和多留资组件的落地页` : '请选择已导入落地页'}</option>{eligibleLandingPages.map(item => <option key={item.id} value={item.platform_object_id}>{item.display_name || item.platform_object_id}</option>)}</select>{requiredMultiLeadExternalAction && !eligibleLandingPages.length ? <small>当前账户没有支持优化目标 {requiredMultiLeadExternalAction} 和多留资组件的橙子落地页。请同步巨量对象，或更改投放分支。</small> : null}</label> : null}
       {carrier === 'owned_landing_page' ? <label><RequiredFieldLabel label="自研落地页链接" missing={missingRequiredFields.has('landing_page')}/><input className={missingRequiredFields.has('landing_page') ? 'field-missing' : undefined} type="url" placeholder="请输入 HTTPS 落地页链接" value={promotion.landing_page_reference?.object_kind === 'owned_landing_page' ? promotion.landing_page_reference.id ?? '' : ''} onChange={event => onChange({ landing_page_reference: updateReference(promotion.landing_page_reference, event.target.value, 'owned_landing_page') })}/></label> : null}
       <label><span>直达链接方式</span><select value={promotion.settings.direct_link_mode ?? 'automatic'} onChange={event => { const directLinkMode = event.target.value as 'automatic' | 'manual'; onChange({ settings: { ...promotion.settings, direct_link_mode: directLinkMode }, ...(directLinkMode === 'automatic' ? { direct_link_reference: undefined } : {}) }) }}><option value="automatic">自动生成</option><option value="manual">手动填写</option></select></label>
       {promotion.settings.direct_link_mode === 'manual' ? <label><RequiredFieldLabel label="直达链接" missing={missingRequiredFields.has('direct_link')}/><input className={missingRequiredFields.has('direct_link') ? 'field-missing' : undefined} aria-invalid={missingRequiredFields.has('direct_link')} value={promotion.direct_link_reference?.id ?? ''} placeholder="请输入 tbopen://、https:// 或 http:// 链接" onChange={event => onChange({ direct_link_reference: updateReference(promotion.direct_link_reference, event.target.value, 'direct_link') })}/><small>可以直接填写链接。手动链接不需要绑定巨量平台 ID。</small></label> : null}
@@ -769,13 +804,38 @@ function PromotionMaterialEditor({ promotion, carrier, requiredMultiLeadExternal
   </section>
 }
 
-function PromotionSettingsEditor({ promotion, index, accountID, loadCategories, loadBrands, missingRequiredFields, onChange }: { promotion: OceanPromotion; index: number; accountID: string; loadCategories: PlatformObjectLoader; loadBrands: PlatformObjectLoader; missingRequiredFields: ReadonlySet<PromotionRequiredField>; onChange: (patch: Partial<OceanPromotion>) => void }) {
+function NativeContentMaterialEditor({ promotion, loadDouyinVideos, onChange }: { promotion: OceanPromotion; loadDouyinVideos: DouyinVideoLoader; onChange: (patch: Partial<OceanPromotion>) => void }) {
+  const reference = promotion.base_material_references[0]
+  const [videoInput, setVideoInput] = useState(reference?.id ?? '')
+  const [iesCoreUserID, setIESCoreUserID] = useState('')
+  const loadVideos = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadDouyinVideos(iesCoreUserID.trim(), query, cursor, sortBy, sortOrder), [iesCoreUserID, loadDouyinVideos])
+  useEffect(() => { setVideoInput(reference?.id ?? '') }, [reference?.id])
+  return <section className="delivery-config-settings-editor" aria-label="抖音原生视频">
+    <h5>04 抖音原生视频</h5>
+    <label><span>按抖音号 ID 筛选</span><input inputMode="numeric" value={iesCoreUserID} placeholder="留空显示全部抖音号" onChange={event => setIESCoreUserID(event.target.value)}/><small>仅筛选视频目录，不改变单元投放身份。</small></label>
+    <ReferenceObjectPicker label="抖音原生视频" pickerTitle="选择已同步视频" value={reference} objectKind="douyin_video" loadPlatformObjects={loadVideos} onChange={video => onChange({ base_material_references: video ? [video] : [] })}/>
+    <p>当前支持 Prepare 填写与回读。正式提交暂不支持，保存后的原生视频核验尚未校准。</p>
+    <div className="delivery-config-unit-fields delivery-config-unit-fields--wide">
+    <label><span>视频链接或视频 ID · 必填</span><input value={videoInput} placeholder="https://www.douyin.com/video/视频ID" onChange={event => {
+      const input = event.target.value.trim()
+      setVideoInput(input)
+      const id = /^\d+$/.test(input) ? input : /^https:\/\/(?:www\.)?douyin\.com\/video\/(\d+)(?:[?#].*)?$/.exec(input)?.[1]
+      onChange({ base_material_references: id ? [{ namespace: 'oceanengine', object_kind: 'douyin_video', scope: 'current_project', state: 'resolved', id }] : [] })
+    }}/><small>每个单元选择一个已有抖音视频。请填写完整视频链接或数字 ID。</small></label>
+    <label><span>标题方式</span><select value={promotion.settings.title_mode ?? 'original_video'} onChange={event => onChange({ settings: { ...promotion.settings, title_mode: event.target.value as 'original_video' | 'manual' } })}><option value="original_video">投放原视频标题</option><option value="manual">手动添加</option></select></label>
+    {promotion.settings.title_mode === 'manual' ? <label><span>标题 · 必填</span><LineListTextarea rows={2} values={promotion.copy_items.map(item => item.text)} limit={10} placeholder="每行一个标题，最多 10 个" onValuesChange={values => onChange({ copy_items: values.map(text => ({ text })) })}/></label> : null}
+    <label><span>搜索词</span><LineListTextarea rows={2} values={promotion.settings.search_terms ?? []} limit={3} unique placeholder="每行一个词，最多 3 个，每个不超过 14 字" onValuesChange={search_terms => onChange({ settings: { ...promotion.settings, search_terms } })}/></label>
+    </div>
+  </section>
+}
+
+function PromotionSettingsEditor({ promotion, nativeContent = false, index, accountID, loadCategories, loadBrands, missingRequiredFields, onChange }: { promotion: OceanPromotion; nativeContent?: boolean; index: number; accountID: string; loadCategories: PlatformObjectLoader; loadBrands: PlatformObjectLoader; missingRequiredFields: ReadonlySet<PromotionRequiredField>; onChange: (patch: Partial<OceanPromotion>) => void }) {
   const customBrandName = promotion.settings.brand_reference?.id === '-1' ? promotion.settings.brand_reference.display_name_snapshot ?? '' : ''
   return <section className="delivery-config-settings-editor" aria-label="单元设置">
     <h5>05 单元设置</h5>
     <div className="delivery-config-unit-fields delivery-config-unit-fields--wide">
       <label><RequiredFieldLabel label="来源" missing={missingRequiredFields.has('source_label')}/><input name={`promotion_${index}_source`} aria-invalid={missingRequiredFields.has('source_label')} aria-required="true" required className={missingRequiredFields.has('source_label') ? 'field-missing' : undefined} placeholder="请输入产品或公司名称" value={promotion.settings.source_label ?? ''} onChange={event => onChange({ settings: { ...promotion.settings, source_label: event.target.value } })}/><small>来源是产品或公司名称，不是备注说明。</small></label>
-      <ToggleField label="单元评论" checked={promotion.settings.comments_enabled ?? false} onChange={comments_enabled => onChange({ settings: { ...promotion.settings, comments_enabled } })}/>
+      {!nativeContent ? <ToggleField label="单元评论" checked={promotion.settings.comments_enabled ?? false} onChange={comments_enabled => onChange({ settings: { ...promotion.settings, comments_enabled } })}/> : null}
       <ReferenceObjectPicker label={`所属类别 · ${missingRequiredFields.has('category') ? '必填 · 待补' : '必填'}`} pickerTitle="选择类别" value={promotion.settings.category_reference} objectKind="industry_category" loadPlatformObjects={loadCategories} onChange={category_reference => onChange({ settings: { ...promotion.settings, category_reference } })}/>
       <ReferenceObjectPicker label="品牌名称" pickerTitle="选择或填写品牌" value={promotion.settings.brand_reference} objectKind="brand" loadPlatformObjects={loadBrands} onChange={brand_reference => onChange({ settings: { ...promotion.settings, brand_reference } })}/>
       <label><span>自定义品牌名称</span><input value={customBrandName} placeholder="账户品牌列表中没有时填写" onChange={event => { const name = event.target.value.trimStart(); onChange({ settings: { ...promotion.settings, brand_reference: name ? { namespace: 'oceanengine', object_kind: 'brand', scope: `account:${accountID}`, id: '-1', state: 'resolved', display_name_snapshot: name, audit_attributes: { platform_object_id: '-1', selection_kind: 'text_option' } } : undefined } }) }}/><small>Runner 会选择“自定义品牌名称”，再填写此值。</small></label>
@@ -787,7 +847,7 @@ function ToggleField({ label, checked, onChange }: { label: string; checked: boo
   return <label className="delivery-config-toggle-field"><span>{label}</span><span className="delivery-config-toggle-control"><span>{checked ? '已开启' : '未开启'}</span><input type="checkbox" role="switch" checked={checked} onChange={event => onChange(event.target.checked)}/></span></label>
 }
 
-function PlatformConfigurationEditor({ value, onChange, products, assets, platformObjects, connectorAccounts, platformObjectError, loadVideos, loadImages, loadProductImages, loadPhotos, loadProducts, loadOptimizationTargets, loadOptimizationCapabilities, loadAuthorizedIdentities, loadCategories, loadBrands }: { value: PlatformConfiguration; onChange: (value: PlatformConfiguration) => void; products: Array<{ id: string; name: string; oceanEngineProductId?: string }>; assets: ApiAssetVersionPointer[]; platformObjects: ApiConnectorPlatformObject[]; connectorAccounts: ApiConnectorAccount[]; platformObjectError: string; loadVideos: PlatformObjectLoader; loadImages: PlatformObjectLoader; loadProductImages: PlatformObjectLoader; loadPhotos: PlatformObjectLoader; loadProducts: PlatformObjectLoader; loadOptimizationTargets: PlatformObjectLoader; loadOptimizationCapabilities: (accountID: string, context: ApiOptimizationTargetContext) => Promise<ApiOptimizationTargetCapabilitySnapshot>; loadAuthorizedIdentities: PlatformObjectLoader; loadCategories: PlatformObjectLoader; loadBrands: PlatformObjectLoader }) {
+function PlatformConfigurationEditor({ projectId, value, onChange, boundObjects, objectPreview, onEditObject, products, assets, platformObjects, connectorAccounts, platformObjectError, loadDouyinVideos, loadVideos, loadImages, loadProductImages, loadPhotos, loadProducts, loadApplications, loadOptimizationTargets, loadOptimizationCapabilities, loadAuthorizedIdentities, loadCategories, loadBrands }: { projectId: string; value: PlatformConfiguration; onChange: (value: PlatformConfiguration) => void; boundObjects: ReadonlySet<string>; objectPreview?: DeliveryPlanObjectPreview; onEditObject: (id: string) => void; products: Array<{ id: string; name: string; oceanEngineProductId?: string }>; assets: ApiAssetVersionPointer[]; platformObjects: ApiConnectorPlatformObject[]; connectorAccounts: ApiConnectorAccount[]; platformObjectError: string; loadDouyinVideos: DouyinVideoLoader; loadVideos: PlatformObjectLoader; loadImages: PlatformObjectLoader; loadProductImages: PlatformObjectLoader; loadPhotos: PlatformObjectLoader; loadProducts: PlatformObjectLoader; loadApplications: PlatformObjectLoader; loadOptimizationTargets: PlatformObjectLoader; loadOptimizationCapabilities: (accountID: string, context: ApiOptimizationTargetContext) => Promise<ApiOptimizationTargetCapabilitySnapshot>; loadAuthorizedIdentities: PlatformObjectLoader; loadCategories: PlatformObjectLoader; loadBrands: PlatformObjectLoader }) {
   const ocean = value.payload.ocean_engine
   const leadCaptureMode = ocean?.project ? oceanEngineLeadCaptureMode(ocean.project) : 'smart_lead'
   const optimizationContext = useMemo(() => ocean?.project ? oceanEngineOptimizationTargetContext(ocean.project) : undefined, [ocean?.project?.carrier, ocean?.project?.lead_capture_mode, ocean?.project?.marketing_purpose])
@@ -822,19 +882,35 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
     : !ocean.project.optimization_target_reference?.id
   const missingRequiredCount = promotionRequirements.reduce((count, fields) => count + fields.length, 0)
   const projectExecutionIssues: string[] = []
+  if (ocean.project.marketing_purpose === 'application') projectExecutionIssues.push('应用暂不支持：测试账号没有可用优化目标，尚未完成执行校准。')
   if (ocean.project.marketing_purpose !== 'product_catalog' && !['short_video_image_text', 'manual_delivery'].includes(ocean.project.marketing_scenario)) projectExecutionIssues.push('当前 Runner 只支持“短视频与图文”营销场景。')
   if (optimizationTargetMissing) projectExecutionIssues.push('请选择当前分支允许的优化目标。')
   const projectBidMinor = ocean.project.budget_and_bidding.bid_minor
-  const projectBidRequired = ['stable_cost', 'cost_cap'].includes(ocean.project.budget_and_bidding.bidding_strategy) && !['conversion_roi', 'net_roi'].includes(ocean.project.deep_optimization_mode ?? 'disabled')
+  const contentMarketing = ocean.project.marketing_purpose === 'content_marketing'
+  const nativeContent = contentMarketing && ocean.project.carrier === 'douyin_account'
+  const contentManualDelivery = contentMarketing && ocean.project.delivery_mode === 'manual'
+  if (contentMarketing && ocean.promotions.length > 0 && (!nativeContent || contentManualDelivery || ocean.project.optimization_target_reference?.id !== '102')) projectExecutionIssues.push('内容营销单元目前仅校准“抖音号 + UBMax + 互动”。其他分支暂不支持执行。')
+  const numericProjectBudgetRequired = ocean.project.marketing_purpose === 'lead_generation' || (contentMarketing && !contentManualDelivery)
+  const projectBidRequired = !contentManualDelivery && ['stable_cost', 'cost_cap'].includes(ocean.project.budget_and_bidding.bidding_strategy) && !['conversion_roi', 'net_roi'].includes(ocean.project.deep_optimization_mode ?? 'disabled')
   const projectChargingMode = resolveOceanEngineChargingMode(ocean.project.optimization_target_reference, ocean.project.budget_and_bidding.charging_mode)
+  const minimumProjectDailyBudget = contentMarketing && projectChargingMode === 'CPC' ? 100 : 300
   const projectBidConstraint = projectChargingMode
     ? resolveOceanEngineBidConstraint(projectChargingMode, ocean.project.budget_and_bidding.daily_budget_minor)
     : undefined
   if (ocean.project.marketing_purpose === 'lead_generation' && (ocean.project.budget_and_bidding.budget_mode === 'unlimited' || ocean.project.budget_and_bidding.daily_budget_minor < 30000)) projectExecutionIssues.push('销售线索项目必须设置日预算，且不能低于 300 元。')
+  if (contentMarketing && (numericProjectBudgetRequired && ocean.project.budget_and_bidding.budget_mode === 'unlimited' || ocean.project.budget_and_bidding.budget_mode !== 'unlimited' && ocean.project.budget_and_bidding.daily_budget_minor < minimumProjectDailyBudget * 100)) projectExecutionIssues.push(`当前内容营销路径需设置至少 ${minimumProjectDailyBudget} 元的日预算。`)
   if (!projectChargingMode || !projectBidConstraint) projectExecutionIssues.push('当前优化目标无法解析计费方式。')
   if (projectBidRequired && projectBidMinor != null && projectBidConstraint && (projectBidMinor < projectBidConstraint.minimumMinor || projectBidMinor > projectBidConstraint.maximumMinor)) projectExecutionIssues.push(`项目出价必须在 ${formatOceanEngineMoneyRange(projectBidConstraint)}之间。`)
   const updateOcean = (next: OceanConfiguration) => onChange({ ...value, payload: { ...value.payload, ocean_engine: next } })
-  const updateProject = (patch: Partial<OceanConfiguration['project']>) => updateOcean({ ...ocean, project: { ...ocean.project, ...patch } })
+  const updateProject = (patch: Partial<OceanConfiguration['project']>) => {
+    const project = { ...ocean.project, ...patch }
+    const nextNative = project.marketing_purpose === 'content_marketing' && project.carrier === 'douyin_account'
+    const promotions = nextNative === nativeContent ? ocean.promotions : ocean.promotions.map(promotion => ({
+      ...promotion, delivery_identity: { mode: nextNative ? 'all_douyin_accounts' : 'account_info' },
+      base_material_references: [], landing_page_reference: undefined,
+    }))
+    updateOcean({ ...ocean, project, promotions })
+  }
   const updateOptimizationTarget = (optimizationTargetReference?: StableReference) => {
     const chargingMode = resolveOceanEngineChargingMode(optimizationTargetReference, ocean.project.budget_and_bidding.charging_mode)
     updateProject({
@@ -844,6 +920,15 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
   }
   const updateMarketingPurpose = (marketingPurpose: string) => updateProject({
     marketing_purpose: marketingPurpose,
+    optimization_target_reference: undefined,
+    ...(marketingPurpose === 'content_marketing' ? {
+      carrier: 'douyin_account',
+      delivery_mode: 'ubmax',
+      deep_optimization_mode: 'disabled',
+      placement_strategy: 'preferred_media',
+      placement_media: ['douyin'],
+      budget_and_bidding: { ...ocean.project.budget_and_bidding, bidding_strategy: 'stable_cost', budget_mode: 'daily', daily_budget_minor: Math.max(ocean.project.budget_and_bidding.daily_budget_minor, 30000) },
+    } : ocean.project.carrier === 'douyin_account' ? { carrier: 'orange_landing_page' } : {}),
     ...(marketingPurpose === 'lead_generation' ? {
       delivery_mode: 'ubmax',
       budget_and_bidding: {
@@ -857,6 +942,7 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
   const updatePromotion = (index: number, patch: Partial<OceanPromotion>) => updateOcean({ ...ocean, promotions: ocean.promotions.map((promotion, itemIndex) => itemIndex === index ? { ...promotion, ...patch } : promotion) })
   const updateCarrier = (carrier: string) => {
     if (carrier === ocean.project.carrier) return
+    if (contentMarketing) { updateProject({ carrier, optimization_target_reference: undefined }); return }
     updateOcean(changeOceanEngineCarrier(ocean, carrier))
   }
   const updateLeadCaptureMode = (leadCaptureMode: string) => {
@@ -869,8 +955,8 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
   }
   const addPromotion = () => updateOcean({ ...ocean, promotions: [...ocean.promotions, {
     draft_schema_version: 'oceanengine-configuration/v1',
-    promotion_draft_id: `promotion-local-${Date.now()}`,
-    delivery_identity: { mode: 'account_info' }, base_material_references: [], copy_items: [], settings: { comments_enabled: false },
+    promotion_draft_id: `promotion-${crypto.randomUUID()}`,
+    delivery_identity: { mode: nativeContent ? 'all_douyin_accounts' : 'account_info' }, base_material_references: [], copy_items: [], settings: { comments_enabled: false },
     promotion_name: `${ocean.project.project_name}-${ocean.promotions.length + 1}`,
   }] })
   const removePromotion = (index: number) => {
@@ -912,32 +998,34 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
       <CircleAlert size={18} aria-hidden="true"/>
       <div><b>当前项目路径不能生成 Runner 计划</b><ul>{projectExecutionIssues.map(issue => <li key={issue}>{issue}</li>)}</ul><small>可以保存草稿，但执行会保持阻塞。</small></div>
     </div> : null}
-    <div className="delivery-config-project-editor">
-      <div className="delivery-config-subheading"><div><span>01</span><div><h4>投放项目</h4><p>设置营销路径、预算、竞价、排期和定向。</p></div></div></div>
+    <fieldset disabled={boundObjects.has(ocean.project.project_draft_id)} className="delivery-config-project-editor">
+      <legend className="delivery-config-object-status"><PlanObjectStatus projectId={projectId} object={objectPreview?.objects.find(object => object.internal_id === ocean.project.project_draft_id)} loading={!objectPreview} onEdit={onEditObject}/></legend>
+      <div className="delivery-config-subheading"><div><span>01</span><div><h4 id={`object-${ocean.project.project_draft_id}`}>投放项目</h4><p>{boundObjects.has(ocean.project.project_draft_id) ? '项目已创建，当前配置只读。新增单元会使用此项目。' : '设置营销路径、预算、竞价、排期和定向。'}</p></div></div></div>
       <div className="delivery-config-editor-fields delivery-config-editor-fields--wide">
         <label><span>巨量账户</span><select value={accountAvailable ? accountID : ''} onChange={event => updateAccount(event.target.value)}><option value="">请选择当前 Project 已验证账户</option>{connectorAccounts.map(account => <option key={account.id} value={account.id}>{account.display_label || account.id}</option>)}</select><small>切换账户会清除旧账户的巨量对象引用。Cookies 素材引用保持不变。</small></label>
         {!accountAvailable ? <div className="delivery-config-account-error" role="alert"><CircleAlert size={16}/><span>计划账户 <code>{accountID || '未设置'}</code> 未绑定当前 Project。请选择已验证账户。</span></div> : null}
         {platformObjectError && !platformObjectError.startsWith('计划账户 ') ? <div className="delivery-config-account-error" role="alert"><CircleAlert size={16}/><span>{platformObjectError}</span></div> : null}
         <label><span>项目名称</span><input name="oceanengine_project_name" autoComplete="off" value={ocean.project.project_name} onChange={event => updateProject({ project_name: event.target.value })}/></label>
-        <label><span>营销目的</span><select value={ocean.project.marketing_purpose} onChange={event => updateMarketingPurpose(event.target.value)}><option value="ecommerce">电商</option><option value="lead_generation">销售线索</option><option value="application">应用</option><option value="product_catalog">商品</option><option value="content_marketing">内容营销</option></select></label>
+        <label><span>营销目的</span><select value={ocean.project.marketing_purpose} onChange={event => updateMarketingPurpose(event.target.value)}><option value="ecommerce">电商</option><option value="lead_generation">销售线索</option><option value="application" disabled>应用（暂不支持）</option><option value="product_catalog">商品</option><option value="content_marketing">内容营销</option></select></label>
         {ocean.project.marketing_purpose !== 'product_catalog' ? <label><span>营销场景</span><select value={ocean.project.marketing_scenario} onChange={event => updateProject({ marketing_scenario: event.target.value })}><option value="short_video_image_text">短视频与图文</option><option value="live_stream" disabled>直播（Runner 暂不支持）</option></select></label> : null}
         <MarketingProductPicker value={ocean.project.marketing_product_reference} cookiesProducts={products} loadPlatformObjects={loadProducts} onChange={marketing_product_reference => updateProject({ marketing_product_reference })}/>
         {ocean.project.marketing_purpose === 'application' ? <>
-          <label><span>应用引用</span><input value={ocean.project.application_reference?.id ?? ''} placeholder="应用链接或应用对象 ID" onChange={event => updateProject({ application_reference: updateReference(ocean.project.application_reference, event.target.value, 'application') })}/></label>
-          <label><span>应用场景</span><input value={ocean.project.application_scenario ?? ''} onChange={event => updateProject({ application_scenario: event.target.value })}/></label>
-          <label><span>操作系统</span><select value={ocean.project.operating_system ?? ''} onChange={event => updateProject({ operating_system: event.target.value })}><option value="">请选择</option><option value="android">安卓</option><option value="ios">iOS</option><option value="harmonyos">鸿蒙</option></select></label>
-          <label><span>下载方式</span><select value={ocean.project.application_download_mode ?? ''} onChange={event => updateProject({ application_download_mode: event.target.value })}><option value="">请选择</option><option value="direct_download">直接下载</option><option value="reservation_download">预约下载</option></select></label>
-          <label><span>调起方式</span><input value={ocean.project.application_launch_mode ?? ''} onChange={event => updateProject({ application_launch_mode: event.target.value })}/></label>
+          <label><span>应用场景</span><select value={ocean.project.application_scenario ?? ''} onChange={event => updateProject({ application_scenario: event.target.value, application_reference: undefined, application_download_mode: undefined, application_launch_mode: undefined, optimization_target_reference: undefined, ...(event.target.value === 'app_appointment_download' && ['harmony', 'harmonyos'].includes(ocean.project.operating_system ?? '') ? { operating_system: undefined } : {}) })}><option value="">请选择</option><option value="app_download">应用下载</option><option value="app_launch">应用调起</option><option value="app_appointment_download">预约下载</option></select></label>
+          <label><span>投放载体（操作系统）</span><select value={ocean.project.operating_system === 'harmony' ? 'harmonyos' : ocean.project.operating_system ?? ''} onChange={event => updateProject({ operating_system: event.target.value, application_reference: undefined, optimization_target_reference: undefined })}><option value="">请选择</option><option value="android">安卓</option><option value="ios">iOS</option>{ocean.project.application_scenario !== 'app_appointment_download' ? <option value="harmonyos">鸿蒙</option> : null}</select></label>
+          <label><span>应用下载链接或应用 ID</span><input value={ocean.project.application_reference?.id ?? ''} placeholder="输入应用下载链接，或在下方选择已有应用" onChange={event => updateProject({ application_reference: updateReference(undefined, event.target.value, 'application'), optimization_target_reference: undefined })}/><small>输入链接与选择已有应用二选一。已有应用目录当前支持安卓。</small></label>
+          {ocean.project.operating_system === 'android' && ocean.project.application_scenario !== 'app_appointment_download' ? <ReferenceObjectPicker label="已有应用" pickerTitle="选择已有应用" value={ocean.project.application_reference} objectKind="application" loadPlatformObjects={loadApplications} onChange={application_reference => updateProject({ application_reference, optimization_target_reference: undefined })}/> : null}
+          {ocean.project.application_scenario === 'app_download' ? <label><span>下载方式</span><select value={ocean.project.application_download_mode ?? ''} onChange={event => updateProject({ application_download_mode: event.target.value, optimization_target_reference: undefined })}><option value="">请选择</option><option value="direct_download">直接下载</option><option value="landing_page_download">落地页下载</option></select></label> : null}
+          {ocean.project.application_scenario === 'app_launch' ? <label><span>调起方式</span><select value={ocean.project.application_launch_mode ?? ''} onChange={event => updateProject({ application_launch_mode: event.target.value, optimization_target_reference: undefined })}><option value="">请选择</option><option value="direct_launch">直接调起</option><option value="landing_page_launch">落地页调起</option></select></label> : null}
         </> : null}
         {ocean.project.marketing_purpose === 'lead_generation' ? <label><span>获取线索方式</span><select value={leadCaptureMode} onChange={event => updateLeadCaptureMode(event.target.value)}><option value="smart_lead">智能优选</option><option value="custom_lead">自定义</option></select></label> : null}
         {ocean.project.marketing_purpose === 'lead_generation'
           ? <label><span>投放模式</span><input value="UBMax（平台固定）" readOnly/><small>销售线索页面固定使用 delivery_mode=3。Runner 不操作此字段。</small></label>
-          : <label><span>投放模式</span><select value={ocean.project.delivery_mode} onChange={event => updateProject({ delivery_mode: event.target.value })}><option value="manual">手动投放</option><option value="ubmax">UBMax</option></select></label>}
-        <label><span>深度优化方式</span><select value={ocean.project.deep_optimization_mode ?? 'disabled'} onChange={event => updateProject({ deep_optimization_mode: event.target.value })}><option value="disabled">不启用</option><option value="conversion_roi">成交 ROI</option><option value="net_order">净成交下单</option><option value="net_roi">净成交 ROI</option></select><small>平台会按当前场景限制可用选项。</small></label>
+          : <label><span>投放模式</span><select value={ocean.project.delivery_mode} onChange={event => updateProject({ delivery_mode: event.target.value, ...(contentMarketing && event.target.value === 'ubmax' ? { budget_and_bidding: { ...ocean.project.budget_and_bidding, bidding_strategy: 'stable_cost', budget_mode: 'daily', daily_budget_minor: Math.max(ocean.project.budget_and_bidding.daily_budget_minor, minimumProjectDailyBudget * 100) } } : {}) })}><option value="manual">手动投放</option><option value="ubmax">UBMax</option></select></label>}
+        {!contentMarketing ? <label><span>深度优化方式</span><select value={ocean.project.deep_optimization_mode ?? 'disabled'} onChange={event => updateProject({ deep_optimization_mode: event.target.value })}><option value="disabled">不启用</option><option value="conversion_roi">成交 ROI</option><option value="net_order">净成交下单</option><option value="net_roi">净成交 ROI</option></select><small>平台会按当前场景限制可用选项。</small></label> : null}
         {['lead_generation', 'ecommerce'].includes(ocean.project.marketing_purpose) ? <ToggleField label="AIGC 动态创意" checked={ocean.project.aigc_dynamic_creative ?? false} onChange={aigc_dynamic_creative => updateProject({ aigc_dynamic_creative })}/> : null}
-        <label><span>竞价策略</span><select value={ocean.project.budget_and_bidding.bidding_strategy} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, bidding_strategy: event.target.value } })}><option value="stable_cost">稳定成本 · 成本稳定在出价附近</option><option value="cost_cap">最优成本 · 均匀消耗预算，成本不超过出价</option><option value="maximum_conversion">最大转化 · 花完预算，拿到最大转化（价值）</option></select></label>
+        <label><span>竞价策略</span><select value={ocean.project.budget_and_bidding.bidding_strategy} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, bidding_strategy: event.target.value } })}><option value="stable_cost">稳定成本 · 成本稳定在出价附近</option><option value="cost_cap" disabled={contentMarketing && !contentManualDelivery}>最优成本 · 均匀消耗预算，成本不超过出价</option><option value="maximum_conversion" disabled={contentMarketing && !contentManualDelivery}>最大转化 · 花完预算，拿到最大转化（价值）</option></select></label>
         <label><span>付费方式</span><input value={projectChargingMode ? ({ CPC: '按点击付费（CPC）', CPM: '按展示付费（CPM）', OCPC: '按目标转化出价（oCPC）', OCPM: '按目标转化出价（oCPM）' }[projectChargingMode]) : '等待优化目标'} readOnly/><small>由当前优化目标决定，不能单独修改。</small></label>
-        <label><span>项目日预算</span>{ocean.project.marketing_purpose !== 'lead_generation' ? <select value={ocean.project.budget_and_bidding.budget_mode ?? (ocean.project.budget_and_bidding.daily_budget_minor === 0 ? 'unlimited' : 'daily')} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, budget_mode: event.target.value as 'daily' | 'unlimited', daily_budget_minor: event.target.value === 'unlimited' ? 0 : Math.max(ocean.project.budget_and_bidding.daily_budget_minor, 30000) } })}><option value="daily">设置日预算</option><option value="unlimited">不限</option></select> : <small>销售线索页面要求设置日预算。</small>}{ocean.project.marketing_purpose === 'lead_generation' || (ocean.project.budget_and_bidding.budget_mode ?? 'daily') !== 'unlimited' ? <div className="delivery-config-money-input"><input type="number" inputMode="decimal" min="300" value={ocean.project.budget_and_bidding.daily_budget_minor / 100} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, budget_mode: 'daily', daily_budget_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元 / 天 · 最低 300 元</small></div> : <small>预算不设上限</small>}</label>
+        <label><span>项目日预算</span>{!numericProjectBudgetRequired ? <select value={ocean.project.budget_and_bidding.budget_mode ?? (ocean.project.budget_and_bidding.daily_budget_minor === 0 ? 'unlimited' : 'daily')} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, budget_mode: event.target.value as 'daily' | 'unlimited', daily_budget_minor: event.target.value === 'unlimited' ? 0 : Math.max(ocean.project.budget_and_bidding.daily_budget_minor, minimumProjectDailyBudget * 100) } })}><option value="daily">设置日预算</option><option value="unlimited">不限</option></select> : <small>当前投放模式要求设置日预算。</small>}{numericProjectBudgetRequired || (ocean.project.budget_and_bidding.budget_mode ?? 'daily') !== 'unlimited' ? <div className="delivery-config-money-input"><input type="number" inputMode="decimal" min={minimumProjectDailyBudget} value={ocean.project.budget_and_bidding.daily_budget_minor / 100} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, budget_mode: 'daily', daily_budget_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元 / 天 · 最低 {minimumProjectDailyBudget} 元</small></div> : <small>预算不设上限</small>}</label>
         {projectBidRequired ? <label><span>项目出价</span><div className="delivery-config-money-input"><input type="number" inputMode="decimal" min={projectBidConstraint ? projectBidConstraint.minimumMinor / 100 : undefined} max={projectBidConstraint ? projectBidConstraint.maximumMinor / 100 : undefined} step="0.01" value={(ocean.project.budget_and_bidding.bid_minor ?? 0) / 100} onChange={event => updateProject({ budget_and_bidding: { ...ocean.project.budget_and_bidding, bid_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元{projectBidConstraint ? ` · 当前范围 ${formatOceanEngineMoneyRange(projectBidConstraint)}` : ' · 等待计费方式'}</small></div></label> : null}
         <label><span>投放周期</span><select value={ocean.project.schedule.mode ?? 'fixed_range'} onChange={event => updateProject({ schedule: { ...ocean.project.schedule, mode: event.target.value as 'long_term' | 'fixed_range' } })}><option value="long_term">从今天起长期投放</option><option value="fixed_range">设置开始和结束日期</option></select></label>
         <label><span>开始日期</span><input type="date" value={toShanghaiDateInput(ocean.project.schedule.start_at)} onChange={event => updateProject({ schedule: { ...ocean.project.schedule, start_at: fromShanghaiStartDate(event.target.value) } })}/></label>
@@ -948,11 +1036,11 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
         <label><span>性别</span><select value={ocean.project.targeting.gender ?? ''} onChange={event => updateProject({ targeting: { ...ocean.project.targeting, gender: event.target.value } })}><option value="">不限</option><option value="male">男</option><option value="female">女</option></select></label>
         <ToggleField label="智能定向扩展" checked={ocean.project.targeting.smart_expansion} onChange={smart_expansion => updateProject({ targeting: { ...ocean.project.targeting, smart_expansion } })}/>
       </div>
-    </div>
-    <div className="delivery-config-project-editor">
+    </fieldset>
+    <fieldset disabled={boundObjects.has(ocean.project.project_draft_id)} className="delivery-config-project-editor">
       <div className="delivery-config-subheading"><div><span>02</span><div><h4>投放载体和监测</h4><p>设置落地页、优化目标、搜索快投和第三方监测。</p></div></div></div>
       <div className="delivery-config-editor-fields delivery-config-editor-fields--wide">
-        <label><span>投放载体</span><select value={ocean.project.carrier} onChange={event => updateCarrier(event.target.value)}><option value="orange_landing_page">橙子落地页</option>{ocean.project.marketing_purpose === 'lead_generation' && leadCaptureMode === 'smart_lead' ? <option value="orange_landing_page_and_im">橙子落地页 + 抖音私信页</option> : null}{ocean.project.marketing_purpose !== 'lead_generation' || leadCaptureMode === 'custom_lead' ? <><option value="owned_landing_page">自研落地页</option><option value="im">抖音私信页（原抖音主页）</option></> : null}<option value="byte_miniapp" disabled>字节小程序（暂不支持）</option><option value="wechat_miniapp" disabled>微信小程序（暂不支持）</option></select></label>
+        {ocean.project.marketing_purpose !== 'application' ? <label><span>投放载体</span><select value={ocean.project.carrier} onChange={event => updateCarrier(event.target.value)}>{contentMarketing ? <option value="douyin_account">抖音号</option> : null}<option value="orange_landing_page">橙子落地页</option>{ocean.project.marketing_purpose === 'lead_generation' && leadCaptureMode === 'smart_lead' ? <option value="orange_landing_page_and_im">橙子落地页 + 抖音私信页</option> : null}{ocean.project.marketing_purpose !== 'lead_generation' || leadCaptureMode === 'custom_lead' ? <><option value="owned_landing_page">自研落地页</option>{!contentMarketing ? <option value="im">抖音私信页（原抖音主页）</option> : null}</> : null}{!contentMarketing ? <><option value="byte_miniapp" disabled>字节小程序（暂不支持）</option><option value="wechat_miniapp" disabled>微信小程序（暂不支持）</option></> : null}</select></label> : null}
         {optimizationContext
           ? <OptimizationTargetCapabilityField accountID={accountID ?? ''} value={ocean.project.optimization_target_reference} snapshot={optimizationSnapshot} loading={optimizationLoading} error={optimizationError} onChange={updateOptimizationTarget}/>
           : <ReferenceObjectPicker label={`优化目标 · ${optimizationTargetMissing ? '必填 · 待补' : '必填'}`} pickerTitle="选择优化目标" value={ocean.project.optimization_target_reference} objectKind="optimization_target" loadPlatformObjects={loadOptimizationTargets} requiredContext={ocean.project.carrier === 'owned_landing_page' ? 'owned_landing_page' : 'orange_landing_page'} onChange={updateOptimizationTarget}/>}
@@ -966,22 +1054,23 @@ function PlatformConfigurationEditor({ value, onChange, products, assets, platfo
         <ToggleField label="搜索定向扩展" checked={ocean.project.search_boost?.targeting_expansion ?? false} onChange={targeting_expansion => updateProject({ search_boost: { ...ocean.project.search_boost, targeting_expansion } })}/>
         {['impression', 'valid_touch', 'video_play', 'video_complete', 'valid_video_play'].map((kind, index) => { const labels = ['展示监测链接', '有效触点监测链接', '视频播放监测链接', '视频播完监测链接', '视频有效播放监测链接']; const reference = ocean.project.monitoring_references?.find(item => item.object_kind === `monitoring_link_${kind}`); return <label key={kind}><span>{labels[index]}</span><input type="url" value={reference?.id ?? ''} onChange={event => { const remaining = ocean.project.monitoring_references?.filter(item => item.object_kind !== `monitoring_link_${kind}`) ?? []; const next = updateReference(reference, event.target.value, `monitoring_link_${kind}`); updateProject({ monitoring_references: next ? [...remaining, next] : remaining }) }}/></label> })}
       </div>
-    </div>
+    </fieldset>
     <div className="delivery-config-unit-editor">
       <div className="delivery-config-subheading"><div><span>03</span><div><h4>推广单元</h4><p>每个单元使用独立身份、预算、出价、落地页和设置。</p></div></div><button className="secondary-button" type="button" onClick={addPromotion}><Plus size={15} aria-hidden="true"/>增加推广单元</button></div>
-      <div className="delivery-config-unit-list">{ocean.promotions.map((promotion, index) => { const missingRequiredFields = new Set(promotionRequirements[index]); return <article key={promotion.promotion_draft_id} className={`delivery-config-unit-card${missingRequiredFields.size ? ' has-missing-fields' : ''}`}>
+      <div className="delivery-config-unit-list">{ocean.promotions.map((promotion, index) => { const missingRequiredFields = new Set(promotionRequirements[index]); return <fieldset disabled={boundObjects.has(promotion.promotion_draft_id)} id={`object-${promotion.promotion_draft_id}`} key={promotion.promotion_draft_id} className={`delivery-config-unit-card${missingRequiredFields.size ? ' has-missing-fields' : ''}`}>
+        <legend className="delivery-config-object-status"><PlanObjectStatus projectId={projectId} object={objectPreview?.objects.find(object => object.internal_id === promotion.promotion_draft_id)} loading={!objectPreview} onEdit={onEditObject}/></legend>
         <header><div><span>推广单元 {String(index + 1).padStart(2, '0')}</span><strong>{promotion.promotion_name || '未命名单元'}</strong>{missingRequiredFields.size ? <em>{missingRequiredFields.size} 项待补</em> : null}</div><button className="delivery-config-delete-unit" type="button" aria-label={`删除推广单元 ${index + 1}`} onClick={() => removePromotion(index)}><Trash2 size={15} aria-hidden="true"/></button></header>
         <div className="delivery-config-unit-fields delivery-config-unit-fields--wide">
           <label><RequiredFieldLabel label="单元名称" missing={missingRequiredFields.has('promotion_name')}/><input name={`promotion_${index}_name`} autoComplete="off" aria-invalid={missingRequiredFields.has('promotion_name')} aria-required="true" required className={missingRequiredFields.has('promotion_name') ? 'field-missing' : undefined} value={promotion.promotion_name} onChange={event => updatePromotion(index, { promotion_name: event.target.value })}/></label>
-          <label><span>投放身份</span><select value={promotion.delivery_identity.mode} onChange={event => updatePromotion(index, { delivery_identity: { ...promotion.delivery_identity, mode: event.target.value } })}><option value="account_info">账户信息</option><option value="authorized_identity">授权身份</option></select></label>
-          {promotion.delivery_identity.mode === 'authorized_identity' ? <ReferenceObjectPicker label="授权身份" pickerTitle="选择授权身份" value={promotion.delivery_identity.authorized_identity} objectKind="authorized_identity" loadPlatformObjects={loadAuthorizedIdentities} onChange={authorized_identity => updatePromotion(index, { delivery_identity: { ...promotion.delivery_identity, authorized_identity } })}/> : null}
-          <label><span>单元日预算</span><div className="delivery-config-money-input"><input name={`promotion_${index}_daily_budget`} autoComplete="off" type="number" inputMode="decimal" min="0" value={(promotion.budget_and_bidding?.daily_budget_minor ?? 0) / 100} onChange={event => updatePromotion(index, { budget_and_bidding: { currency: 'CNY', bidding_strategy: promotion.budget_and_bidding?.bidding_strategy ?? 'stable_cost', charging_mode: promotion.budget_and_bidding?.charging_mode ?? 'CPC', ...promotion.budget_and_bidding, daily_budget_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元 / 天</small></div></label>
-          <label><span>单元出价</span><div className="delivery-config-money-input"><input name={`promotion_${index}_bid`} autoComplete="off" type="number" inputMode="decimal" min="0" step="0.01" value={(promotion.budget_and_bidding?.bid_minor ?? 0) / 100} onChange={event => updatePromotion(index, { budget_and_bidding: { currency: 'CNY', daily_budget_minor: promotion.budget_and_bidding?.daily_budget_minor ?? 0, bidding_strategy: promotion.budget_and_bidding?.bidding_strategy ?? 'stable_cost', charging_mode: promotion.budget_and_bidding?.charging_mode ?? 'CPC', ...promotion.budget_and_bidding, bid_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元</small></div></label>
+          <label><span>投放身份</span><select value={(nativeContent ? ['all_douyin_accounts', 'specified_douyin_account'] : ['account_info', 'douyin_account']).includes(promotion.delivery_identity.mode) ? promotion.delivery_identity.mode : ''} onChange={event => updatePromotion(index, { delivery_identity: { mode: event.target.value, ...(event.target.value === "douyin_account" ? { authorized_identity: promotion.delivery_identity.authorized_identity } : {}) } })}><option value="" disabled>请选择投放身份</option>{nativeContent ? <><option value="all_douyin_accounts">全部抖音号</option><option value="specified_douyin_account" disabled>指定抖音号（暂不支持）</option></> : <><option value="account_info">账户信息</option><option value="douyin_account">授权身份</option></>}</select></label>
+          {promotion.delivery_identity.mode === 'douyin_account' ? <ReferenceObjectPicker label="授权身份" pickerTitle="选择授权身份" value={promotion.delivery_identity.authorized_identity} objectKind="authorized_identity" loadPlatformObjects={loadAuthorizedIdentities} onChange={authorized_identity => updatePromotion(index, { delivery_identity: { ...promotion.delivery_identity, authorized_identity } })}/> : null}
+          {!contentMarketing || contentManualDelivery ? <><label><span>单元日预算</span><div className="delivery-config-money-input"><input name={`promotion_${index}_daily_budget`} autoComplete="off" type="number" inputMode="decimal" min="0" value={(promotion.budget_and_bidding?.daily_budget_minor ?? 0) / 100} onChange={event => updatePromotion(index, { budget_and_bidding: { currency: 'CNY', bidding_strategy: promotion.budget_and_bidding?.bidding_strategy ?? 'stable_cost', charging_mode: promotion.budget_and_bidding?.charging_mode ?? 'CPC', ...promotion.budget_and_bidding, daily_budget_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元 / 天</small></div></label>
+          <label><span>单元出价</span><div className="delivery-config-money-input"><input name={`promotion_${index}_bid`} autoComplete="off" type="number" inputMode="decimal" min="0" step="0.01" value={(promotion.budget_and_bidding?.bid_minor ?? 0) / 100} onChange={event => updatePromotion(index, { budget_and_bidding: { currency: 'CNY', daily_budget_minor: promotion.budget_and_bidding?.daily_budget_minor ?? 0, bidding_strategy: promotion.budget_and_bidding?.bidding_strategy ?? 'stable_cost', charging_mode: promotion.budget_and_bidding?.charging_mode ?? 'CPC', ...promotion.budget_and_bidding, bid_minor: Math.round(Number(event.target.value) * 100) } })}/><small>元</small></div></label></> : null}
         </div>
-        <PromotionMaterialEditor promotion={promotion} carrier={ocean.project.carrier} requiredMultiLeadExternalAction={requiredMultiLeadLandingAction(ocean.project)} projectProductName={ocean.project.marketing_product_reference?.display_name_snapshot ?? ''} assets={assets} platformObjects={platformObjects} loadVideos={loadVideos} loadImages={loadImages} loadProductImages={loadProductImages} loadPhotos={loadPhotos} missingRequiredFields={missingRequiredFields} onChange={patch => updatePromotion(index, patch)}/>
-        <PromotionSettingsEditor promotion={promotion} index={index} accountID={ocean.project.account_reference.id ?? ''} loadCategories={loadCategories} loadBrands={loadBrands} missingRequiredFields={missingRequiredFields} onChange={patch => updatePromotion(index, patch)}/>
+        {nativeContent ? <NativeContentMaterialEditor promotion={promotion} loadDouyinVideos={loadDouyinVideos} onChange={patch => updatePromotion(index, patch)}/> : <PromotionMaterialEditor promotion={promotion} carrier={ocean.project.carrier} requiredMultiLeadExternalAction={requiredMultiLeadLandingAction(ocean.project)} requiredEcommerceExternalAction={requiredEcommerceLandingAction(ocean.project)} projectProductName={ocean.project.marketing_product_reference?.display_name_snapshot ?? ''} assets={assets} platformObjects={platformObjects} loadVideos={loadVideos} loadImages={loadImages} loadProductImages={loadProductImages} loadPhotos={loadPhotos} missingRequiredFields={missingRequiredFields} onChange={patch => updatePromotion(index, patch)}/>}
+        <PromotionSettingsEditor promotion={promotion} nativeContent={nativeContent} index={index} accountID={ocean.project.account_reference.id ?? ''} loadCategories={loadCategories} loadBrands={loadBrands} missingRequiredFields={missingRequiredFields} onChange={patch => updatePromotion(index, patch)}/>
         <footer><span>{promotion.base_material_references.length} 个素材</span><small>{promotion.base_material_references.length ? '素材已关联' : '尚未关联素材'}</small></footer>
-      </article>})}</div>
+      </fieldset>})}</div>
       {!ocean.promotions.length ? <div className="delivery-config-empty-units"><b>还没有推广单元</b><p>增加一个推广单元，然后设置预算、出价和素材。</p><button className="secondary-button" type="button" onClick={addPromotion}><Plus size={15} aria-hidden="true"/>增加推广单元</button></div> : null}
     </div>
   </section>
@@ -992,6 +1081,9 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
   const projectId = currentProject.id
   const confirmedAssets = useMemo(() => (agencyWorkbench?.assetVersionPointers ?? []).filter(asset => asset.projectId === projectId && asset.humanConfirmedVersion), [agencyWorkbench, projectId])
   const [plans, setPlans] = useState<DeliveryPlan[]>([])
+  const [objectPreview, setObjectPreview] = useState<DeliveryPlanObjectPreview>()
+  const [editingObject, setEditingObject] = useState<DeliveryPlatformEntityMapping>()
+  const [objectPreviewError, setObjectPreviewError] = useState('')
   const [selectedId, setSelectedId] = useState(() => new URLSearchParams(window.location.search).get('plan_id') ?? '')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -1006,6 +1098,7 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
 
   const selectedPlan = useMemo(() => plans.find(plan => plan.id === selectedId), [plans, selectedId])
   const platformConfiguration = selectedPlan?.currentVersion.platformConfiguration
+  const boundObjects = useMemo(() => new Set(objectPreview?.objects.filter(object => object.mapping_id || object.action === 'blocked').map(object => object.internal_id) ?? []), [objectPreview])
   const legacyReadOnly = Boolean(selectedPlan?.currentVersion.readOnly || (selectedPlan && !platformConfiguration))
   const showConfiguration = activeView === '配置映射'
   const showCalibration = activeView === '字段校准与处置'
@@ -1042,6 +1135,25 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
     }
     setEditableConfiguration(next)
   }, [selectedId, selectedPlan?.currentVersionNumber])
+  useEffect(() => {
+    let active = true
+    setObjectPreview(undefined)
+    setObjectPreviewError('')
+    if (selectedId) void deliveryExecutionApi.previewPlanObjects(projectId, selectedId).then(value => { if (active) setObjectPreview(value) }).catch(error => { if (active) setObjectPreviewError(errorMessage(error, '读取对象变更失败。')) })
+    return () => { active = false }
+  }, [projectId, selectedId, selectedPlan?.currentVersionNumber])
+  useEffect(() => {
+    if (!objectPreview || objectPreview.plan_id !== selectedId || !platformConfiguration?.payload.ocean_engine) return
+    const original = platformConfiguration.payload.ocean_engine
+    setEditableConfiguration(current => {
+      if (!current?.payload.ocean_engine) return current
+      return { ...current, payload: { ...current.payload, ocean_engine: {
+        ...current.payload.ocean_engine,
+        project: boundObjects.has(original.project.project_draft_id) ? structuredClone(original.project) : current.payload.ocean_engine.project,
+        promotions: current.payload.ocean_engine.promotions.map(promotion => boundObjects.has(promotion.promotion_draft_id) ? structuredClone(original.promotions.find(value => value.promotion_draft_id === promotion.promotion_draft_id) ?? promotion) : promotion),
+      } } }
+    })
+  }, [objectPreview, boundObjects, selectedId, platformConfiguration])
   useEffect(() => { executionStartKeyRef.current = '' }, [executionDriver, selectedId, selectedPlan?.currentVersionNumber])
   useEffect(() => {
     let active = true
@@ -1073,8 +1185,21 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
     }
     let active = true
     setPlatformObjectError('')
-    void api.listProjectConnectorPlatformObjects(projectId, accountID, { objectKind: 'orange_landing_page', status: 'active', limit: 100 })
-      .then(value => { if (active) setPlatformObjects(value.items) })
+    const loadLandingPages = async () => {
+      const items: ApiConnectorPlatformObject[] = []
+      let cursor: string | undefined
+      const cursors = new Set<string>()
+      do {
+        const page = await api.listProjectConnectorPlatformObjects(projectId, accountID, { objectKind: 'orange_landing_page', status: 'active', limit: 100, cursor })
+        if (!active) return
+        items.push(...page.items)
+        cursor = page.next_cursor || undefined
+        if (cursor && cursors.has(cursor)) throw new Error('落地页分页未前进，请重新同步巨量对象。')
+        if (cursor) cursors.add(cursor)
+      } while (cursor)
+      setPlatformObjects(items)
+    }
+    void loadLandingPages()
       .catch(error => {
         if (!active) return
         setPlatformObjects([])
@@ -1083,17 +1208,22 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
     return () => { active = false }
   }, [accountsLoaded, connectorAccounts, editableConfiguration?.payload.ocean_engine?.project?.account_reference?.id, projectId])
 
-  const loadPlatformObjectPage = useCallback(async (objectKind: ApiConnectorPlatformObjectKind, query: string, cursor: string | undefined, sortBy: PlatformObjectSort, sortOrder: 'asc' | 'desc') => {
+  const loadPlatformObjectPage = useCallback(async (objectKind: ApiConnectorPlatformObjectKind, query: string, cursor: string | undefined, sortBy: PlatformObjectSort, sortOrder: 'asc' | 'desc', iesCoreUserID?: string) => {
     const accountID = editableConfiguration?.payload.ocean_engine?.project?.account_reference?.id
     if (!accountID || !connectorAccounts.some(account => account.id === accountID)) throw new Error('计划没有绑定当前 Project 的已验证巨量账户。')
-    return api.listProjectConnectorPlatformObjects(projectId, accountID, { objectKind, status: 'active', q: query || undefined, cursor, limit: 60, sortBy, sortOrder })
+    return api.listProjectConnectorPlatformObjects(projectId, accountID, { objectKind, iesCoreUserID, status: 'active', q: query || undefined, cursor, limit: 60, sortBy, sortOrder })
   }, [connectorAccounts, editableConfiguration?.payload.ocean_engine?.project?.account_reference?.id, projectId])
 
+  const loadDouyinVideos = useCallback<DouyinVideoLoader>((iesCoreUserID, query, cursor, sortBy, sortOrder) => {
+    if (iesCoreUserID && !/^\d+$/.test(iesCoreUserID)) return Promise.reject(new Error('抖音号 ID 必须是数字。'))
+    return loadPlatformObjectPage('douyin_video', query, cursor, sortBy, sortOrder, iesCoreUserID || undefined)
+  }, [loadPlatformObjectPage])
   const loadVideos = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('video_material', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
   const loadImages = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('image_material', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
   const loadProductImages = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('product_image', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
   const loadPhotos = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('aweme_photo_material', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
   const loadProducts = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('marketing_product', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
+  const loadApplications = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('application', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
   const loadOptimizationTargets = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('optimization_target', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
   const loadOptimizationCapabilities = useCallback((accountID: string, context: ApiOptimizationTargetContext) => api.readProjectOptimizationTargetCapabilities(projectId, accountID, context), [projectId])
   const loadAuthorizedIdentities = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('authorized_identity', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
@@ -1154,7 +1284,12 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
       {!selectedPlan ? <div className="panel-empty">当前 Project 暂无投放计划。<a href={planEditorURL}>前往创建</a></div> : legacyReadOnly ? <section className="delivery-config-config-card">
         <div className="delivery-config-empty-inline"><CircleAlert size={20}/><div><b>历史配置，仅供查看</b><p>这份计划不能继续修改、检查或提交。若要继续投放，请新建计划并选择目标广告平台。</p></div></div>
       </section> : <>
-        {showConfiguration && platformConfiguration && editableConfiguration ? <section className="delivery-config-config-card"><header><div><span>当前计划 · V{selectedPlan.currentVersionNumber}</span><h3>{selectedPlan.currentVersion.name}</h3><p>更新于 {formatTime(selectedPlan.updatedAt)}</p></div><div className="delivery-config-contract"><span>配置草稿</span><button className="primary-button" type="button" onClick={() => void saveConfiguration()} disabled={busy}><Save size={15} aria-hidden="true"/>{busy ? '保存中…' : '保存'}</button></div></header><PlatformConfigurationEditor value={editableConfiguration} onChange={setEditableConfiguration} products={currentProject.products ?? []} assets={confirmedAssets} platformObjects={platformObjects} connectorAccounts={connectorAccounts} platformObjectError={platformObjectError} loadVideos={loadVideos} loadImages={loadImages} loadProductImages={loadProductImages} loadPhotos={loadPhotos} loadProducts={loadProducts} loadOptimizationTargets={loadOptimizationTargets} loadOptimizationCapabilities={loadOptimizationCapabilities} loadAuthorizedIdentities={loadAuthorizedIdentities} loadCategories={loadCategories} loadBrands={loadBrands}/><details className="delivery-config-mapping-details"><summary>查看 Manifest 字段映射</summary><PlatformConfigurationDetails value={editableConfiguration}/></details></section> : null}
+        {editingObject ? <PlatformEntityEditor key={editingObject.id} projectId={projectId} mapping={editingObject} onClose={() => { setEditingObject(undefined); void refresh() }}/> : null}
+        {objectPreviewError ? <p role="alert">{objectPreviewError}</p> : null}
+        {showConfiguration && platformConfiguration && editableConfiguration ? <section className="delivery-config-config-card"><header><div><span>当前计划 · V{selectedPlan.currentVersionNumber}</span><h3>{selectedPlan.currentVersion.name}</h3><p>更新于 {formatTime(selectedPlan.updatedAt)}</p></div><div className="delivery-config-contract"><span>配置草稿</span><button className="primary-button" type="button" onClick={() => void saveConfiguration()} disabled={busy || !objectPreview}><Save size={15} aria-hidden="true"/>{busy ? '保存中…' : '保存'}</button></div></header><PlatformConfigurationEditor projectId={projectId} value={editableConfiguration} onChange={setEditableConfiguration} boundObjects={boundObjects} objectPreview={objectPreview} onEditObject={id => {
+          const object = objectPreview?.objects.find(value => value.internal_id === id)
+          if (object?.mapping_id) void deliveryExecutionApi.getPlatformEntityMapping(projectId, object.mapping_id).then(setEditingObject).catch(error => setNotice(errorMessage(error, '读取项目或单元失败。')))
+        }} products={currentProject.products ?? []} assets={confirmedAssets} platformObjects={platformObjects} connectorAccounts={connectorAccounts} platformObjectError={platformObjectError} loadDouyinVideos={loadDouyinVideos} loadVideos={loadVideos} loadImages={loadImages} loadProductImages={loadProductImages} loadPhotos={loadPhotos} loadProducts={loadProducts} loadApplications={loadApplications} loadOptimizationTargets={loadOptimizationTargets} loadOptimizationCapabilities={loadOptimizationCapabilities} loadAuthorizedIdentities={loadAuthorizedIdentities} loadCategories={loadCategories} loadBrands={loadBrands}/><details className="delivery-config-mapping-details"><summary>查看 Manifest 字段映射</summary><PlatformConfigurationDetails value={editableConfiguration}/></details></section> : null}
         {showCalibration && platformConfiguration ? <CalibrationDispositionView value={platformConfiguration}/> : null}
         {showPreflight ? <section className="delivery-config-flow-grid delivery-config-flow-grid--preflight"><article className="delivery-config-preflight-card">
           <header><div><span className="section-label">真实受控执行</span><h3>选择驱动并检查配置</h3></div><strong className="delivery-config-preflight-state">尚未创建执行</strong></header>
@@ -1172,7 +1307,7 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
           <div className="delivery-config-preflight-summary"><b>执行前置检查</b><p>服务端检查结构、预算、日期、引用和平台对象。创建执行后，驱动选择不能更改。</p><small>{executionDriver === 'playwright-rpa/edge/v3' ? 'Prepare 会连接本机 Edge，并停在最终点击边界。' : 'Web API 会使用本地模板，并在每个对象写入前要求一次性确认。'}</small></div>
           {referenceIntentIssues.length ? <div className="delivery-config-empty-inline"><CircleAlert size={20}/><div><b>平台对象未加入投放意图</b><p>{referenceIntentIssues.join('、')}。返回“配置映射”并保存。系统会生成包含这些引用的新计划版本。</p></div></div> : null}
           <div className="delivery-config-actions delivery-config-preflight-actions">
-            <button className="primary-button" type="button" onClick={() => void startRealExecution()} disabled={busy || legacyReadOnly || referenceIntentIssues.length > 0}><Check size={14}/>{busy ? '正在创建…' : `使用${executionDriver === 'playwright-rpa/edge/v3' ? ' Playwright' : ' Web API'}创建执行`}</button>
+            <button className="primary-button" type="button" onClick={() => void startRealExecution()} disabled={busy || legacyReadOnly || referenceIntentIssues.length > 0 || !objectPreview || objectPreview.objects.some(object => object.action === 'update' || object.action === 'blocked') || !objectPreview.objects.some(object => object.action === 'create')}><Check size={14}/>{busy ? '正在创建…' : `使用${executionDriver === 'playwright-rpa/edge/v3' ? ' Playwright' : ' Web API'}创建执行`}</button>
           </div>
         </article></section> : null}
       </>}

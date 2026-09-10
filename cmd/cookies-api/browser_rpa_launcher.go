@@ -76,13 +76,16 @@ func (l deliveryBrowserRpaLauncher) LaunchBrowserRpaRun(ctx context.Context, req
 	if request.ParentProjectID != "" {
 		allowedProjects = []string{request.ParentProjectID}
 	}
+	if request.ParentProjectID != "" {
+		policyID += "_" + launcherKey(request.ParentProjectID)
+	}
 	policy := browserautomation.SitePolicy{ID: policyID, Platform: browserautomation.PlatformOceanEngine, AccountID: request.AccountID, AllowedProtocols: []string{"https"}, AllowedHosts: []string{"ad.oceanengine.com"}, AllowedPageKinds: []string{"project_create", "project_edit", "promotion_create", "promotion_edit"}, AllowedPlatformProjects: allowedProjects}
 	if _, err := l.service.Repository.GetSitePolicy(ctx, request.OrganizationID, request.ProjectID, policyID); err != nil {
 		if _, createErr := l.service.RegisterSitePolicy(ctx, request.OrganizationID, request.ProjectID, policy); createErr != nil {
 			return delivery.BrowserRpaLaunchResult{}, fmt.Errorf("register Browser RPA site policy: %w", createErr)
 		}
 	}
-	run, _, err := l.service.CreateBoundRun(ctx, browserautomation.CreateBoundRunRequest{OrganizationID: request.OrganizationID, ProjectID: request.ProjectID, Platform: browserautomation.PlatformOceanEngine, AccountID: request.AccountID, ExecutionDriver: driver, ExecutionID: request.BusinessExecutionID, EnvironmentID: environmentID, ProfileID: profileID, PolicyID: policyID, IdempotencyKey: request.IdempotencyKey, CreatedBy: request.CreatedBy})
+	run, _, err := l.service.CreateBoundRun(ctx, browserautomation.CreateBoundRunRequest{OrganizationID: request.OrganizationID, ProjectID: request.ProjectID, Platform: browserautomation.PlatformOceanEngine, AccountID: request.AccountID, ExecutionDriver: driver, ExecutionID: request.BusinessExecutionID, EnvironmentID: environmentID, ProfileID: profileID, PolicyID: policyID, IdempotencyKey: launcherKey(request.BusinessExecutionID, request.IdempotencyKey), CreatedBy: request.CreatedBy})
 	if err != nil {
 		return delivery.BrowserRpaLaunchResult{}, fmt.Errorf("create Browser RPA run: %w", err)
 	}

@@ -148,7 +148,7 @@ export type PlatformConfiguration = {
         product_reference?: StableReference
         creative_component_references?: StableReference[]
         budget_and_bidding?: { currency: 'CNY'; daily_budget_minor: number; bidding_strategy: string; charging_mode: string; bid_minor?: number }
-        settings: { call_to_action?: string[]; source_label?: string; comments_enabled?: boolean; smart_generation_enabled?: boolean; client_download_enabled?: boolean; direct_link_mode?: 'automatic' | 'manual'; category_reference?: StableReference; brand_reference?: StableReference }
+        settings: { title_mode?: 'original_video' | 'manual'; search_terms?: string[]; call_to_action?: string[]; source_label?: string; comments_enabled?: boolean; smart_generation_enabled?: boolean; client_download_enabled?: boolean; direct_link_mode?: 'automatic' | 'manual'; category_reference?: StableReference; brand_reference?: StableReference }
         promotion_name: string
       }>
     }
@@ -870,6 +870,9 @@ type WireDeliveryExecutionRecord = {
 }
 
 export const deliveryPlanApi = {
+  async get(projectId: string, planId: string): Promise<DeliveryPlan> {
+    return toDeliveryPlan(await deliveryPlanRequest<WireDeliveryPlan>(projectId, `/plans/${encodeURIComponent(planId)}`))
+  },
   async list(projectId: string): Promise<DeliveryPlan[]> {
     const response = await deliveryPlanRequest<{ items: WireDeliveryPlan[]; source: DeliverySource; scenario: DeliveryScenario }>(
       projectId,
@@ -885,9 +888,24 @@ export const deliveryPlanApi = {
     return toDeliveryPlan(response)
   },
   async update(projectId: string, planId: string, expectedVersion: number, draft: DeliveryPlanDraft): Promise<DeliveryPlan> {
+    const current = toDeliveryPlan(await deliveryPlanRequest<WireDeliveryPlan>(projectId, `/plans/${encodeURIComponent(planId)}`))
+    if (current.currentVersionNumber !== expectedVersion) throw new DeliveryApiError('VERSION_CONFLICT', 409, '计划版本已更新，请刷新后重试。')
+    const payload = toPlatformRuntimeDraft(projectId, planId, expectedVersion + 1, draft)
+    const previous = current.currentVersion.platformConfiguration?.payload.ocean_engine
+    const next = payload.platform_configuration.payload.ocean_engine
+    if (previous && next) {
+      const projected = toPlatformRuntimeDraft(projectId, planId, expectedVersion, current.currentVersion).platform_configuration.payload.ocean_engine!
+      next.project = applyChangedDraftFields(previous.project, projected.project, next.project)
+      next.project.project_draft_id = previous.project.project_draft_id
+      const references = (promotions: typeof next.promotions) => promotions.flatMap(promotion => promotion.base_material_references.map(reference => `${reference.namespace}:${reference.scope}:${reference.id}:${reference.version ?? ''}:${reference.content_hash ?? ''}`)).sort()
+      if (JSON.stringify(references(projected.promotions)) !== JSON.stringify(references(next.promotions))) {
+        throw new DeliveryApiError('OBJECT_EDITOR_REQUIRED', 409, '请在平台配置中编辑单元素材；计划信息页不会重新生成已有单元。')
+      }
+      next.promotions = previous.promotions
+    }
     const response = await deliveryPlanRequest<WireDeliveryPlan>(projectId, `/plans/${encodeURIComponent(planId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ expected_version: expectedVersion, ...toPlatformRuntimeDraft(projectId, planId, expectedVersion + 1, draft) }),
+      body: JSON.stringify({ expected_version: expectedVersion, ...payload }),
     })
     return toDeliveryPlan(response)
   },
@@ -896,17 +914,7 @@ export const deliveryPlanApi = {
     if (!intent) throw new DeliveryApiError('LEGACY_CONFIGURATION_UNSUPPORTED', 409, '当前计划没有可编辑的业务意图。')
     const nextVersion = plan.currentVersionNumber + 1
     const oceanEngine = configuration.payload.ocean_engine
-    const revisedOceanEngine = oceanEngine ? {
-      ...oceanEngine,
-      project: {
-        ...oceanEngine.project,
-        project_draft_id: `project-${plan.id}-${nextVersion}`,
-      },
-      promotions: oceanEngine.promotions.map((promotion, index) => ({
-        ...promotion,
-        promotion_draft_id: `promotion-${plan.id}-${nextVersion}-${index + 1}`,
-      })),
-    } : undefined
+    const revisedOceanEngine = oceanEngine
     const nextConfiguration = {
       ...configuration,
       configuration_id: planRevisionIdentity('configuration', plan.id, nextVersion),
@@ -1008,7 +1016,43 @@ export const deliveryOptimizationApi = {
   },
 }
 
+export type FieldAvailability = { state: string; reason: string; source: string }
+export type ObjectFieldPolicy = { key: string; state: 'editable' | 'immutable' | 'conditional' | 'unverified'; reason: string; platform?: FieldAvailability; cookies?: FieldAvailability }
+export type FieldCapabilitySnapshot = { account_id: string; object_id: string; kind: 'project' | 'promotion'; observed_at: string; object_can_edit?: boolean; fields: ObjectFieldPolicy[]; observations: Array<{ key: string; platform: FieldAvailability }> }
+export type DeliveryPlanObjectAction = {
+  kind: 'project' | 'promotion'
+  internal_id: string
+  name: string
+  platform_id?: string
+  mapping_id?: string
+  action: 'create' | 'update' | 'unchanged' | 'blocked'
+  changed_fields: string[]
+  differences?: Array<{ key: string; before: unknown; after: unknown }>
+  fields: ObjectFieldPolicy[]
+  reason?: string
+}
+export type DeliveryPlanObjectPreview = { plan_id: string; version: number; objects: DeliveryPlanObjectAction[] }
+
 export const deliveryExecutionApi = {
+  async readObjectFieldCapabilities(projectId: string, mappingId: string): Promise<FieldCapabilitySnapshot> {
+    return deliveryPlanRequest(projectId, `/platform-entity-mappings/${encodeURIComponent(mappingId)}/field-capabilities`)
+  },
+  async startObjectExecution(projectId: string, changeId: string, version: number, idempotencyKey: string): Promise<{ browser_rpa_run: { run_id: string } }> {
+    return deliveryPlanRequest(projectId, `/controlled-change-sets/${encodeURIComponent(changeId)}/browser-rpa-runs`, {
+      method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ expected_version: version }),
+    })
+  },
+  async getPlatformEntityMapping(projectId: string, mappingId: string): Promise<DeliveryPlatformEntityMapping> {
+    return deliveryPlanRequest(projectId, `/platform-entity-mappings/${encodeURIComponent(mappingId)}`)
+  },
+  async previewPlanObjects(projectId: string, planId: string): Promise<DeliveryPlanObjectPreview> {
+    return deliveryPlanRequest(projectId, `/plans/${encodeURIComponent(planId)}/objects`)
+  },
+  async compileObjectBudgetChange(projectId: string, mapping: DeliveryPlatformEntityMapping, currentBudget: number, targetBudget: number): Promise<{ id: string; version: number }> {
+    return deliveryPlanRequest(projectId, `/platform-entity-mappings/${encodeURIComponent(mapping.id)}/controlled-change-sets`, {
+      method: 'POST', body: JSON.stringify({ expected_mapping_version: mapping.version, action: 'update_promotion_budget', current_daily_budget_minor: currentBudget, target_daily_budget_minor: targetBudget }),
+    })
+  },
   async listPlatformEntityMappings(projectId: string, accountReferenceId: string): Promise<DeliveryPlatformEntityMapping[]> {
     const response = await deliveryPlanRequest<{ items?: DeliveryPlatformEntityMapping[] | null }>(
       projectId,
@@ -1511,6 +1555,15 @@ function toPlatformRuntimeDraft(projectId: string, identity: string, versionNumb
     compilation_metadata: { field_evidence: [{ field: 'project', state: 'operator_reviewed' }], steps: ['manual_mapping'], evidence_refs: [] },
   }
   return { intent, platform_configuration: configuration }
+}
+
+function applyChangedDraftFields<T extends object>(baseline: T, previousDraft: T, nextDraft: T): T {
+  const result = { ...baseline }
+  const keys = new Set([...Object.keys(previousDraft), ...Object.keys(nextDraft)] as Array<keyof T>)
+  for (const key of keys) {
+    if (JSON.stringify(previousDraft[key]) !== JSON.stringify(nextDraft[key])) result[key] = nextDraft[key]
+  }
+  return result
 }
 
 function planRevisionIdentity(kind: 'intent' | 'configuration', identity: string, versionNumber: number) {

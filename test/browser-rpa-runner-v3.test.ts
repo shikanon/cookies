@@ -13,10 +13,13 @@ import {
   executePlan,
   executePreparePlan,
   parseOceanEngineMoneyConstraint,
+  PlaywrightPageOperations,
   type PageOperations,
   type ReconciliationResult,
   type SubmitObservation,
 } from "../scripts/browser-rpa-runner-v3.ts";
+import { reconcileNativePromotionDetail } from "../scripts/oceanengine-native-promotion-reconciliation.ts";
+import type { Page } from "@playwright/test";
 import { authorizeSubmitPlan } from "../scripts/rpa-authority.ts";
 import { type EcommerceParentConditionManifest } from "../scripts/oceanengine-ecommerce-field-compiler.ts";
 import {
@@ -178,6 +181,18 @@ test("parses visible OceanEngine money ranges", () => {
     minimum_minor: 400,
     maximum_minor: 10000,
   });
+  assert.deepEqual(parseOceanEngineMoneyConstraint(["出价\n元\n请输入项目出价，不少于4元，不超过100元"]), {
+    minimum_minor: 400,
+    maximum_minor: 10000,
+  });
+  assert.deepEqual(parseOceanEngineMoneyConstraint(["请输入项目出价，不少于0.01元，不超过300元"]), {
+    minimum_minor: 1,
+    maximum_minor: 30000,
+  });
+  assert.equal(parseOceanEngineMoneyConstraint(["出价\n元"]), undefined);
+  assert.equal(parseOceanEngineMoneyConstraint(["不少于100元，不超过4元"]), undefined);
+  assert.equal(parseOceanEngineMoneyConstraint(["出价过低，同类单元出价在 11.57 ~ 15.35 元之间，建议提高出价"]), undefined);
+  assert.deepEqual(parseOceanEngineMoneyConstraint(["建议出价 11.57 ~ 15.35 元\n请输入项目出价，不少于0.01元，不超过300元"]), { minimum_minor: 1, maximum_minor: 30000 });
 });
 
 test("runner v3 retains the live promotion adapters", () => {
@@ -253,7 +268,7 @@ test("runner v3 supports ecommerce and sales-lead product controls", () => {
   assert.match(runnerSource, /waitForStableProductCard/);
   assert.match(runnerSource, /createproject_productselectdrawer_close/);
   assert.match(runnerSource, /createproject_audienceextend_/);
-  assert.match(runnerSource, /projectMoney\.nth\(step\.field_key === "project\.daily_budget" \? 0 : 1\)/);
+  assert.doesNotMatch(runnerSource, /projectMoney\.nth\(step\.field_key === "project\.daily_budget" \? 0 : 1\)/);
   assert.match(runnerSource, /process\.stdout\.write\(JSON\.stringify\(result\)/);
   assert.match(runnerSource, /commandOption\("--result-file"\)/);
   assert.match(runnerSource, /writeFileSync\(resultFile, JSON\.stringify\(result\)\)/);
@@ -268,6 +283,128 @@ test("promotion reconciliation reads the full call-to-action multi-select", () =
   assert.match(runnerSource, /\.ovui-tag__close/);
   assert.match(runnerSource, /locator\("tr\.ovui-tr"\)/);
   assert.doesNotMatch(runnerSource, /const previewTitle = editPage\.getByText\("单元素材预览"/);
+});
+
+test("native manual-title submit remains blocked before page access", async () => {
+  const preparePlan = compilePromotionPlan();
+  preparePlan.account_reference = "1855554434276391";
+  preparePlan.parent_project_reference = "7677595885572784182";
+  preparePlan.steps.splice(1, 0, { id: "native-title-mode", kind: "field_action", field_key: "promotion.title_mode", operation: "choose_exact_visible_option", value: "手动添加", remote_write: false, blocked: false });
+  const now = new Date("2026-08-25T01:00:00.000Z");
+  const bundle = authorizeSubmitPlan(preparePlan, { account_reference: preparePlan.account_reference, maximum_money_cny: 300, schedule_date: "2026-08-26" }, now);
+  const page = new FakePage();
+  const result = await executePlan(bundle.plan, page, { confirmToken: bundle.confirm_token, now });
+  assert.equal(result.outcome, "blocked");
+  assert.equal(result.error_code, "native_promotion_submit_not_calibrated");
+  assert.equal(result.final_click_performed, false);
+  assert.equal(page.finalClicks, 0);
+  assert.deepEqual(result.steps, []);
+});
+
+function nativePromotionPlan() {
+  const plan = compilePromotionPlan();
+  plan.account_reference = "9000000000000000001";
+  plan.parent_project_reference = "9000000000000000100";
+  plan.steps = [plan.steps[0],
+    { id: "video", kind: "field_action", field_key: "promotion.base_materials", value: { selection_kind: "async_row", material_type: "douyin_video", object_id: "9000000000000000201" }, remote_write: false, blocked: false },
+    { id: "mode", kind: "field_action", field_key: "promotion.title_mode", value: "投放原视频标题", remote_write: false, blocked: false },
+    { id: "name", kind: "field_action", field_key: "promotion.promotion_name", value: "Native promotion fixture", remote_write: false, blocked: false },
+    plan.steps.at(-1)!,
+  ];
+  return plan;
+}
+
+const nativePromotionID = "9000000000000000101";
+const nativeDetailFixture = () => readJSON("docs/delivery/fixtures/oceanengine-native-promotion-detail-v1.json");
+
+test("native reconciliation matches saved aweme item IDs and original-title mode", () => {
+  const result = reconcileNativePromotionDetail(nativePromotionPlan(), nativePromotionID, nativeDetailFixture());
+  assert.equal(result.status, "matched");
+  assert.deepEqual(result.fields[0].observed, ["9000000000000000201"]);
+  assert.equal(result.fields[1].observed, "投放原视频标题");
+});
+
+test("native reconciliation fails closed for unavailable or unrelated details", () => {
+  const plan = nativePromotionPlan();
+  for (const payload of [undefined, null, [], {}, { code: 40102 }, { code: 0, data: {} }]) {
+    assert.equal(reconcileNativePromotionDetail(plan, nativePromotionID, payload).status, "not_checked");
+  }
+  for (const field of ["id", "advertiser_id", "project_id", "name", "is_del", "project_is_del"]) {
+    const payload = nativeDetailFixture();
+    payload.data[nativePromotionID][field] = field.endsWith("is_del") ? 1 : "different";
+    assert.equal(reconcileNativePromotionDetail(plan, nativePromotionID, payload).status, "not_checked", field);
+  }
+  for (const videos of [undefined, {}, [{ video_id: "9000000000000000201" }], [{ aweme_item_id: 9000000000000000201 }]]) {
+    const payload = nativeDetailFixture();
+    payload.data[nativePromotionID].material_group.video_material_info = videos;
+    assert.equal(reconcileNativePromotionDetail(plan, nativePromotionID, payload).status, "not_checked");
+  }
+});
+
+test("native reconciliation detects missing, extra, wrong videos and changed title mode", () => {
+  for (const ids of [[], ["999"], ["9000000000000000201", "999"], ["9000000000000000201", "9000000000000000201"]]) {
+    const payload = nativeDetailFixture();
+    payload.data[nativePromotionID].material_group.video_material_info = ids.map(aweme_item_id => ({ aweme_item_id }));
+    assert.equal(reconcileNativePromotionDetail(nativePromotionPlan(), nativePromotionID, payload).status, "drifted");
+  }
+  const payload = nativeDetailFixture();
+  payload.data[nativePromotionID].data.native_info.origin_item_title_switch = 0;
+  assert.equal(reconcileNativePromotionDetail(nativePromotionPlan(), nativePromotionID, payload).status, "drifted");
+  delete payload.data[nativePromotionID].data.native_info.origin_item_title_switch;
+  assert.equal(reconcileNativePromotionDetail(nativePromotionPlan(), nativePromotionID, payload).status, "not_checked");
+});
+
+test("native reconciliation checks persisted fields for response IDs, URL IDs and edits", async () => {
+  for (const route of ["response", "url", "edit"] as const) {
+    const plan = nativePromotionPlan();
+    if (route === "edit") { plan.plan_kind = "promotion_edit"; plan.object_reference = nativePromotionID; }
+    const requests: string[] = [];
+    const page = {
+      url: () => `https://ad.oceanengine.com/superior/ads?aadvid=${plan.account_reference}&promotion_id=${nativePromotionID}`,
+      request: { get: async (url: string) => { requests.push(url); return { ok: () => true, json: async () => nativeDetailFixture() }; } },
+    } as unknown as Page;
+    const result = await new PlaywrightPageOperations(page).reconcileSubmit(plan, { outcome: "success", ...(route === "response" ? { created_object_id: nativePromotionID } : {}) });
+    assert.equal(result.field_reconciliation?.status, "matched", route);
+    assert.equal(requests.length, 1);
+    const requestURL = new URL(requests[0]);
+    assert.equal(requestURL.pathname, "/superior/api/ad/promotion/detail");
+    assert.equal(requestURL.searchParams.get("promotion_ids"), nativePromotionID);
+    assert.equal(requestURL.searchParams.get("aadvid"), plan.account_reference);
+  }
+});
+
+test("native detail outages preserve the discovered ID without claiming success", async () => {
+  let attempts = 0;
+  const page = {
+    url: () => "https://ad.oceanengine.com/promotion/promote-manage/ad",
+    request: { get: async () => { attempts += 1; throw new Error("detail unavailable"); } },
+    waitForTimeout: async () => {},
+  } as unknown as Page;
+  const result = await new PlaywrightPageOperations(page).reconcileSubmit(nativePromotionPlan(), { outcome: "success", created_object_id: nativePromotionID });
+  assert.equal(result.created_object_id, nativePromotionID);
+  assert.equal(result.field_reconciliation?.status, "not_checked");
+  assert.equal(attempts, 3);
+});
+
+test("native submit uses one authority and requires persisted field evidence", async () => {
+  for (const checked of [true, false]) {
+    const plan = nativePromotionPlan();
+    const now = new Date("2026-09-10T01:00:00Z");
+    const bundle = authorizeSubmitPlan(plan, { account_reference: plan.account_reference, maximum_money_cny: 300, schedule_date: "2026-09-11" }, now);
+    const stateDirectory = await mkdtemp(join(tmpdir(), "cookies-native-authority-"));
+    try {
+      const page = new FakePage();
+      page.reconciliation = { status: "matched", created_object_id: nativePromotionID,
+        ...(checked ? { field_reconciliation: reconcileNativePromotionDetail(plan, nativePromotionID, nativeDetailFixture()) } : {}) };
+      const result = await executePlan(bundle.plan, page, { confirmToken: bundle.confirm_token, authorityStateDirectory: stateDirectory, now });
+      assert.equal(result.outcome, checked ? "success" : "result_unknown");
+      assert.equal(result.created_object_id, nativePromotionID);
+      assert.equal(page.finalClicks, 1);
+      assert.equal(validateResult(result), true, JSON.stringify(validateResult.errors));
+      await executePlan(bundle.plan, page, { confirmToken: bundle.confirm_token, authorityStateDirectory: stateDirectory, now });
+      assert.equal(page.finalClicks, 1);
+    } finally { await rm(stateDirectory, { recursive: true, force: true }); }
+  }
 });
 
 test("runner v3 consumes one authority and performs one final click", async () => {

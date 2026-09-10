@@ -246,6 +246,25 @@ test("new contract invalid descriptors fail for their stated reason", () => {
   }
 });
 
+test("native content title mode and search terms are schema fields bound by the canonical hash", () => {
+  const fixture = readJSON(oceanEngineFixturePath);
+  setPath(fixture, "payload.ocean_engine.project.marketing_purpose", "content_marketing");
+  setPath(fixture, "payload.ocean_engine.project.carrier", "douyin_account");
+  setPath(fixture, "payload.ocean_engine.promotions.0.delivery_identity", { mode: "all_douyin_accounts" });
+  setPath(fixture, "payload.ocean_engine.promotions.0.settings.title_mode", "original_video");
+  setPath(fixture, "payload.ocean_engine.promotions.0.settings.search_terms", ["淘宝闪购"]);
+  assert.equal(validatePlatformV2(fixture), true, JSON.stringify(validatePlatformV2.errors));
+  const hash = contractCanonicalHash("platform", fixture);
+  const manual = structuredClone(fixture);
+  setPath(manual, "payload.ocean_engine.promotions.0.settings.title_mode", "manual");
+  assert.notEqual(contractCanonicalHash("platform", manual), hash);
+  const terms = structuredClone(fixture);
+  setPath(terms, "payload.ocean_engine.promotions.0.settings.search_terms", ["限时好物"]);
+  assert.notEqual(contractCanonicalHash("platform", terms), hash);
+  setPath(terms, "payload.ocean_engine.promotions.0.settings.search_terms", ["重复", "重复"]);
+  assert.equal(validatePlatformV2(terms), false);
+});
+
 test("v2 contract hash vectors match production projections", () => {
   const vectors = readJSON(platformV2VectorsPath).vectors as Array<{
     name: string;

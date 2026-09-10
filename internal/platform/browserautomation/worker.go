@@ -38,11 +38,12 @@ type PreparedPage struct {
 // Typed adapter failures. Worker.Prepare classifies them into stable blocking
 // reasons; adapters must wrap these instead of returning free-form text.
 var (
-	ErrAccountMismatch          = errors.New("browser rpa account mismatch")
-	ErrPageDrift                = errors.New("browser rpa page drift")
-	ErrEnvironmentUnavailable   = errors.New("browser rpa environment unavailable")
-	ErrFinalConfirmationInvalid = errors.New("browser rpa final confirmation invalid")
-	ErrResultUnknown            = errors.New("browser rpa result unknown")
+	ErrAccountMismatch                    = errors.New("browser rpa account mismatch")
+	ErrPageDrift                          = errors.New("browser rpa page drift")
+	ErrNativePromotionSubmitNotCalibrated = errors.New("native promotion submit is not calibrated")
+	ErrEnvironmentUnavailable             = errors.New("browser rpa environment unavailable")
+	ErrFinalConfirmationInvalid           = errors.New("browser rpa final confirmation invalid")
+	ErrResultUnknown                      = errors.New("browser rpa result unknown")
 )
 
 type WorkerAdapter interface {
@@ -66,6 +67,10 @@ type WorkerPlanAdapter interface {
 // must not authorize or perform a controlled action.
 type WorkerResultReconciliationAdapter interface {
 	ReconcileResultUnknown(context.Context, BrowserRpaRun) (PreparedPage, error)
+}
+
+type WorkerPartialProjectReconciliationAdapter interface {
+	ReconcilePartialProject(context.Context, BrowserRpaRun, PreparedPage) (PreparedPage, error)
 }
 
 const EdgeSessionProbeSchemaV1 = "browser-rpa-edge-session-probe/v1"
@@ -330,6 +335,8 @@ func (w Worker) Submit(ctx context.Context, request WorkerSubmitRequest) (Browse
 			reason = BlockResultReconciliation
 		} else if errors.Is(adapterErr, ErrFinalConfirmationInvalid) {
 			reason = BlockFinalConfirmationInvalid
+		} else if errors.Is(adapterErr, ErrNativePromotionSubmitNotCalibrated) {
+			reason = BlockNativePromotionSubmitNotCalibrated
 		}
 		return w.transitionTerminal(ctx, run.OrganizationID, run.ProjectID, run.ID, run.Version, RunFailed, reason)
 	}
@@ -492,7 +499,11 @@ func (w Worker) ReconcileResultUnknown(ctx context.Context, org contract.Organiz
 	reconciliation := page.Readback["reconciliation"]
 	matched := reconciliation == "matched"
 	confirmedNoEffect := reconciliation == "not_found" && page.Readback["read_only_reconciliation"] == "true" && page.Readback["platform_write_performed"] == "false" && page.Readback["exact_name_matches"] == "0"
-	if run.State != RunResultUnknown || run.LeaseID != "" || !stagedCreateAction(run.Authority.Action) || page.InternalObjectID == "" || (page.InternalObjectKind != "project" && page.InternalObjectKind != "promotion") || (!matched && !confirmedNoEffect) {
+	partial := run.State == RunPartial
+	if (run.State != RunResultUnknown && !partial) || run.LeaseID != "" || !stagedCreateAction(run.Authority.Action) || page.InternalObjectID == "" || (page.InternalObjectKind != "project" && page.InternalObjectKind != "promotion") || (!matched && !confirmedNoEffect) {
+		return BrowserRpaRun{}, ErrInvalidTransition
+	}
+	if partial && (!matched || page.InternalObjectKind != "project" || page.Readback["field_reconciliation_status"] != "matched" || page.Readback["read_only_reconciliation"] != "true" || page.Readback["platform_write_performed"] != "false") {
 		return BrowserRpaRun{}, ErrInvalidTransition
 	}
 	if matched && (!numericReadbackID(page.Readback["platform_object_id"]) || page.Readback["field_reconciliation_status"] == "not_checked") {
@@ -514,6 +525,10 @@ func (w Worker) ReconcileResultUnknown(ctx context.Context, org contract.Organiz
 	}
 	clicked := false
 	for _, item := range evidence {
+		if partial && len(item.DiffKeys) == 1 && item.DiffKeys[0] == "project.optimization_target_reference" && item.ObjectFingerprint == page.InternalObjectID && item.FieldReadback["final_click_performed"] == "true" && item.FieldReadback["platform_object_id"] == page.Readback["platform_object_id"] && item.FieldReadback["field_reconciliation_status"] == "drifted" {
+			clicked = true
+			break
+		}
 		if _, ok := unknownStepIDs[item.StepID]; ok && item.FieldReadback["final_click_performed"] == "true" {
 			clicked = true
 			break
@@ -541,6 +556,15 @@ func (w Worker) ReconcileResultUnknown(ctx context.Context, org contract.Organiz
 	if confirmedNoEffect {
 		return w.Service.TransitionRun(ctx, org, project, run.ID, run.Version, RunFailed, BlockTargetEffectNotObserved)
 	}
+	if partial {
+		if w.Service.AuthorityProvider == nil {
+			return BrowserRpaRun{}, ErrInvalidContract
+		}
+		if err := w.Service.AuthorityProvider.VerifyAuthority(ctx, run.Authority, run.ID, w.Service.now()); err != nil {
+			return BrowserRpaRun{}, err
+		}
+		return w.Service.TransitionRun(ctx, org, project, run.ID, run.Version, RunEnvironmentCheck, "")
+	}
 	recorder, ok := w.Service.AuthorityProvider.(CreatedObjectRecorder)
 	if !ok {
 		return BrowserRpaRun{}, ErrInvalidContract
@@ -563,8 +587,36 @@ func (w Worker) ReconcileUnknownFromPlatform(ctx context.Context, org contract.O
 	if err != nil {
 		return BrowserRpaRun{}, err
 	}
-	if run.State != RunResultUnknown || run.LeaseID != "" {
+	if (run.State != RunResultUnknown && run.State != RunPartial) || run.LeaseID != "" {
 		return BrowserRpaRun{}, ErrInvalidTransition
+	}
+	if run.State == RunPartial {
+		adapter, ok := w.Adapter.(WorkerPartialProjectReconciliationAdapter)
+		if !ok || run.Authority.Action != "create_project_and_promotions" {
+			return BrowserRpaRun{}, ErrInvalidContract
+		}
+		evidence, err := w.Service.Repository.ListEvidence(ctx, org, project, runID)
+		if err != nil {
+			return BrowserRpaRun{}, err
+		}
+		var target *PreparedPage
+		for _, item := range evidence {
+			if len(item.DiffKeys) != 1 || item.DiffKeys[0] != "project.optimization_target_reference" || item.FieldReadback["final_click_performed"] != "true" || item.FieldReadback["field_reconciliation_status"] != "drifted" || item.FieldReadback["project.project_name"] == "" || !numericReadbackID(item.FieldReadback["platform_object_id"]) {
+				continue
+			}
+			if target != nil && target.Readback["platform_object_id"] != item.FieldReadback["platform_object_id"] {
+				return BrowserRpaRun{}, ErrInvalidContract
+			}
+			target = &PreparedPage{InternalObjectKind: "project", InternalObjectID: item.ObjectFingerprint, Readback: item.FieldReadback}
+		}
+		if target == nil {
+			return BrowserRpaRun{}, ErrInvalidContract
+		}
+		page, err := adapter.ReconcilePartialProject(ctx, run, *target)
+		if err != nil {
+			return BrowserRpaRun{}, err
+		}
+		return w.ReconcileResultUnknown(ctx, org, project, runID, page)
 	}
 	adapter, ok := w.Adapter.(WorkerResultReconciliationAdapter)
 	if !ok {

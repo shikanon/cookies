@@ -5724,6 +5724,7 @@ export type ApiConnectorSyncStatus = {
 }
 export type ApiOptimizationTargetContext = {
   campaign_type: number; landing_type: number; asset_type: number
+  delivery_product?: number
   micro_app_id: string; cdp_marketing_goal: number; dpa_ad_type: number
   micro_promotion_type: number; micro_app_instance_id: string
   multi_asset_types?: number[]; need_assets: boolean
@@ -5765,7 +5766,7 @@ export type ApiOceanEngineAccountCapabilitySnapshot = {
   interfaces?: Array<{ method?: string; path: string; description?: string; empty_events?: string[] }>
   observed_at: string
 }
-export type ApiConnectorPlatformObjectKind = 'image_material' | 'product_image' | 'video_material' | 'aweme_photo_material' | 'marketing_product' | 'orange_landing_page' | 'optimization_target' | 'conversion_event_asset' | 'industry_category' | 'brand' | 'authorized_identity'
+export type ApiConnectorPlatformObjectKind = 'image_material' | 'product_image' | 'video_material' | 'douyin_video' | 'aweme_photo_material' | 'marketing_product' | 'application' | 'orange_landing_page' | 'optimization_target' | 'conversion_event_asset' | 'industry_category' | 'brand' | 'authorized_identity'
 export type ApiConnectorPlatformObject = {
   id: string; organization_id: string; account_id: string
   object_kind: ApiConnectorPlatformObjectKind; platform_object_id: string
@@ -6686,9 +6687,10 @@ export const api = {
   syncProjectConnectorAccount: (projectId: string, accountId: string, body: { start: string; end: string; time_zone: string; currency: string; sync_mode?: 'full' | 'metrics_only' | 'inventory_only' }, idempotencyKey: string) => request<ApiConnectorSyncResult>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/syncs`, 'POST', body, { 'Idempotency-Key': idempotencyKey }),
   getProjectConnectorSync: (projectId: string, accountId: string, syncId: string) => request<ApiConnectorSyncStatus>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/syncs/${encodeURIComponent(syncId)}`),
   getProjectConnectorSnapshot: (projectId: string, accountId: string, predictionCutoff = new Date().toISOString()) => request<ApiConnectorCanonicalSnapshot>(`/connector/v1/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}/canonical-snapshots?prediction_cutoff=${encodeURIComponent(predictionCutoff)}`),
-  listProjectConnectorPlatformObjects: (projectId: string, accountId: string, filter: { objectKind?: ApiConnectorPlatformObjectKind; status?: 'active' | 'unavailable'; q?: string; cursor?: string; limit?: number; sortBy?: 'created_at' | 'ctr' | 'conversions'; sortOrder?: 'asc' | 'desc' } = {}) => {
+  listProjectConnectorPlatformObjects: (projectId: string, accountId: string, filter: { objectKind?: ApiConnectorPlatformObjectKind; iesCoreUserID?: string; status?: 'active' | 'unavailable'; q?: string; cursor?: string; limit?: number; sortBy?: 'created_at' | 'ctr' | 'conversions'; sortOrder?: 'asc' | 'desc' } = {}) => {
     const search = new URLSearchParams({ limit: String(filter.limit ?? 100) })
     if (filter.objectKind) search.set('object_kind', filter.objectKind)
+    if (filter.iesCoreUserID) search.set('ies_core_user_id', filter.iesCoreUserID)
     if (filter.status) search.set('status', filter.status)
     if (filter.q) search.set('q', filter.q)
     if (filter.cursor) search.set('cursor', filter.cursor)

@@ -33,7 +33,7 @@ test('manual direct links do not require an OceanEngine object binding', () => {
 test('enumerated Runner paths and dynamic bid limits are visible before execution', () => {
   assert.match(component, /当前项目路径不能生成 Runner 计划/)
   assert.match(component, /<option value="lead_generation">销售线索<\/option>/)
-  assert.match(component, /<option value="application">应用<\/option>/)
+  assert.match(component, /<option value="application" disabled>应用（暂不支持）<\/option>/)
   assert.match(component, /<option value="product_catalog">商品<\/option>/)
   assert.match(component, /<option value="content_marketing">内容营销<\/option>/)
   assert.match(component, /value="short_video_image_text"/)
@@ -41,7 +41,7 @@ test('enumerated Runner paths and dynamic bid limits are visible before executio
   assert.match(component, /项目出价必须在 \$\{formatOceanEngineMoneyRange\(projectBidConstraint\)\}之间/)
   assert.match(component, /由当前优化目标决定，不能单独修改/)
   assert.match(component, /销售线索项目必须设置日预算，且不能低于 300 元/)
-  assert.match(component, /销售线索页面要求设置日预算/)
+  assert.match(component, /当前投放模式要求设置日预算/)
 })
 
 test('sales-lead optimization targets come from the exact account capability branch', () => {

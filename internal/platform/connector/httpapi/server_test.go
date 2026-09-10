@@ -232,6 +232,24 @@ func TestPlatformObjectListScopesProjectAccountAndFilters(t *testing.T) {
 	}
 }
 
+func TestDouyinVideoObjectListFiltersAuthorWithoutChangingAccountScope(t *testing.T) {
+	reader := &readerStub{}
+	accounts := accountManagerStub{accounts: []connector.PlatformAccount{{ID: "oeacct_safe", ProjectID: "project_1", Status: "verified"}}}
+	server := New(reader, nil, authorizerStub{}, accounts)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request(http.MethodGet, "/api/connector/v1/projects/project_1/accounts/oeacct_safe/platform-objects?object_kind=douyin_video&ies_core_user_id=7500877386264609852", "", connector.ScopeRead))
+	if response.Code != http.StatusOK || reader.objectQuery.IESCoreUserID != "7500877386264609852" || reader.objectQuery.AccountID != "oeacct_safe" {
+		t.Fatalf("status=%d query=%#v", response.Code, reader.objectQuery)
+	}
+	for _, query := range []string{"object_kind=douyin_video&ies_core_user_id=invalid", "object_kind=video_material&ies_core_user_id=123"} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request(http.MethodGet, "/api/connector/v1/projects/project_1/accounts/oeacct_safe/platform-objects?"+query, "", connector.ScopeRead))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid filter status=%d", response.Code)
+		}
+	}
+}
+
 func TestPlatformObjectListRejectsInvalidSort(t *testing.T) {
 	accounts := accountManagerStub{accounts: []connector.PlatformAccount{{ID: "oeacct_safe", ProjectID: "project_1", Status: "verified"}}}
 	server := New(&readerStub{}, nil, authorizerStub{}, accounts)

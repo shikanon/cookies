@@ -155,6 +155,16 @@ func (s *Server) listPlatformObjects(w http.ResponseWriter, r *http.Request) {
 	kind := connector.PlatformObjectKind(strings.TrimSpace(r.URL.Query().Get("object_kind")))
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
+	iesCoreUserID := strings.TrimSpace(r.URL.Query().Get("ies_core_user_id"))
+	if iesCoreUserID == "0" {
+		iesCoreUserID = ""
+	}
+	if iesCoreUserID != "" {
+		if _, err := strconv.ParseUint(iesCoreUserID, 10, 64); err != nil || kind != connector.PlatformObjectDouyinVideo {
+			writeProblem(w, http.StatusBadRequest, "INVALID_REQUEST")
+			return
+		}
+	}
 	sortBy := strings.TrimSpace(r.URL.Query().Get("sort_by"))
 	sortOrder := strings.TrimSpace(r.URL.Query().Get("sort_order"))
 	limit := 100
@@ -187,7 +197,7 @@ func (s *Server) listPlatformObjects(w http.ResponseWriter, r *http.Request) {
 	values, err := catalog.ListPlatformObjects(r.Context(), connector.PlatformObjectQuery{
 		OrganizationID: string(actor.OrganizationID), ProjectID: r.PathValue("project_id"),
 		AccountID: r.PathValue("account_ref"), Kind: kind, Status: status,
-		Search: search, Cursor: cursor, Limit: limit, SortBy: sortBy, SortOrder: sortOrder, Offset: offset,
+		Search: search, IESCoreUserID: iesCoreUserID, Cursor: cursor, Limit: limit, SortBy: sortBy, SortOrder: sortOrder, Offset: offset,
 	})
 	if err != nil {
 		writeProblem(w, http.StatusInternalServerError, "CONNECTOR_READ_FAILED")

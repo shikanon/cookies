@@ -9,6 +9,122 @@ import (
 	"github.com/shikanon/cookies/internal/integrations/oceanengine"
 )
 
+func TestDouyinVideoCatalogUsesItemIDAndKeepsAuthorMetadata(t *testing.T) {
+	item := map[string]any{"item_id": "7681605279024303402", "video_id": "v0-not-an-item-id", "title": "原生视频", "ies_core_user_id": "7500877386264609852", "aweme_nickname": "百变小鱼", "image_url": map[string]any{"url_list": []any{"https://p3-common-sign.creativityeco.com/tos-cn-p-0015/cover?x-expires=1820372049&x-signature=secret"}}}
+	value, valid := douyinVideoCandidate(item)
+	if !valid || value.PlatformObjectID != "7681605279024303402" || value.Kind != PlatformObjectDouyinVideo || value.Metadata["ies_core_user_id"] != "7500877386264609852" || value.PreviewKind != "video_poster" || value.PreviewExpiresAt == nil {
+		t.Fatalf("candidate=%#v", value)
+	}
+	if _, exists := value.Metadata["image_url"]; exists {
+		t.Fatal("signed preview must not enter metadata")
+	}
+	delete(item, "item_id")
+	if _, valid := douyinVideoCandidate(item); valid {
+		t.Fatal("video_id must not replace the Douyin item_id")
+	}
+}
+
+type pagedDouyinReader struct {
+	testReader
+	pages *[]int
+}
+
+type qualifiedLandingReader struct {
+	testReader
+	failSecondPage bool
+}
+
+func (r qualifiedLandingReader) OrangeLandingPagesPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error) {
+	return nil, fmt.Errorf("third-party list must not populate Orange picker candidates")
+}
+
+func (r qualifiedLandingReader) FilteredOrangeLandingPagesPage(ctx context.Context, request oceanengine.AssetPageRequest, filter oceanengine.OrangeLandingPageFilter) (map[string]any, error) {
+	if filter.ExternalAction != 20 {
+		return r.testReader.FilteredOrangeLandingPagesPage(ctx, request, filter)
+	}
+	if len(filter.MultiAssetTypes) != 0 || !filter.FilterDPA || !filter.CheckConversionTarget || filter.ConvertTargetForCheck != 20 {
+		return nil, fmt.Errorf("ecommerce filters differ from the live picker")
+	}
+	if request.Page == 2 && r.failSecondPage {
+		return nil, fmt.Errorf("second page failed")
+	}
+	return map[string]any{"data": map[string]any{"data": []any{map[string]any{"site_id": fmt.Sprint(5000 + request.Page), "name": "Orange page"}}, "pagination": map[string]any{"page": float64(request.Page), "size": float64(1), "total": "2"}}}, nil
+}
+
+func TestQualifiedOrangeCatalogSeparatesEcommerceFromMultiLeadAndRequiresAllPages(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		writer := &testWriter{}
+		syncer := Synchronizer{Writer: writer, Cipher: testCipher{}, Now: time.Now}
+		_, err := syncer.syncQualifiedOrangeLandingPages(context.Background(), SyncRequest{OrganizationID: "org_1", ProjectID: "project_1", AccountRef: "account_1"}, "sync_1", qualifiedLandingReader{failSecondPage: fail}, writer, 30, 10)
+		if fail {
+			if err == nil || len(writer.platformObjects) != 0 {
+				t.Fatal("incomplete pages replaced the catalog")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages := writer.platformObjects[PlatformObjectOrangeLandingPage]
+		if len(pages) != 3 {
+			t.Fatalf("pages = %#v", pages)
+		}
+		for _, page := range pages {
+			ecommerce, _ := page.Metadata["ecommerce_external_actions"].([]string)
+			if (page.PlatformObjectID != "3001") != containsString(ecommerce, "20") {
+				t.Fatalf("wrong eligibility: %#v", page)
+			}
+		}
+	}
+}
+
+func (r pagedDouyinReader) DouyinVideosPage(_ context.Context, request oceanengine.AssetPageRequest, filter oceanengine.DouyinVideoFilter) (map[string]any, error) {
+	*r.pages = append(*r.pages, request.Page)
+	if filter.IESCoreUserID != "" {
+		return nil, fmt.Errorf("catalog must read all accounts")
+	}
+	if request.Page == 2 && request.Cursor != "next-page" {
+		return nil, fmt.Errorf("missing native video cursor")
+	}
+	return map[string]any{"data": map[string]any{"has_more": request.Page == 1, "last_index": "next-page", "items": []any{map[string]any{"item_id": fmt.Sprint(7000 + request.Page), "title": "video"}}}}, nil
+}
+
+func TestDouyinCatalogFollowsHasMoreEvenWhenPageIsShort(t *testing.T) {
+	writer := &testWriter{}
+	pages := []int{}
+	now := time.Now().UTC()
+	syncer := Synchronizer{Writer: writer, Cipher: testCipher{}, Now: func() time.Time { return now }}
+	stats, err := syncer.syncPlatformObjectCatalog(context.Background(), SyncRequest{OrganizationID: "org_1", ProjectID: "project_1", AccountRef: "account_1"}, "sync_1", pagedDouyinReader{pages: &pages}, 100, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 2 || pages[1] != 2 || stats[PlatformObjectDouyinVideo].Created != 2 {
+		t.Fatalf("pages=%v stats=%v", pages, stats)
+	}
+}
+
+func TestApplicationCatalogUsesVisibleAppIDAndStablePackageMetadata(t *testing.T) {
+	item := map[string]any{"app_cloud_id": "191511", "app_name": "测试应用", "basic_package_int_id": "1705044773844014", "basic_package_id": "package-hash", "package_name": "com.example.app", "version_name": "1.2.3", "download_url": "https://example.invalid/download", "app_logo": "https://example.invalid/signed-logo"}
+	value, valid := applicationCandidate(item)
+	if !valid || value.Kind != PlatformObjectApplication || value.PlatformObjectID != "191511" || value.DisplayName != "测试应用" || value.Metadata["package_name"] != "com.example.app" || value.Metadata["operating_system"] != "android" {
+		t.Fatalf("application=%#v valid=%v", value, valid)
+	}
+	if _, ok := value.Metadata["download_url"]; ok {
+		t.Fatal("download URL leaked into catalog metadata")
+	}
+	if _, ok := value.Metadata["app_logo"]; ok {
+		t.Fatal("signed logo leaked into catalog metadata")
+	}
+	page := applicationPage(map[string]any{"data": map[string]any{"total_count": 21.0, "basic_app_list": []any{item}}})
+	if page.TotalCount != 21 || len(page.Items) != 1 {
+		t.Fatalf("page=%#v", page)
+	}
+	delete(item, "app_cloud_id")
+	if _, valid := applicationCandidate(item); valid {
+		t.Fatal("package ID must not replace the visible application ID")
+	}
+}
+
 func TestPlatformObjectCandidatesKeepSafeMetadata(t *testing.T) {
 	tests := []struct {
 		name      string
