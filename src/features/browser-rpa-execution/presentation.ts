@@ -1,4 +1,4 @@
-import type { BrowserRpaRun, ControlledExecutionPresentation, ControlledExecutionWorkspace } from './model'
+import type { BrowserRpaEvidence, BrowserRpaRun, BrowserRpaRunStep, ControlledExecutionPresentation, ControlledExecutionWorkspace, RunnerV3Plan } from './model'
 
 const statePresentation: Record<BrowserRpaRun['state'], Omit<ControlledExecutionPresentation, 'kind' | 'allowsNormalRetry'>> = {
   queued: { tone: 'neutral', title: '已排队等待环境检查', detail: '尚未开始页面或平台动作。' },
@@ -31,6 +31,9 @@ export function presentControlledExecution(run: BrowserRpaRun): ControlledExecut
   if (run.blocking_reason === 'PAGE_DRIFT') {
     return { kind: 'page_drift', tone: 'danger', title: 'Runner 页面匹配失败', detail: 'Runner 已停止。该状态不能证明目标效果不存在，也不能证明提交结果未知。', allowsNormalRetry: false }
   }
+  if (run.blocking_reason === 'NATIVE_PROMOTION_SUBMIT_NOT_CALIBRATED') {
+    return { kind: 'native_promotion_submit_not_calibrated', tone: 'warning', title: '原生视频单元尚未完成提交校准', detail: '已在单元最终点击前停止。本次未提交单元；此前已创建的项目会保留。', allowsNormalRetry: false }
+  }
   if (run.blocking_reason === 'TARGET_EFFECT_NOT_OBSERVED') {
     return { kind: 'target_effect_not_observed', tone: 'danger', title: '已确认未产生目标效果', detail: '只读核对已确认目标对象不存在，或平台未收到写入请求。', allowsNormalRetry: false }
   }
@@ -46,6 +49,17 @@ export function presentControlledExecution(run: BrowserRpaRun): ControlledExecut
 
 export function isTerminalControlledExecutionState(state: BrowserRpaRun['state']) {
   return state === 'succeeded' || state === 'failed' || state === 'partial' || state === 'result_unknown' || state === 'cancelled'
+}
+
+export function nativePromotionSubmitNotCalibrated(workspace: Pick<ControlledExecutionWorkspace, 'steps' | 'evidence'>, plan?: Pick<RunnerV3Plan, 'steps'>): boolean {
+  const latestPrepare = workspace.steps.filter(step => step.action === 'prepare_and_readback').at(-1)
+  const currentEvidence = latestPrepare && workspace.evidence.find(item => item.step_id === latestPrepare.id)
+  if (currentEvidence) {
+    const mode = currentEvidence.field_readback?.['promotion.title_mode']
+    return mode !== undefined && mode !== '投放原视频标题'
+  }
+  const mode = plan?.steps.find(step => step.field_key === 'promotion.title_mode')
+  return mode !== undefined && mode.value !== '投放原视频标题'
 }
 
 const executionViewStates: Record<string, ReadonlySet<BrowserRpaRun['state']>> = {
@@ -75,11 +89,22 @@ export function isSafePrepareRetryCandidate(workspace: ControlledExecutionWorksp
           && item.field_readback?.platform_write_request_observed === 'false')))
   }
   if (run.blocking_reason !== 'PAGE_DRIFT' && run.blocking_reason !== 'RUNNER_FAILURE') return false
-  if (!steps.some(step => step.action === 'prepare_and_readback' && step.status === 'failed')) return false
-  if (steps.some(step => step.action.toLowerCase().includes('submit') || step.status === 'result_unknown')) return false
-  return !evidence.some(item => item.field_readback?.final_click_performed === 'true' || item.after_page_facts?.final_click_performed === 'true')
+  const latest = steps.reduce<BrowserRpaRunStep | undefined>((last, step) => !last || step.sequence > last.sequence ? step : last, undefined)
+  if (latest?.action !== 'prepare_and_readback' || latest.status !== 'failed') return false
+  return !evidence.some(item => (!item.step_id || item.step_id === latest.id)
+    && (item.field_readback?.final_click_performed === 'true' || item.after_page_facts?.final_click_performed === 'true'))
 }
 
 export function shortHash(value: string) {
   return value.length > 16 ? `${value.slice(0, 16)}…` : value
+}
+
+export function fieldDrift(evidence: BrowserRpaEvidence[]) {
+  const observed = new Map<string, boolean>()
+  for (const item of evidence) {
+    const readback = item.field_readback ?? item.after_page_facts ?? {}
+    const status = readback.field_reconciliation_status
+    if (status === 'matched' || status === 'drifted') observed.set(item.object_fingerprint, status === 'drifted')
+  }
+  return [...observed.values()].some(Boolean)
 }

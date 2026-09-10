@@ -367,14 +367,28 @@ func TestControlledAuthorityCompilesLatestReviewedStateAndApprovesExactHash(t *t
 	if err != nil || replay {
 		t.Fatalf("compile calibration replay=%t err=%v", replay, err)
 	}
-	approvedCalibration, _, err := service.ApproveControlledChangeSet(context.Background(), actor, "project_a", calibrationChange.ID, ApproveControlledChangeSetRequest{ExpectedVersion: calibrationChange.Version})
-	if err != nil {
-		t.Fatal(err)
+	launches := 0
+	service.BrowserRpaLauncher = objectTestLauncher(func(_ context.Context, request BrowserRpaLaunchRequest) (BrowserRpaLaunchResult, error) {
+		launches++
+		if request.Action != ControlledActionUpdatePromotionBudget || request.ParentProjectID != calibrationChange.Binding.ParentPlatformProjectID || request.AccountID != mapping.AccountReferenceID || request.ExecutionDriver != browserautomation.ExecutionDriverPlaywrightEdgeV3 {
+			t.Fatalf("object launch widened target: %+v", request)
+		}
+		return BrowserRpaLaunchResult{RunID: "run_calibration_1"}, nil
+	})
+	otherActor := actor
+	otherActor.Principal.ID = "other-operator"
+	if _, err := service.StartObjectExecution(context.Background(), otherActor, "project_a", calibrationChange.ID, StartBrowserRpaExecutionRequest{ExpectedVersion: calibrationChange.Version, IdempotencyKey: "other-operator"}); err != ErrApprovalContentMismatch || launches != 0 {
+		t.Fatalf("other operator started mutation: %v", err)
 	}
-	calibrationExecution, err := service.CreateControlledExecution(context.Background(), actor, "project_a", approvedCalibration.ID)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := service.StartObjectExecution(context.Background(), actor, "project_a", calibrationChange.ID, StartBrowserRpaExecutionRequest{ExpectedVersion: calibrationChange.Version + 1, IdempotencyKey: "stale-version"}); err != ErrVersionConflict || launches != 0 {
+		t.Fatalf("stale approval started mutation: %v", err)
 	}
+	started, err := service.StartObjectExecution(context.Background(), actor, "project_a", calibrationChange.ID, StartBrowserRpaExecutionRequest{ExpectedVersion: calibrationChange.Version, IdempotencyKey: "object-budget-prepare"})
+	if err != nil || launches != 1 {
+		t.Fatalf("start object execution: %v", err)
+	}
+	approvedCalibration := started.ControlledChangeSet
+	calibrationExecution := started.ControlledExecution
 	calibrationExecution, err = service.AttachBrowserRpaRun(context.Background(), actor, "project_a", calibrationExecution.ID, calibrationExecution.Version, "run_calibration_1")
 	if err != nil {
 		t.Fatal(err)
@@ -590,4 +604,10 @@ func TestPlatformEntityMappingConfirmationRejectsUntrustedEvidence(t *testing.T)
 			}
 		})
 	}
+}
+
+type objectTestLauncher func(context.Context, BrowserRpaLaunchRequest) (BrowserRpaLaunchResult, error)
+
+func (launch objectTestLauncher) LaunchBrowserRpaRun(ctx context.Context, request BrowserRpaLaunchRequest) (BrowserRpaLaunchResult, error) {
+	return launch(ctx, request)
 }

@@ -118,10 +118,22 @@ type v3Plan struct {
 }
 
 func (c V3Compiler) CompilePrepareV3(ctx context.Context, run browserautomation.BrowserRpaRun, policy browserautomation.SitePolicy) (json.RawMessage, error) {
-	plan, err := c.preparePlan(ctx, run, policy)
+	plan, err := c.preparePlan(ctx, run, policy, nil)
 	if err != nil {
 		return nil, err
 	}
+	return json.Marshal(plan)
+}
+
+func (c V3Compiler) CompileReconciliationV3(ctx context.Context, run browserautomation.BrowserRpaRun, policy browserautomation.SitePolicy, target browserautomation.PreparedPage) (json.RawMessage, error) {
+	if !numericReference(target.Readback["platform_object_id"]) || target.InternalObjectKind != "project" || target.InternalObjectID == "" {
+		return nil, fmt.Errorf("partial reconciliation requires an observed project")
+	}
+	plan, err := c.preparePlan(ctx, run, policy, &target)
+	if err != nil {
+		return nil, err
+	}
+	plan.ObjectReference = target.Readback["platform_object_id"]
 	return json.Marshal(plan)
 }
 
@@ -129,7 +141,7 @@ func (c V3Compiler) CompileSubmitV3(ctx context.Context, run browserautomation.B
 	if strings.TrimSpace(confirmToken) == "" || attempt.ID == "" || attempt.Status != browserautomation.ControlledActionAuthorized {
 		return nil, fmt.Errorf("one-time execution authority is required")
 	}
-	plan, err := c.preparePlan(ctx, run, policy)
+	plan, err := c.preparePlan(ctx, run, policy, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +183,7 @@ func (c V3Compiler) CompileSubmitV3(ctx context.Context, run browserautomation.B
 	return json.Marshal(plan)
 }
 
-func (c V3Compiler) preparePlan(ctx context.Context, run browserautomation.BrowserRpaRun, policy browserautomation.SitePolicy) (v3Plan, error) {
+func (c V3Compiler) preparePlan(ctx context.Context, run browserautomation.BrowserRpaRun, policy browserautomation.SitePolicy, reconciliationTarget *browserautomation.PreparedPage) (v3Plan, error) {
 	if c.Source == nil || run.Authority.PlanID == "" || run.Authority.PlanVersion < 1 {
 		return v3Plan{}, fmt.Errorf("run has no immutable delivery plan binding")
 	}
@@ -254,6 +266,12 @@ func (c V3Compiler) preparePlan(ctx context.Context, run browserautomation.Brows
 		bindings, bindingErr := c.stagedBindings(ctx, run, compiledConfiguration)
 		if bindingErr != nil {
 			return v3Plan{}, bindingErr
+		}
+		if reconciliationTarget != nil {
+			if reconciliationTarget.InternalObjectID != configuration.Project.ProjectDraftID || bindings.ProjectPlatformID != reconciliationTarget.Readback["platform_object_id"] {
+				return v3Plan{}, fmt.Errorf("reconciliation target does not match the confirmed project binding")
+			}
+			bindings.ProjectPlatformID = ""
 		}
 		set, compileErr := CompileConfigurationV3(compiledConfiguration, version.DeliveryIntent, run.AccountID, bindings, c.now())
 		if compileErr != nil {
@@ -386,6 +404,11 @@ func (c V3Compiler) hydrateOptimizationTargetEvidence(ctx context.Context, run b
 		return configuration, nil
 	}
 	reference := ocean.Project.OptimizationTargetReference
+	// Account capability selections carry branch-specific snapshot evidence;
+	// their targets need not exist in the general object catalog.
+	if reference.Namespace == "oceanengine_capability" {
+		return configuration, nil
+	}
 	if !strings.HasPrefix(reference.SemanticKey, "external_action:") {
 		return configuration, nil
 	}
@@ -465,7 +488,13 @@ func (c V3Compiler) stagedBindings(ctx context.Context, run browserautomation.Br
 	if err != nil {
 		return V3ObjectBindings{}, fmt.Errorf("load staged platform mappings: %w", err)
 	}
-	return V3BindingsFromMappings(configuration, run.AccountID, mappings)
+	planMappings := make([]delivery.PlatformEntityMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		if mapping.PlanID == run.Authority.PlanID {
+			planMappings = append(planMappings, mapping)
+		}
+	}
+	return V3BindingsFromMappings(configuration, run.AccountID, planMappings)
 }
 
 func nextStagedCreateForm(forms []V3PlannedForm) (V3PlannedForm, error) {
@@ -500,11 +529,14 @@ func parentContext(project delivery.OceanEngineProjectDraft) (v3ParentContext, e
 		}
 	}
 	optimization = normalizedOptimizationTarget(optimization)
+	if project.MarketingPurpose == "ecommerce" && optimization == "in_app_order" && slices.Contains([]string{"builtin:in_app_order", "in_app_order"}, externalAction) {
+		externalAction = "20"
+	}
 	if optimization == "" {
 		return v3ParentContext{}, fmt.Errorf("configuration has no calibrated optimization target key")
 	}
-	if project.MarketingPurpose == "lead_generation" && (project.OptimizationTargetReference == nil || strings.TrimSpace(project.OptimizationTargetReference.AuditAttributes["capability_snapshot_id"]) == "" || strings.TrimSpace(project.OptimizationTargetReference.AuditAttributes["capability_context_hash"]) == "") {
-		return v3ParentContext{}, fmt.Errorf("lead-generation optimization target has no account capability snapshot")
+	if slices.Contains([]string{"lead_generation", "content_marketing"}, project.MarketingPurpose) && (project.OptimizationTargetReference == nil || strings.TrimSpace(project.OptimizationTargetReference.AuditAttributes["capability_snapshot_id"]) == "" || strings.TrimSpace(project.OptimizationTargetReference.AuditAttributes["capability_context_hash"]) == "") {
+		return v3ParentContext{}, fmt.Errorf("optimization target has no account capability snapshot")
 	}
 	deep := strings.TrimSpace(project.DeepOptimizationMode)
 	if deep == "" {
@@ -544,6 +576,8 @@ func optimizationTargetFromDisplayName(value string) string {
 		"app内下单": "in_app_order",
 		"点击量":    "click",
 		"展示量":    "impression",
+		"互动":     "interaction",
+		"账号关注":   "follow",
 		"门店电话拨打": "store_call",
 		"门店停留":   "store_stay",
 	}[strings.TrimSpace(value)]
@@ -554,6 +588,14 @@ func normalizedOptimizationTarget(value string) string {
 	switch value {
 	case "button_redirect", "builtin:button_redirect":
 		return "button_jump"
+	case "external_action:-1":
+		return "impression"
+	case "external_action:-2":
+		return "click"
+	case "external_action:102":
+		return "interaction"
+	case "external_action:46":
+		return "follow"
 	default:
 		return value
 	}

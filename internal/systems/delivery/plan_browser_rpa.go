@@ -109,7 +109,31 @@ func (s Service) StartBrowserRpaExecution(ctx context.Context, actor contract.Ac
 			promotionBudgetLimitMinor += promotion.BudgetAndBidding.DailyBudgetMinor
 		}
 	}
+	preview, err := s.planObjectPreview(ctx, actor, projectID, plan)
+	if err != nil {
+		return StartBrowserRpaExecutionResult{}, err
+	}
 	action := ControlledActionCreateProjectAndPromotions
+	parentProjectID := ""
+	creates := 0
+	for _, object := range preview.Objects {
+		if object.Action == "blocked" || object.Action == "update" {
+			return StartBrowserRpaExecutionResult{}, fmt.Errorf("%w: %s: %s", ErrInvalidState, object.Name, object.Reason)
+		}
+		if object.Action == "create" {
+			creates++
+		}
+		if object.Kind == "project" && object.Action == "unchanged" {
+			action, parentProjectID = ControlledActionCreatePromotionsInExistingProject, object.PlatformID
+		}
+	}
+	if creates == 0 {
+		return StartBrowserRpaExecutionResult{}, fmt.Errorf("%w: all platform objects are unchanged", ErrInvalidState)
+	}
+	budgetLimitMinor := projectBudgetLimitMinor
+	if parentProjectID != "" {
+		budgetLimitMinor = promotionBudgetLimitMinor
+	}
 	workflowHash, err := planExecutionWorkflowHash(executionDriver, version.CanonicalHash, version.PlatformConfiguration.CanonicalHash, preflightHash, request.IdempotencyKey)
 	if err != nil {
 		return StartBrowserRpaExecutionResult{}, err
@@ -128,7 +152,7 @@ func (s Service) StartBrowserRpaExecution(ctx context.Context, actor contract.Ac
 		IntentID: version.DeliveryIntent.IntentID, IntentVersion: version.DeliveryIntent.VersionNumber, IntentCanonicalHash: version.DeliveryIntent.CanonicalHash,
 		ConfigurationID: version.PlatformConfiguration.ConfigurationID, ConfigurationVersion: version.PlatformConfiguration.VersionNumber, ConfigurationCanonicalHash: version.PlatformConfiguration.CanonicalHash,
 		WorkflowID: workflowIDForExecutionDriver(executionDriver, plan.ID), WorkflowCanonicalHash: workflowHash, ExecutionDriver: executionDriver,
-		AccountReferenceID: externalAccountID, ProjectBudgetMode: projectBudgetMode, ProjectBudgetLimitMinor: projectBudgetLimitMinor,
+		AccountReferenceID: externalAccountID, ParentPlatformProjectID: parentProjectID, ProjectBudgetMode: projectBudgetMode, ProjectBudgetLimitMinor: projectBudgetLimitMinor,
 		PromotionBudgetLimitMinor: promotionBudgetLimitMinor, ObjectFingerprint: fingerprint, SkillID: skill.ID, SkillVersion: skill.Version,
 	}
 	repo, ok := s.Repository.(controlledAuthorityRepository)
@@ -138,12 +162,47 @@ func (s Service) StartBrowserRpaExecution(ctx context.Context, actor contract.Ac
 	now := s.now()
 	var change ControlledChangeSet
 	if fingerprintRepo, supported := s.Repository.(controlledChangeSetByObjectFingerprintRepository); supported {
-		change, err = fingerprintRepo.GetControlledChangeSetByObjectFingerprint(ctx, actor.OrganizationID, projectID, fingerprint)
-		if err == nil && !samePlanExecutionTarget(change, binding, action) {
-			return StartBrowserRpaExecutionResult{}, ErrInvalidState
-		}
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return StartBrowserRpaExecutionResult{}, err
+		for {
+			change, err = fingerprintRepo.GetControlledChangeSetByObjectFingerprint(ctx, actor.OrganizationID, projectID, binding.ObjectFingerprint)
+			if errors.Is(err, ErrNotFound) {
+				break
+			}
+			if err != nil {
+				return StartBrowserRpaExecutionResult{}, err
+			}
+			replaceCancelled := change.Status == ControlledChangeSetInvalidated
+			if change.Status == ControlledChangeSetExecuting {
+				if cancelled, supported := s.Repository.(interface {
+					ControlledExecutionCancelled(context.Context, contract.OrganizationID, contract.ProjectID, string) (bool, error)
+				}); supported {
+					replaceCancelled, err = cancelled.ControlledExecutionCancelled(ctx, actor.OrganizationID, projectID, change.ID)
+					if err != nil {
+						return StartBrowserRpaExecutionResult{}, err
+					}
+				}
+			}
+			if replaceCancelled {
+				previous := change
+				previous.Status = ControlledChangeSetReady
+				if !samePlanExecutionTarget(previous, binding, action) {
+					return StartBrowserRpaExecutionResult{}, ErrInvalidState
+				}
+				// A cancelled attempt keeps its authority and evidence. A new attempt
+				// receives fresh approval only after the object preview permits creation.
+				binding.ObjectFingerprint, err = contract.CanonicalJSONHash(struct {
+					ObjectFingerprint string `json:"object_fingerprint"`
+					PreviousChangeID  string `json:"previous_change_id"`
+				}{binding.ObjectFingerprint, change.ID})
+				if err != nil {
+					return StartBrowserRpaExecutionResult{}, err
+				}
+				change = ControlledChangeSet{}
+				continue
+			}
+			if !samePlanExecutionTarget(change, binding, action) {
+				return StartBrowserRpaExecutionResult{}, ErrInvalidState
+			}
+			break
 		}
 	}
 	if change.ID == "" {
@@ -151,7 +210,7 @@ func (s Service) StartBrowserRpaExecution(ctx context.Context, actor contract.Ac
 		if idErr != nil {
 			return StartBrowserRpaExecutionResult{}, idErr
 		}
-		change = ControlledChangeSet{SchemaVersion: ControlledChangeSetSchemaV1, ID: changeID, OrganizationID: actor.OrganizationID, ProjectID: projectID, Binding: binding, Action: action, BudgetLimitMinor: projectBudgetLimitMinor, Currency: "CNY", Status: ControlledChangeSetReady, Version: 1, CreatedBy: actor.Principal.ID, CreatedAt: now, UpdatedAt: now}
+		change = ControlledChangeSet{SchemaVersion: ControlledChangeSetSchemaV1, ID: changeID, OrganizationID: actor.OrganizationID, ProjectID: projectID, Binding: binding, Action: action, BudgetLimitMinor: budgetLimitMinor, Currency: "CNY", Status: ControlledChangeSetReady, Version: 1, CreatedBy: actor.Principal.ID, CreatedAt: now, UpdatedAt: now}
 		change.CanonicalHash, err = change.ComputeCanonicalHash()
 		if err != nil || change.Validate() != nil {
 			return StartBrowserRpaExecutionResult{}, ErrInvalidRequest
@@ -188,7 +247,7 @@ func (s Service) StartBrowserRpaExecution(ctx context.Context, actor contract.Ac
 				return StartBrowserRpaExecutionResult{}, replayErr
 			} else if replayed && execution.BrowserRpaRunID != "" {
 				if reconciler, supported := s.BrowserRpaLauncher.(browserRpaRunReconciler); supported {
-					reconcileRequest := BrowserRpaLaunchRequest{OrganizationID: actor.OrganizationID, ProjectID: projectID, AccountID: externalAccountID, ExecutionDriver: executionDriverForBinding(change.Binding), BusinessExecutionID: execution.ID, Action: action, IdempotencyKey: request.IdempotencyKey, CreatedBy: actor.Principal.ID}
+					reconcileRequest := BrowserRpaLaunchRequest{OrganizationID: actor.OrganizationID, ProjectID: projectID, AccountID: externalAccountID, ExecutionDriver: executionDriverForBinding(change.Binding), BusinessExecutionID: execution.ID, Action: action, ParentProjectID: parentProjectID, IdempotencyKey: request.IdempotencyKey, CreatedBy: actor.Principal.ID}
 					if reconcileErr := reconciler.ReconcileBrowserRpaRun(ctx, reconcileRequest, execution.BrowserRpaRunID); reconcileErr != nil {
 						return StartBrowserRpaExecutionResult{}, reconcileErr
 					}
@@ -205,7 +264,7 @@ func (s Service) StartBrowserRpaExecution(ctx context.Context, actor contract.Ac
 			return StartBrowserRpaExecutionResult{}, err
 		}
 	}
-	run, err := s.BrowserRpaLauncher.LaunchBrowserRpaRun(ctx, BrowserRpaLaunchRequest{OrganizationID: actor.OrganizationID, ProjectID: projectID, AccountID: externalAccountID, ExecutionDriver: executionDriverForBinding(change.Binding), BusinessExecutionID: execution.ID, Action: action, IdempotencyKey: request.IdempotencyKey, CreatedBy: actor.Principal.ID})
+	run, err := s.BrowserRpaLauncher.LaunchBrowserRpaRun(ctx, BrowserRpaLaunchRequest{OrganizationID: actor.OrganizationID, ProjectID: projectID, AccountID: externalAccountID, ExecutionDriver: executionDriverForBinding(change.Binding), BusinessExecutionID: execution.ID, Action: action, ParentProjectID: parentProjectID, IdempotencyKey: request.IdempotencyKey, CreatedBy: actor.Principal.ID})
 	if err != nil {
 		return StartBrowserRpaExecutionResult{}, err
 	}

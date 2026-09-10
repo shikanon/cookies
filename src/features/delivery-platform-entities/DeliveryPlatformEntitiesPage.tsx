@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CircleAlert, CircleCheck, Database, RefreshCw } from 'lucide-react'
 import { deliveryExecutionApi, type DeliveryPlatformEntityMapping } from '../../api/delivery'
 import { api, type ApiConnectorAccount, type ApiConnectorObjectSnapshot } from '../../data/api'
+import { PlatformEntityEditor } from './PlatformEntityEditor'
 import './delivery-platform-entities.css'
 
 type Props = { projectId: string; activeView: string }
@@ -18,22 +19,34 @@ export function DeliveryPlatformEntitiesPage({ projectId, activeView }: Props) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
+  const [editing, setEditing] = useState<DeliveryPlatformEntityMapping>()
+  const selectedAccountRef = useRef('')
+  const accountRequestRef = useRef(0)
 
   const loadAccount = useCallback(async (accountId: string, accounts?: ApiConnectorAccount[]) => {
-    const [snapshot, mappings] = await Promise.all([
-      api.getProjectConnectorSnapshot(projectId, accountId, new Date(Date.now() + 60_000).toISOString()),
-      deliveryExecutionApi.listPlatformEntityMappings(projectId, accountId),
-    ])
-    const mappingEntries = await Promise.all(mappings
-      .filter(item => item.platform_object_id)
-      .map(async item => [await opaquePlatformRef(item.platform_object_id), item] as const))
-    setState(current => ({
-      accounts: accounts ?? current?.accounts ?? [],
-      selectedAccountId: accountId,
-      objects: latestPlatformEntities(snapshot.objects),
-      mappings,
-      mappingByPlatformRef: new Map(mappingEntries),
-    }))
+    const request = ++accountRequestRef.current
+    if (selectedAccountRef.current && selectedAccountRef.current !== accountId) setEditing(undefined)
+    selectedAccountRef.current = accountId
+    setError('')
+    try {
+      const [snapshot, mappings] = await Promise.all([
+        api.getProjectConnectorSnapshot(projectId, accountId, new Date(Date.now() + 60_000).toISOString()),
+        deliveryExecutionApi.listPlatformEntityMappings(projectId, accountId),
+      ])
+      const mappingEntries = await Promise.all(mappings
+        .filter(item => item.platform_object_id)
+        .map(async item => [await opaquePlatformRef(item.platform_object_id), item] as const))
+      if (request !== accountRequestRef.current) return
+      setState(current => ({
+        accounts: accounts ?? current?.accounts ?? [],
+        selectedAccountId: accountId,
+        objects: latestPlatformEntities(snapshot.objects),
+        mappings,
+        mappingByPlatformRef: new Map(mappingEntries),
+      }))
+    } catch (cause) {
+      if (request === accountRequestRef.current) setError(cause instanceof Error ? cause.message : '读取项目与单元失败。')
+    }
   }, [projectId])
 
   const load = useCallback(async () => {
@@ -45,16 +58,16 @@ export function DeliveryPlatformEntitiesPage({ projectId, activeView }: Props) {
         setState({ accounts: [], selectedAccountId: '', objects: [], mappings: [], mappingByPlatformRef: new Map() })
         return
       }
-      const selected = state?.selectedAccountId && accounts.some(item => item.id === state.selectedAccountId)
-        ? state.selectedAccountId
+      const selected = selectedAccountRef.current && accounts.some(item => item.id === selectedAccountRef.current)
+        ? selectedAccountRef.current
         : accounts[0].id
       await loadAccount(selected, accounts)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '读取项目与单元失败。')
     }
-  }, [loadAccount, projectId, state?.selectedAccountId])
+  }, [loadAccount, projectId])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { selectedAccountRef.current = ''; void load(); return () => { accountRequestRef.current++ } }, [load])
 
   const sync = useCallback(async () => {
     if (!state?.selectedAccountId) return
@@ -101,6 +114,7 @@ export function DeliveryPlatformEntitiesPage({ projectId, activeView }: Props) {
         <button className="primary-button" disabled={busy} onClick={() => void sync()}><Database size={14}/>同步账号项目与单元</button>
       </div>
     </header>
+    {editing ? <PlatformEntityEditor key={editing.id} projectId={projectId} mapping={editing} onClose={() => setEditing(undefined)}/> : null}
     {notice ? <div className="platform-entity-notice" role="status">{notice}</div> : null}
     <div className="platform-entity-summary">
       <article><b>{state.objects.filter(item => item.object_kind === 'project').length}</b><span>同步项目</span></article>
@@ -116,7 +130,7 @@ export function DeliveryPlatformEntitiesPage({ projectId, activeView }: Props) {
           <span><b>{entityName(item)}</b><small>{item.object_kind === 'project' ? '项目' : '单元'} · {entityStatus(item)}</small></span>
           <code title={item.object_ref}>{shortRef(item.object_ref)}</code>
           <span className={mapping?.status === 'confirmed' ? 'bound' : 'unbound'}>{mapping?.status === 'confirmed' ? <CircleCheck size={14}/> : <CircleAlert size={14}/>}<span>{mapping ? `${mapping.internal_object_kind} · ${mapping.internal_object_id}` : '未绑定 Cookies 对象'}</span></span>
-          <span>{mapping ? <><code title={mapping.platform_object_id}>{mapping.platform_object_id}</code><small>Run {shortRef(mapping.browser_rpa_run_id)}</small></> : <small>来自 Connector 账号同步</small>}</span>
+          <span>{mapping ? <><code title={mapping.platform_object_id}>{mapping.platform_object_id}</code><small>Run {shortRef(mapping.browser_rpa_run_id)}</small><button className="secondary-button" type="button" onClick={() => setEditing(mapping)}>编辑</button></> : <small>来自 Connector 账号同步</small>}</span>
         </div>
       })}
     </div> : <PageState title="当前筛选没有对象" detail="运行账号同步，或切换到其他视图。" />}
@@ -128,7 +142,7 @@ export function DeliveryPlatformEntitiesPage({ projectId, activeView }: Props) {
           <span><b>{mapping.internal_object_kind === 'project' ? '项目' : '单元'}</b><small>{mapping.internal_object_id}</small></span>
           <span><b>{mapping.platform_object_id || '尚未回写 ID'}</b><small>{mapping.platform_status || mapping.platform_object_kind}</small></span>
           <span className={mapping.status === 'confirmed' ? 'bound' : 'unbound'}>{mapping.status === 'confirmed' ? <CircleCheck size={14}/> : <CircleAlert size={14}/>}<span>{mapping.status === 'confirmed' ? '已确认' : '待确认'}</span></span>
-          <span><code title={mapping.browser_rpa_run_id}>{shortRef(mapping.browser_rpa_run_id)}</code><small>更新于 {formatTime(mapping.updated_at)}</small></span>
+          <span><code title={mapping.browser_rpa_run_id}>{shortRef(mapping.browser_rpa_run_id)}</code><small>更新于 {formatTime(mapping.updated_at)}</small><button className="secondary-button" type="button" onClick={() => setEditing(mapping)}>编辑{mapping.internal_object_kind === 'project' ? '项目' : '单元'}</button></span>
         </div>)}
       </div>
     </section> : null}

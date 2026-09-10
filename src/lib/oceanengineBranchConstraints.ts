@@ -16,7 +16,7 @@ export function oceanEngineLeadCaptureMode(project: OceanProject): 'smart_lead' 
 // OceanEngine computes lead-generation optimization targets from the complete
 // parent form branch. These values come from the observed request matrix.
 export function oceanEngineOptimizationTargetContext(project: OceanProject): ApiOptimizationTargetContext | undefined {
-  if (project.marketing_purpose !== 'lead_generation') return undefined
+  if (!['lead_generation', 'content_marketing'].includes(project.marketing_purpose)) return undefined
   const leadCaptureMode = oceanEngineLeadCaptureMode(project)
   const base = {
     campaign_type: 1,
@@ -26,6 +26,9 @@ export function oceanEngineOptimizationTargetContext(project: OceanProject): Api
     dpa_ad_type: 0,
     micro_promotion_type: 2,
     micro_app_instance_id: '',
+  }
+  if (project.marketing_purpose === 'content_marketing') {
+    return { ...base, landing_type: 7, asset_type: 2, delivery_product: 5001, need_assets: false }
   }
   if (project.carrier === 'orange_landing_page_and_im') {
     return { ...base, asset_type: 2, multi_asset_types: [2, 1002], need_assets: false }

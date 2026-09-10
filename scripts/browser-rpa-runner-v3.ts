@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 
 import type { OceanEngineFormPlan } from "./oceanengine-form-plan-compiler.ts";
 import { resolveSessionPlaywrightEndpoint } from "./browser-rpa-edge-session.ts";
+import { isNativePromotionPlan, reconcileNativePromotionDetail } from "./oceanengine-native-promotion-reconciliation.ts";
+import { reconcileProjectDetail } from "./oceanengine-project-reconciliation.ts";
 import {
   AuthorityError,
   consumeSubmitAuthority,
@@ -23,6 +25,9 @@ export type ReferenceSelectionSpec = {
   expected_total?: number;
   confirm_button?: string;
   image_src_identity?: string;
+  basic_package_id?: string;
+  package_name?: string;
+  material_type?: "douyin_video" | "video_material" | "image_material";
 };
 
 export function canonicalImageSourceIdentity(value: string) {
@@ -78,6 +83,8 @@ export type SubmitObservation = {
 export type ReconciliationResult = {
   status: "matched" | "not_found" | "not_applicable";
   created_object_id?: string;
+  platform_status?: string;
+  platform_status_text?: string;
   field_reconciliation?: FieldReconciliation;
   query_attempts?: number;
   exact_name_matches?: number;
@@ -102,8 +109,10 @@ export function isStablePlatformImageSourceIdentity(value: string) {
 export function parseOceanEngineMoneyConstraint(values: readonly string[]) {
   let minimum: number | undefined;
   let maximum: number | undefined;
-  for (const value of values) {
-    const match = value.match(/(\d+(?:\.\d+)?)\s*(?:-|~|～|至|到)\s*(\d+(?:\.\d+)?)/);
+  for (const value of values.flatMap(text => text.split(/\r?\n/))) {
+    if (/建议|推荐|同类|竞争力|预估/.test(value)) continue;
+    const match = value.match(/(\d+(?:\.\d+)?)\s*(?:-|~|～|至|到)\s*(\d+(?:\.\d+)?)/)
+      ?? value.match(/不少于\s*(\d+(?:\.\d+)?)\s*元\s*[，,]\s*不超过\s*(\d+(?:\.\d+)?)\s*元/);
     if (!match) continue;
     minimum = Math.round(Number(match[1]) * 100);
     maximum = Math.round(Number(match[2]) * 100);
@@ -194,6 +203,15 @@ export async function executePlan(
         final_click_performed: false,
         reconciliation: "not_started",
         steps: results,
+      };
+    }
+    if (plan.mode === "submit" && isNativePromotionPlan(plan)
+      && plan.steps.find(step => step.field_key === "promotion.title_mode")?.value !== "投放原视频标题") {
+      return {
+        schema_version: "oceanengine-playwright-rpa-result/v2", outcome: "blocked",
+        error_code: "native_promotion_submit_not_calibrated",
+        error_message: "Native promotion Submit is calibrated only for the original-video-title mode.",
+        final_click_performed: false, reconciliation: "not_started", steps: results,
       };
     }
 
@@ -296,6 +314,10 @@ export async function executePlan(
           };
         }
         results.push({ id: step.id, status: "submitted", readback: reconciliation });
+        const nativeFields = isNativePromotionPlan(plan)
+          ? reconciliation.field_reconciliation ?? reconcileNativePromotionDetail(plan, reconciliation.created_object_id ?? "", undefined)
+          : undefined;
+        if (nativeFields) reconciliation.field_reconciliation = nativeFields;
         const fieldStatus = reconciliation.field_reconciliation?.status;
         if (fieldStatus === "not_checked") {
           return {
@@ -457,6 +479,8 @@ export class PlaywrightPageOperations implements PageOperations {
   private platformWriteResponseStatus: number | undefined;
   private submittedExternalAction: string | undefined;
   private readonly referenceReadbacks = new Map<string, unknown>();
+  private readonly applicationReadbacks = new Map<string, { object_id: string; download_url: string; application: string }>();
+  private readonly douyinVideoReadbacks = new Map<string, { object_id: string; title: string }>();
 
   constructor(private readonly page: Page) {}
 
@@ -551,12 +575,7 @@ export class PlaywrightPageOperations implements PageOperations {
       if ((await directLinkInput.count()) === 1) return directLinkInput;
       throw new RunnerV3Error("locator_not_unique", `${step.id}: direct-link input is not unique`);
     }
-    if (step.field_key === "project.budget_mode") {
-      // Sales-lead pages render the budget options without the ecommerce
-      // "项目日预算" label. The exact option is stable across both branches.
-      return this.uniqueVisibleText(step.target, step.id);
-    }
-    const scope = this.scopeLocator(step);
+    const scope = step.operation === "fill_money" ? this.scopeLocator(step).filter({ visible: true }) : this.scopeLocator(step);
     for (let attempt = 0; attempt < 40 && (await scope.count()) < 1; attempt += 1) {
       await this.page.waitForTimeout(250);
     }
@@ -638,6 +657,11 @@ export class PlaywrightPageOperations implements PageOperations {
       throw new RunnerV3Error("page_drift", `${step.id}: AIGC switch is unavailable`);
     }
     if (step.target === "spinbutton") {
+      if (step.field_key?.endsWith(".bid")) {
+        const bid = scope.locator("xpath=ancestor::*[contains(concat(' ',normalize-space(@class),' '),' oc-row ') or contains(concat(' ',normalize-space(@class),' '),' b-row ')][1]").getByRole("spinbutton");
+        if (await bid.count() === 1 && await bid.isVisible()) return bid;
+        throw new RunnerV3Error("page_drift", `${step.id}: bid input is unavailable in its own field row`);
+      }
       if (step.field_key === "project.daily_budget" && (await this.page.getByRole("spinbutton").count()) === 0) {
         const reveal = await this.uniqueVisibleText("设置预算", step.id);
         await reveal.click();
@@ -645,29 +669,29 @@ export class PlaywrightPageOperations implements PageOperations {
           await this.page.waitForTimeout(200);
         }
       }
-      if (step.field_key === "promotion.daily_budget" || step.field_key === "promotion.bid") {
+      if (step.field_key === "promotion.daily_budget") {
         const promotionMoney = this.page.getByRole("spinbutton");
         for (let attempt = 0; attempt < 40 && (await promotionMoney.count()) < 2; attempt += 1) {
           await this.page.waitForTimeout(250);
         }
         if ((await promotionMoney.count()) === 2) {
-          return promotionMoney.nth(step.field_key === "promotion.daily_budget" ? 0 : 1);
+          return promotionMoney.nth(0);
         }
       }
-      if (step.field_key === "project.daily_budget" || step.field_key === "project.bid") {
+      if (step.field_key === "project.daily_budget") {
         const projectMoney = this.page.getByRole("spinbutton");
         for (let attempt = 0; attempt < 40 && (await projectMoney.count()) < 2; attempt += 1) {
           await this.page.waitForTimeout(250);
         }
         if ((await projectMoney.count()) === 2) {
           // The calibrated sales-lead form renders daily budget before bid.
-          return projectMoney.nth(step.field_key === "project.daily_budget" ? 0 : 1);
+          return projectMoney.nth(0);
         }
       }
       const scoped = scope.first().locator("xpath=ancestor::*[.//*[@role='spinbutton'] or .//input][1]").getByRole("spinbutton");
       if ((await scoped.count()) === 1) return scoped;
       const all = this.page.getByRole("spinbutton");
-      if ((await all.count()) === 1) return all;
+      if ((await all.count()) === 1 && !step.field_key?.endsWith(".bid")) return all;
       throw new RunnerV3Error("locator_not_unique", `${step.id}: spinbutton is not unique`);
     }
     const scopedInput = scope.first()
@@ -686,7 +710,42 @@ export class PlaywrightPageOperations implements PageOperations {
   }
 
   async applyField(step: PlanStep) {
+    if (step.field_key === "promotion.base_materials" && this.isReferenceSelectionSpec(step.value) && step.value.material_type === "douyin_video") {
+      await this.selectDouyinVideo(step, step.value);
+      return;
+    }
+    if (this.usesTypedBaseMaterials(step)) {
+      await this.selectBaseMaterials(step);
+      return;
+    }
+    if (step.field_key === "promotion.search_terms") {
+      if (!Array.isArray(step.value) || step.value.length > 3 || step.value.some(value => typeof value !== "string" || !value.trim() || [...value].length > 14)) {
+        throw new RunnerV3Error("invalid_value", `${step.id}: search terms require at most 3 values of 1 to 14 characters`);
+      }
+      const group = this.page.locator("[data-e2e='search_tag__createRecommendTag']:visible");
+      await this.stableVisibleCount(group, 1, step.id);
+      const close = group.locator(".ovui-tag__close");
+      for (let remaining = await close.count(); remaining > 0; remaining -= 1) {
+        await close.last().click();
+        await this.stableVisibleCount(close, remaining - 1, step.id);
+      }
+      for (const term of step.value) {
+        await group.locator("input").fill(term);
+        await group.locator("input").press("Enter");
+      }
+      const observed = (await group.locator(".oc-tag-text").allInnerTexts()).map(text => text.trim());
+      if (JSON.stringify(observed) !== JSON.stringify(step.value)) throw new RunnerV3Error("field_readback_mismatch", `${step.id}: search terms do not match`);
+      return;
+    }
     if (!step.operation) throw new RunnerV3Error("invalid_plan", `${step.id}: operation is required`);
+    if (step.field_key === "project.application_reference") {
+      await this.selectApplication(step);
+      return;
+    }
+    if (step.field_key === "promotion.copy_materials" && step.operation === "configure_object") {
+      await this.configurePromotionTitles(step);
+      return;
+    }
     if (step.field_key === "project.marketing_product_reference" && this.isReferenceSelectionSpec(step.value)) {
       const label = step.value.label;
       if (label) {
@@ -710,6 +769,12 @@ export class PlaywrightPageOperations implements PageOperations {
     if (step.field_key === "promotion.delivery_identity") {
       const spec = this.isReferenceSelectionSpec(step.value) ? step.value : undefined;
       const label = spec?.label ?? (typeof step.value === "string" ? step.value : undefined);
+      if (!spec && label === "全部抖音号") {
+        const allAccounts = this.page.locator(".ovui-radio-item:visible").filter({ hasText: /^全部抖音号$/ });
+        await this.stableVisibleCount(allAccounts, 1, step.id);
+        if (!(await allAccounts.getAttribute("class"))?.includes("ovui-radio-item--checked")) await allAccounts.click();
+        return;
+      }
       if (!spec && (label === "账户信息" || label === "账号信息")) {
         let accountInfo = this.page.locator("[data-e2e='createad_nativetype_0']:visible");
         for (let attempt = 0; attempt < 60 && (await accountInfo.count()) === 0; attempt += 1) {
@@ -859,7 +924,7 @@ export class PlaywrightPageOperations implements PageOperations {
       const value = String(step.value);
       const search = popper.locator("input[placeholder='请输入内容']");
       if ((await search.count()) !== 1) throw new RunnerV3Error("locator_not_unique", `${step.id}: category search is not unique`);
-      await search.fill(value);
+      await search.fill(value.split("/").at(-1)!.trim());
       const result = popper.locator(".ovui-cascader-search-option").filter({ hasText: value });
       for (let attempt = 0; attempt < 40 && (await result.count()) === 0; attempt += 1) {
         await this.page.waitForTimeout(250);
@@ -926,7 +991,7 @@ export class PlaywrightPageOperations implements PageOperations {
         const optionClass = (await inlineOption.getAttribute("class")) ?? "";
         if (
           optionClass.includes("ovui-radio-item--checked") ||
-          (step.field_key === "project.marketing_purpose" && optionClass.split(/\s+/).includes("active"))
+          optionClass.split(/\s+/).includes("active")
         ) return;
         await inlineOption.click();
         await this.confirmKnownFieldTransition(step, true);
@@ -990,6 +1055,93 @@ export class PlaywrightPageOperations implements PageOperations {
     );
   }
 
+  private usesTypedBaseMaterials(step: PlanStep) {
+    return step.field_key === "promotion.base_materials" && (Array.isArray(step.value)
+      || this.isReferenceSelectionSpec(step.value) && ["video_material", "image_material"].includes(step.value.material_type ?? ""));
+  }
+
+  private baseMaterialSpecs(step: PlanStep) {
+    const values = Array.isArray(step.value) ? step.value : [step.value];
+    const specs: ReferenceSelectionSpec[] = [];
+    const seen = new Set<string>();
+    for (const value of values) {
+      if (!this.isReferenceSelectionSpec(value) || !value.object_id || !value.label
+        || !["video_material", "image_material"].includes(value.material_type ?? "")) {
+        throw new RunnerV3Error("invalid_plan", `${step.id}: base materials require typed video or image IDs and labels`);
+      }
+      const key = `${value.material_type}:${value.object_id}`;
+      if (seen.has(key)) throw new RunnerV3Error("invalid_plan", `${step.id}: duplicate base material ${key}`);
+      seen.add(key);
+      specs.push(value);
+    }
+    if (!specs.length || specs.filter(spec => spec.material_type === "video_material").length > 30
+      || specs.filter(spec => spec.material_type === "image_material").length > 50) {
+      throw new RunnerV3Error("invalid_plan", `${step.id}: base materials require 1 or more selections, at most 30 videos and 50 images`);
+    }
+    return specs;
+  }
+
+  private async openBaseMaterialPicker(kind: "video_material" | "image_material", stepId: string) {
+    const button = this.page.getByRole("button", { name: kind === "video_material" ? "添加视频" : "添加图片", exact: true });
+    await this.stableVisibleCount(button, 1, stepId);
+    await button.click();
+    return this.pickerRoot();
+  }
+
+  private async assertBaseMaterialCounts(specs: ReferenceSelectionSpec[], stepId: string) {
+    for (const [tab, kind] of [["video", "video_material"], ["image", "image_material"], ["awemePhoto", "aweme_photo_material"]] as const) {
+      const target = this.page.locator(`[data-e2e='createad_materialSelected_${tab}']:visible`);
+      await this.stableVisibleCount(target, 1, stepId);
+      const count = (await target.innerText()).match(/[（(]\s*(\d+)\s*\//)?.[1];
+      const expected = specs.filter(spec => String(spec.material_type) === kind).length;
+      if (count === undefined || Number(count) !== expected) {
+        throw new RunnerV3Error("field_readback_mismatch", `${stepId}: ${kind} count differs from the plan`);
+      }
+    }
+  }
+
+  private async selectBaseMaterials(step: PlanStep) {
+    const specs = this.baseMaterialSpecs(step);
+    for (const kind of ["video_material", "image_material"] as const) {
+      const group = specs.filter(spec => spec.material_type === kind);
+      if (!group.length) continue;
+      const root = await this.openBaseMaterialPicker(kind, step.id);
+      for (const spec of group) {
+        const card = await this.waitForStableMaterialCard(root, spec.label!, spec.object_id!, step.id, kind);
+        const checkbox = card.locator("input[type='checkbox']");
+        if (await checkbox.count() !== 1) throw new RunnerV3Error("locator_not_unique", `${step.id}: material checkbox is not unique`);
+        await this.setCheckbox(checkbox, true, step.id);
+      }
+      const limit = kind === "video_material" ? "(?:10|30)" : "(?:10|50)";
+      await this.stableVisibleCount(root.getByText(new RegExp(`已选择\\s*${group.length}\\s*/\\s*${limit}(?:[^0-9]|$)`)), 1, step.id);
+      await this.confirmPicker(root, group[0], step.id);
+    }
+    await this.assertBaseMaterialCounts(specs, step.id);
+  }
+
+  private async readBaseMaterials(step: PlanStep) {
+    const specs = this.baseMaterialSpecs(step);
+    await this.assertBaseMaterialCounts(specs, step.id);
+    for (const kind of ["video_material", "image_material"] as const) {
+      const group = specs.filter(spec => spec.material_type === kind);
+      if (!group.length) continue;
+      const root = await this.openBaseMaterialPicker(kind, step.id);
+      for (const spec of group) {
+        const card = await this.waitForStableMaterialCard(root, spec.label!, spec.object_id!, step.id, kind);
+        const checkbox = card.locator("input[type='checkbox']");
+        if (await checkbox.count() !== 1 || !await this.checkboxState(checkbox, step.id)) {
+          throw new RunnerV3Error("object_mismatch", `${step.id}: base material ${spec.object_id} is not selected`);
+        }
+      }
+      const cancel = root.getByRole("button", { name: "取消", exact: true });
+      await this.stableVisibleCount(cancel, 1, step.id);
+      await cancel.click();
+    }
+    const readbacks = specs.map(spec => ({ selection_kind: spec.selection_kind, material_type: spec.material_type,
+      object_id: spec.object_id, label: spec.label, selected_count: 1, element_verified: "reopened_picker_checked_material" }));
+    return Array.isArray(step.value) ? readbacks : readbacks[0];
+  }
+
   private async uniqueVisibleText(value: string | RegExp, stepId: string, root: Page | Locator = this.page) {
     for (let attempt = 0; attempt < 40; attempt += 1) {
       const options = root.getByText(value, typeof value === "string" ? { exact: true } : undefined);
@@ -1030,8 +1182,10 @@ export class PlaywrightPageOperations implements PageOperations {
   }
 
   private async confirmKnownFieldTransition(step: PlanStep, waitForAppearance: boolean) {
-    if (step.field_key !== "project.marketing_purpose") return;
-    const message = "切换营销目的将会清空您已填写的所有内容，是否继续切换？";
+    if (step.field_key !== "project.marketing_purpose" && step.field_key !== "project.application_scenario") return;
+    const message = step.field_key === "project.application_scenario"
+      ? "切换营销目的将会清空部分已填写的营销产品与目标，是否继续切换？"
+      : "切换营销目的将会清空您已填写的所有内容，是否继续切换？";
     let modal = this.page.locator(".ovui-modal__wrap:visible").filter({ hasText: message });
     for (let attempt = 0; waitForAppearance && attempt < 20 && (await modal.count()) === 0; attempt += 1) {
       await this.page.waitForTimeout(100);
@@ -1051,7 +1205,10 @@ export class PlaywrightPageOperations implements PageOperations {
 
   private async projectInlineOption(step: PlanStep, value: string): Promise<Locator | undefined> {
     let option: Locator | undefined;
-    if (step.field_key === "project.marketing_purpose") {
+    const applicationGroup = this.applicationOptionGroup(step);
+    if (applicationGroup) {
+      option = applicationGroup.getByText(value, { exact: true });
+    } else if (step.field_key === "project.marketing_purpose") {
       option = this.page.locator("[data-e2e='createproject_landingtype__ocSwitchCard']:visible").filter({
         has: this.page.getByText(value, { exact: true }),
       });
@@ -1061,11 +1218,22 @@ export class PlaywrightPageOperations implements PageOperations {
         : value === "自定义" ? "createproject_assetType_multioption_0" : undefined;
       if (!dataE2E) throw new RunnerV3Error("invalid_value", `${step.id}: unsupported lead capture mode`);
       option = this.page.locator(`[data-e2e='${dataE2E}']:visible`);
+    } else if (step.field_key === "project.budget_mode") {
+      if (value !== "不限" && value !== "设置预算") throw new RunnerV3Error("invalid_value", `${step.id}: unsupported budget mode`);
+      option = this.page.locator("[data-e2e='createproject_budgettypeselect']:visible .ovui-radio-item").filter({ hasText: new RegExp(`^${value}$`) });
     } else if (step.field_key === "project.delivery_mode") {
       const expectedSuffix = value === "手动投放" ? "_1" : value === "自动投放(UBMax)" ? "_3" : undefined;
       if (!expectedSuffix) throw new RunnerV3Error("invalid_value", `${step.id}: unsupported delivery mode`);
       // Hidden controls from an old marketing branch must not match.
       option = this.page.locator(`[data-e2e='createproject_deliverymode${expectedSuffix}']:visible`);
+    } else if (step.field_key === "project.carrier" && await this.page.locator("[data-e2e='createproject_promotionType']:visible").count() === 1) {
+      option = this.page.locator("[data-e2e='createproject_promotionType']:visible .ovui-radio-item").filter({ has: this.page.getByText(value, { exact: true }) });
+    } else if (step.field_key === "project.optimization_target_reference" && await this.page.locator(".select-external-action-crowd-grass:visible").count() === 1) {
+      option = this.page.locator(".select-external-action-crowd-grass:visible .oc-switch-card-item").filter({ has: this.page.getByText(value, { exact: true }) });
+    } else if (step.field_key === "project.bidding_strategy" && await this.page.locator("[data-e2e='createproject_flowcontrolmode']:visible").count() === 1) {
+      option = this.page.locator("[data-e2e='createproject_flowcontrolmode']:visible .oc-switch-card-item").filter({ has: this.page.getByText(value, { exact: true }) });
+    } else if (step.field_key === "promotion.title_mode") {
+      option = this.page.locator("[data-e2e='createad_creativeTitlesType']:visible .ovui-radio-item").filter({ has: this.page.getByText(value, { exact: true }) });
     }
     if (!option) return undefined;
     for (let attempt = 0; attempt < 40 && (await option.count()) === 0; attempt += 1) {
@@ -1075,6 +1243,126 @@ export class PlaywrightPageOperations implements PageOperations {
       throw new RunnerV3Error("locator_not_unique", `${step.id}: inline option is not unique`);
     }
     return option;
+  }
+
+  private applicationOptionGroup(step: PlanStep) {
+    const groups: Record<string, string> = {
+      "project.application_scenario": "[data-e2e='createproject_apppromotiontype']",
+      "project.operating_system": "[data-e2e='createproject_appTypeShift'],[data-auto-id='subscribeAppTypeSelect']",
+      "project.application_download_mode": "[data-e2e='createproject_downloadtype']",
+      "project.application_launch_mode": "[data-e2e='createproject_applaunchtype']",
+    };
+    const selector = groups[step.field_key ?? ""];
+    return selector ? this.page.locator(selector).filter({ visible: true }) : undefined;
+  }
+
+  private async selectDouyinVideo(step: PlanStep, spec: ReferenceSelectionSpec) {
+    if (!spec.object_id || !/^\d+$/.test(spec.object_id)) throw new RunnerV3Error("invalid_value", `${step.id}: a numeric Douyin item ID is required`);
+    const selected = this.page.locator("[data-e2e='createad_materialSelectedVideo__createMaterialSelected']:visible");
+    for (let remaining = await selected.count(); remaining > 0; remaining -= 1) {
+      await selected.last().hover();
+      await selected.last().locator(".oc-create-material-card-close").click();
+      await this.stableVisibleCount(selected, remaining - 1, step.id);
+    }
+    await this.page.locator("[data-e2e='createad_materialSelectedAdd_video']:visible").click();
+    const drawer = this.page.locator(".ovui-drawer__wrap[data-e2e='createad_videoLib']:visible");
+    await this.stableVisibleCount(drawer, 1, step.id);
+    const itemURL = `https://www.douyin.com/video/${spec.object_id}`;
+    const search = drawer.getByPlaceholder("搜索视频链接", { exact: true });
+    await search.fill(itemURL);
+    await search.press("Enter");
+    // The drawer caches searches, so repeated Prepare may produce no network event.
+    const endpoint = new URL("/superior/api/v2/creative/material/video/list/", this.page.url());
+    const advertiserID = new URL(this.page.url()).searchParams.get("aadvid");
+    if (!advertiserID) throw new RunnerV3Error("invalid_value", `${step.id}: advertiser context is missing`);
+    endpoint.searchParams.set("aadvid", advertiserID);
+    const response = await this.page.request.post(endpoint.toString(), { data: {
+      landing_type: 7, promotion_type: 3, page: 1, page_size: 32, ies_core_user_id: "0",
+      item_filter: { ies_core_user_ids: [], aweme_related_scope: 2 }, item_url: itemURL,
+    } });
+    const payload = await response.json() as { code?: number; data?: { items?: Array<{ item_id?: string; title?: string }> } };
+    const items = payload.data?.items;
+    if (!response.ok() || payload.code !== 0 || items?.length !== 1 || items[0].item_id !== spec.object_id || !items[0].title) {
+      throw new RunnerV3Error("object_mismatch", `${step.id}: video search did not return exactly the requested Douyin item`);
+    }
+    const title = items[0].title.replace(/\s+/g, " ").trim();
+    if (spec.label && spec.label.replace(/\s+/g, " ").trim() !== title) throw new RunnerV3Error("object_mismatch", `${step.id}: Douyin video title changed`);
+    const card = drawer.locator("[data-auto-id='create-material-card']").filter({ has: this.page.getByText(title, { exact: true }) });
+    await this.stableVisibleCount(card, 1, step.id);
+    await card.getByRole("checkbox").check();
+    await drawer.getByRole("button", { name: "确定", exact: true }).click();
+    await drawer.waitFor({ state: "hidden", timeout: 10_000 });
+    await this.stableVisibleCount(selected, 1, step.id);
+    if (!(await selected.innerText()).includes(title)) throw new RunnerV3Error("field_readback_mismatch", `${step.id}: selected Douyin video is not visible`);
+    this.douyinVideoReadbacks.set(step.id, { object_id: spec.object_id, title });
+  }
+
+  private async applicationInput(step: PlanStep) {
+    const input = this.page.locator("[data-e2e='createproject_appselect_input__ocInput'] input:visible,[data-e2e='createproject_subscribeUrlInput_input__ocInput'] input:visible");
+    await this.stableVisibleCount(input, 1, step.id);
+    return input;
+  }
+
+  private async selectApplication(step: PlanStep) {
+    if (!this.isReferenceSelectionSpec(step.value) || !step.value.object_id) {
+      throw new RunnerV3Error("invalid_value", `${step.id}: application ID or download URL is required`);
+    }
+    const spec = step.value;
+    const objectID = spec.object_id!;
+    const input = await this.applicationInput(step);
+    const directURL = /^https?:\/\//.test(objectID);
+    const success = this.page.locator("[data-e2e='createproject_appselect_input'] [data-auto-id='app-select-success']:visible");
+    if (directURL) {
+      if ((await input.inputValue()).trim() !== objectID || (await success.count()) !== 1 || !(await success.innerText()).trim()) {
+        await input.fill(objectID);
+        await input.blur();
+      }
+    } else {
+      if (!/^\d+$/.test(objectID)) throw new RunnerV3Error("invalid_value", `${step.id}: application ID must be numeric`);
+      const select = this.page.locator("[data-e2e='createproject_appselect']:visible").getByRole("button", { name: "选择", exact: true });
+      await this.stableVisibleCount(select, 1, step.id);
+      await select.click();
+      const modal = this.page.locator(".ovui-modal__wrap:visible").filter({ hasText: "应用管理" });
+      await this.stableVisibleCount(modal, 1, step.id);
+      const search = modal.getByPlaceholder("输入应用名称或ID后回车搜索", { exact: true });
+      await this.stableVisibleCount(search, 1, step.id);
+      await search.fill(objectID);
+      await search.press("Enter");
+      const row = modal.locator("tr.ovui-tr").filter({ has: this.page.getByText(objectID, { exact: true }) });
+      await this.stableVisibleCount(row, 1, step.id);
+      if (spec.label && (await row.getByText(spec.label, { exact: true }).count()) !== 1) {
+        throw new RunnerV3Error("object_mismatch", `${step.id}: application name does not match the selected ID`);
+      }
+      const use = row.getByRole("button", { name: "使用该应用包", exact: true });
+      if ((await use.count()) !== 1 || !(await use.isEnabled())) {
+        throw new RunnerV3Error("reference_not_selected", `${step.id}: application package cannot be used`);
+      }
+      await use.click();
+      await modal.waitFor({ state: "hidden", timeout: 10_000 });
+    }
+    let stableApplication = "";
+    let stableSamples = 0;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const downloadURL = (await input.inputValue()).trim();
+      const application = (await success.count()) === 1 ? (await success.innerText()).trim() : "";
+      if (/^https?:\/\//.test(downloadURL) && application
+        && (!directURL || downloadURL === objectID)
+        && (!spec.label || application.includes(spec.label))
+        && (!spec.package_name || application.includes(`(${spec.package_name})`))
+        && (!spec.basic_package_id || new URL(downloadURL).pathname.endsWith(`/${spec.basic_package_id}`))) {
+        stableSamples = stableApplication === application ? stableSamples + 1 : 1;
+        stableApplication = application;
+        if (stableSamples >= 3) {
+          this.applicationReadbacks.set(step.id, { object_id: objectID, download_url: downloadURL, application });
+          return;
+        }
+      } else {
+        stableApplication = "";
+        stableSamples = 0;
+      }
+      await this.page.waitForTimeout(250);
+    }
+    throw new RunnerV3Error("reference_not_selected", `${step.id}: application download URL and resolved application were not confirmed`);
   }
 
   private waitForProductListRequest(query: string | undefined, timeout: number) {
@@ -1131,8 +1419,8 @@ export class PlaywrightPageOperations implements PageOperations {
     throw new RunnerV3Error("async_load_timeout", `${stepId}: searched product result did not become stable`);
   }
 
-  private async waitForStableMaterialCard(root: Locator, label: string, query: string, stepId: string) {
-    const search = root.locator("input[placeholder='可搜索视频名称或ID']:visible");
+  private async waitForStableMaterialCard(root: Locator, label: string, query: string, stepId: string, kind = "video_material") {
+    const search = root.getByPlaceholder(kind === "image_material" ? "请输入图片名称或ID" : "可搜索视频名称或ID", { exact: true }).filter({ visible: true });
     if ((await search.count()) !== 1) {
       throw new RunnerV3Error("locator_not_unique", `${stepId}: material search input is not unique`);
     }
@@ -1272,6 +1560,13 @@ export class PlaywrightPageOperations implements PageOperations {
 
   private async selectReference(step: PlanStep, spec: ReferenceSelectionSpec) {
     const root = await this.pickerRoot();
+    if (step.field_key === "promotion.landing_page_reference" && spec.object_id) {
+      const search = root.getByPlaceholder("请输入名称关键词或ID", { exact: true }).filter({ visible: true });
+      if (await search.count() !== 1) throw new RunnerV3Error("locator_not_unique", `${step.id}: landing page search input is not unique`);
+      await this.waitForStableMaterialInventory(root, step.id);
+      await search.fill(spec.object_id);
+      await search.press("Enter");
+    }
     const projectProduct = step.field_key === "project.marketing_product_reference";
     if (projectProduct && spec.object_id) {
       const search = this.page.getByPlaceholder("请输入商品名称或ID", { exact: true });
@@ -1428,6 +1723,72 @@ export class PlaywrightPageOperations implements PageOperations {
     };
   }
 
+  private async promotionTitleGroup(stepId: string) {
+    const root = this.page.locator("[data-e2e='createad_creativeTitles']:visible");
+    for (let attempt = 0; attempt < 40 && (await root.count()) === 0; attempt += 1) {
+      await this.page.waitForTimeout(250);
+    }
+    if ((await root.count()) !== 1) {
+      throw new RunnerV3Error("page_drift", `${stepId}: title group is not unique`);
+    }
+    return root;
+  }
+
+  private promotionTitleInputs(root: Locator) {
+    return root.locator("[data-e2e='createad_creativeTitles__creativeTitleGroup_title_input_component'] input:visible");
+  }
+
+  private async readPromotionTitles(root: Locator) {
+    return Promise.all((await this.promotionTitleInputs(root).all()).map(input => input.inputValue()));
+  }
+
+  private async waitForPromotionTitleCount(root: Locator, expected: number, stepId: string) {
+    const inputs = this.promotionTitleInputs(root);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if ((await inputs.count()) === expected) return;
+      await this.page.waitForTimeout(100);
+    }
+    throw new RunnerV3Error("page_drift", `${stepId}: expected ${expected} title inputs, found ${await inputs.count()}`);
+  }
+
+  private async configurePromotionTitles(step: PlanStep) {
+    if (!Array.isArray(step.value) || step.value.length < 1 || step.value.length > 10
+      || step.value.some(value => typeof value !== "string" || !value.trim() || /[\r\n]/.test(value))) {
+      throw new RunnerV3Error("invalid_value", `${step.id}: titles need 1 to 10 nonempty single-line strings`);
+    }
+    const values = step.value as string[];
+    const root = await this.promotionTitleGroup(step.id);
+    const inputs = this.promotionTitleInputs(root);
+    let count = await inputs.count();
+    if (count < 1 || count > 10) throw new RunnerV3Error("page_drift", `${step.id}: unexpected title input count ${count}`);
+    while (count > values.length) {
+      const remove = root.locator(".creative-title-item").last().locator(".creative-title-item__delete");
+      if ((await remove.count()) !== 1 || !(await remove.isVisible())) {
+        throw new RunnerV3Error("page_drift", `${step.id}: title remove control is unavailable`);
+      }
+      await remove.click();
+      count -= 1;
+      await this.waitForPromotionTitleCount(root, count, step.id);
+    }
+    while (count < values.length) {
+      const add = root.getByRole("button", { name: "点击添加", exact: true });
+      if ((await add.count()) !== 1 || !(await add.isEnabled())) {
+        throw new RunnerV3Error("page_drift", `${step.id}: title add control is unavailable`);
+      }
+      await add.click();
+      count += 1;
+      await this.waitForPromotionTitleCount(root, count, step.id);
+    }
+    for (let index = 0; index < values.length; index += 1) {
+      await inputs.nth(index).fill(values[index]);
+      await inputs.nth(index).blur();
+    }
+    const observed = await this.readPromotionTitles(root);
+    if (observed.length !== values.length || observed.some((value, index) => value !== values[index])) {
+      throw new RunnerV3Error("page_drift", `${step.id}: title list readback differs from the plan`);
+    }
+  }
+
   private async configureObject(step: PlanStep, target: Locator) {
     if (step.field_key === "project.schedule") {
       const value = step.value as { start?: unknown; end?: unknown };
@@ -1465,23 +1826,80 @@ export class PlaywrightPageOperations implements PageOperations {
       }
       return;
     }
-    if (step.field_key === "promotion.copy_materials" || step.field_key === "promotion.product_selling_points") {
+    if (step.field_key === "promotion.product_selling_points") {
       const values = Array.isArray(step.value) ? step.value.map(String) : [String(step.value)];
-      if (step.field_key === "promotion.copy_materials") {
-        await target.fill(values.join("\n"));
-      } else {
-        for (const value of values) {
-          await target.fill(value);
-          await target.press("Enter");
-        }
-        this.referenceReadbacks.set(step.id, values);
+      for (const value of values) {
+        await target.fill(value);
+        await target.press("Enter");
       }
+      this.referenceReadbacks.set(step.id, values);
       return;
     }
     throw new RunnerV3Error("operator_required", `${step.id}: complex object configuration needs a field-specific adapter`);
   }
 
   async readField(step: PlanStep) {
+    if (this.usesTypedBaseMaterials(step)) return this.readBaseMaterials(step);
+    if (step.field_key === "project.budget_mode") {
+      const selected = this.page.locator("[data-e2e='createproject_budgettypeselect']:visible .ovui-radio-item--checked");
+      await this.stableVisibleCount(selected, 1, step.id);
+      const value = (await selected.innerText()).trim();
+      if (value !== step.value) throw new RunnerV3Error("field_readback_mismatch", `${step.id}: budget mode differs from the plan`);
+      return value;
+    }
+    if (step.field_key === "project.bidding_strategy") {
+      const title = this.page.locator("[data-e2e='createproject_flowcontrolmode']:visible .oc-switch-card-item.active .oc-title-text");
+      await this.stableVisibleCount(title, 1, step.id);
+      return (await title.innerText()).trim();
+    }
+    if (step.field_key === "promotion.title_mode") {
+      const selected = this.page.locator("[data-e2e='createad_creativeTitlesType']:visible .ovui-radio-item--checked");
+      await this.stableVisibleCount(selected, 1, step.id);
+      return (await selected.innerText()).trim();
+    }
+    if (step.field_key === "promotion.delivery_identity" && step.value === "全部抖音号") {
+      const selected = this.page.locator(".ovui-radio-item--checked:visible").filter({ hasText: /^全部抖音号$/ });
+      await this.stableVisibleCount(selected, 1, step.id);
+      return "全部抖音号";
+    }
+    if (step.field_key === "promotion.search_terms") return (await this.page.locator("[data-e2e='search_tag__createRecommendTag']:visible .oc-tag-text").allInnerTexts()).map(text => text.trim());
+    if (step.field_key === "promotion.base_materials" && this.isReferenceSelectionSpec(step.value) && step.value.material_type === "douyin_video") {
+      const expected = this.douyinVideoReadbacks.get(step.id);
+      const selected = this.page.locator("[data-e2e='createad_materialSelectedVideo__createMaterialSelected']:visible");
+      await this.stableVisibleCount(selected, 1, step.id);
+      if (!expected || !(await selected.innerText()).includes(expected.title)) throw new RunnerV3Error("object_mismatch", `${step.id}: selected Douyin video changed`);
+      return { selection_kind: "async_row", selected_count: 1, ...expected };
+    }
+    const contentChoices = step.field_key === "project.optimization_target_reference"
+      ? this.page.locator(".select-external-action-crowd-grass:visible")
+      : step.field_key === "project.carrier"
+        ? this.page.locator("[data-e2e='createproject_promotionType']:visible")
+        : step.field_key === "project.delivery_mode"
+          ? this.page.locator("[data-e2e='createproject_deliverymode']:visible")
+          : undefined;
+    if (contentChoices && await contentChoices.count() === 1) {
+      const selected = contentChoices.locator(".oc-switch-card-item.active:visible,.ovui-radio-item--checked:visible");
+      await this.stableVisibleCount(selected, 1, step.id);
+      return (await selected.innerText()).trim();
+    }
+    if (step.field_key === "project.application_reference") {
+      const selected = this.applicationReadbacks.get(step.id);
+      const input = await this.applicationInput(step);
+      const success = this.page.locator("[data-e2e='createproject_appselect_input'] [data-auto-id='app-select-success']:visible");
+      if (!selected || (await input.inputValue()).trim() !== selected.download_url || (await success.count()) !== 1 || (await success.innerText()).trim() !== selected.application) {
+        throw new RunnerV3Error("object_mismatch", `${step.id}: selected application changed after preparation`);
+      }
+      return { selection_kind: "async_row", selected_count: 1, ...selected };
+    }
+    const applicationGroup = this.applicationOptionGroup(step);
+    if (applicationGroup) {
+      const selected = applicationGroup.locator(".ovui-radio-item--checked:visible");
+      await this.stableVisibleCount(selected, 1, step.id);
+      return (await selected.innerText()).trim();
+    }
+    if (step.field_key === "promotion.copy_materials") {
+      return this.readPromotionTitles(await this.promotionTitleGroup(step.id));
+    }
     if (this.referenceReadbacks.has(step.id)) {
       return this.referenceReadbacks.get(step.id);
     }
@@ -1546,8 +1964,7 @@ export class PlaywrightPageOperations implements PageOperations {
         maximum_minor: Math.round(attributeMaximum * 100),
       };
     }
-    await target.blur();
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+    const readVisibleRange = async () => {
       const textValues = [
         await target.getAttribute("placeholder") ?? "",
         await target.getAttribute("aria-label") ?? "",
@@ -1556,11 +1973,30 @@ export class PlaywrightPageOperations implements PageOperations {
         const ancestor = target.locator(`xpath=ancestor::*[${depth}]`);
         if ((await ancestor.count()) === 1 && await ancestor.isVisible()) textValues.push(await ancestor.innerText());
       }
-      const parsed = parseOceanEngineMoneyConstraint(textValues);
-      if (parsed) return parsed;
-      await this.page.waitForTimeout(100);
+      const bidRow = target.locator("xpath=ancestor::*[contains(concat(' ',normalize-space(@class),' '),' b-row ')][1]");
+      if ((await bidRow.count()) === 1 && await bidRow.isVisible()) textValues.push(await bidRow.innerText());
+      return parseOceanEngineMoneyConstraint(textValues);
+    };
+    await target.blur();
+    const visibleRange = await readVisibleRange();
+    if (visibleRange) return visibleRange;
+
+    // Some bid controls reveal their bounds only in local validation errors.
+    // Restore the configured value even if reading the error fails.
+    const originalValue = await target.inputValue();
+    try {
+      await target.fill("0");
+      await target.blur();
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const parsed = await readVisibleRange();
+        if (parsed) return parsed;
+        await this.page.waitForTimeout(100);
+      }
+      return undefined;
+    } finally {
+      await target.fill(originalValue);
+      await target.blur();
     }
-    return undefined;
   }
 
   async assertFinalReady(step: PlanStep) {
@@ -1605,12 +2041,33 @@ export class PlaywrightPageOperations implements PageOperations {
   }
 
   async reconcileSubmit(plan: OceanEngineFormPlan, observation: SubmitObservation): Promise<ReconciliationResult> {
+    if (plan.plan_kind === "project_create" && plan.object_reference && !plan.allow_remote_write) {
+      const projectID = plan.object_reference;
+      const endpoint = new URL("/superior/api/v2/project/detail", this.page.url());
+      endpoint.searchParams.set("aadvid", plan.account_reference);
+      endpoint.searchParams.set("project_ids", projectID);
+      endpoint.searchParams.set("need_ea_conversion_status", "true");
+      endpoint.searchParams.set("need_product_recognition", "true");
+      let fields = reconcileProjectDetail(plan, projectID, undefined);
+      try {
+        const response = await this.page.request.get(endpoint.toString(), { timeout: 10_000 });
+        if (response.ok()) fields = reconcileProjectDetail(plan, projectID, await response.json());
+      } catch {
+        // An unavailable detail cannot clear a previously observed drift.
+      }
+      return { status: fields.status === "not_checked" ? "not_found" : "matched", created_object_id: projectID, field_reconciliation: fields };
+    }
+    const native = isNativePromotionPlan(plan);
     if (plan.plan_kind.endsWith("_edit")) {
       return plan.object_reference
-        ? { status: "matched", created_object_id: plan.object_reference }
+        ? { status: "matched", created_object_id: plan.object_reference,
+          ...(native ? { field_reconciliation: await this.reconcileNativePromotion(plan, plan.object_reference) } : {}) }
         : { status: "not_applicable" };
     }
-    if (observation.created_object_id) return { status: "matched", created_object_id: observation.created_object_id };
+    if (observation.created_object_id) return {
+      status: "matched", created_object_id: observation.created_object_id,
+      ...(native ? { field_reconciliation: await this.reconcileNativePromotion(plan, observation.created_object_id) } : {}),
+    };
     const queryKey = plan.plan_kind === "project_create" ? "project_id" : "promotion_id";
     let queryId: string | null = null;
     for (let attempt = 0; attempt < 40 && !queryId; attempt += 1) {
@@ -1621,6 +2078,7 @@ export class PlaywrightPageOperations implements PageOperations {
       status: "matched",
       created_object_id: queryId,
       ...(plan.plan_kind === "project_create" ? { field_reconciliation: this.reconcileProjectSubmission(plan) } : {}),
+      ...(native ? { field_reconciliation: await this.reconcileNativePromotion(plan, queryId) } : {}),
     };
 
     const nameKey = plan.plan_kind === "project_create" ? "project.project_name" : "promotion.promotion_name";
@@ -1649,8 +2107,14 @@ export class PlaywrightPageOperations implements PageOperations {
       }
     }
     if ((await search.count()) !== 1) return { status: "not_found", query_attempts: 0, exact_name_matches: 0 };
-    await search.fill(expectedName);
     for (let queryAttempt = 1; queryAttempt <= 3; queryAttempt += 1) {
+      // The management page can retain an empty result from before creation.
+      if (queryAttempt === 2) {
+        await this.page.reload({ waitUntil: "domcontentloaded" });
+        search = this.page.getByPlaceholder(placeholder, { exact: true });
+        await search.waitFor({ state: "visible", timeout: 10_000 });
+      }
+      await search.fill(expectedName);
       await search.press("Enter");
       for (let attempt = 0; attempt < 20; attempt += 1) {
         let row = this.page.locator("tr.ovui-tr").filter({ hasText: expectedName });
@@ -1660,14 +2124,23 @@ export class PlaywrightPageOperations implements PageOperations {
         if ((await row.count()) === 1) {
           const match = (await row.innerText()).match(/ID[:：]\s*(\d+)/);
           if (match?.[1]) {
+            const platformStatusText = (await row.locator('[data-auto-id="promotion-status-card"]').allInnerTexts())
+              .map((text) => text.trim()).filter(Boolean).join("; ");
+            const statusTitles = (await row.locator('.oc-promotion-status-card-wrapper-title-value').allInnerTexts())
+              .map((text) => text.trim()).filter(Boolean);
+            const platformStatus = platformStatusText.includes("新建审核中") ? "pending_review"
+              : statusTitles.length > 0 && statusTitles.every((text) => text === "未投放") ? "not_delivering"
+                : undefined;
             const fieldReconciliation = plan.plan_kind === "promotion_create"
-              ? await this.reconcilePromotionFields(plan, row)
+              ? native ? await this.reconcileNativePromotion(plan, match[1]) : await this.reconcilePromotionFields(plan, row)
               : plan.plan_kind === "project_create"
                 ? this.reconcileProjectSubmission(plan)
                 : undefined;
             return {
               status: "matched",
               created_object_id: match[1],
+              ...(platformStatus ? { platform_status: platformStatus } : {}),
+              ...(platformStatusText ? { platform_status_text: platformStatusText } : {}),
               query_attempts: queryAttempt,
               exact_name_matches: 1,
               ...(fieldReconciliation ? { field_reconciliation: fieldReconciliation } : {}),
@@ -1688,6 +2161,27 @@ export class PlaywrightPageOperations implements PageOperations {
     }
     const status = expected === this.submittedExternalAction ? "matched" : "drifted";
     return { status, fields: [{ field_key: fieldKey, expected, observed: this.submittedExternalAction, status }] };
+  }
+
+  private async reconcileNativePromotion(plan: OceanEngineFormPlan, promotionID: string): Promise<FieldReconciliation> {
+    let result = reconcileNativePromotionDetail(plan, promotionID, undefined);
+    if (!/^\d+$/.test(promotionID) || !/^\d+$/.test(plan.account_reference)) return result;
+    const endpoint = new URL("/superior/api/ad/promotion/detail", this.page.url());
+    endpoint.searchParams.set("aadvid", plan.account_reference);
+    endpoint.searchParams.set("promotion_ids", promotionID);
+    endpoint.searchParams.set("need_invisible_material", "false");
+    endpoint.searchParams.set("need_material_group", "true");
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await this.page.request.get(endpoint.toString(), { timeout: 10_000 });
+        if (response.ok()) result = reconcileNativePromotionDetail(plan, promotionID, await response.json());
+      } catch {
+        // Keep the discovered ID, but never turn an unavailable detail into success.
+      }
+      if (result.status !== "not_checked") return result;
+      if (attempt < 2) await this.page.waitForTimeout(500);
+    }
+    return result;
   }
 
   private async reconcilePromotionFields(plan: OceanEngineFormPlan, row: Locator): Promise<FieldReconciliation> {
@@ -1719,23 +2213,7 @@ export class PlaywrightPageOperations implements PageOperations {
     try {
       await editPage.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
       const fields: FieldReconciliation["fields"] = [];
-      let landingInput = editPage.getByPlaceholder(/落地页链接/);
-      for (let attempt = 0; attempt < 40 && (await landingInput.count()) === 0; attempt += 1) {
-        await editPage.waitForTimeout(250);
-        landingInput = editPage.getByPlaceholder(/落地页链接/);
-      }
-      const landingObserved = (await landingInput.count()) > 0
-        ? landingExpected?.startsWith("http")
-          ? (await landingInput.first().inputValue()).trim()
-          : await landingInput.first().evaluate((element) => {
-            let current: Element | null = element;
-            for (let depth = 0; current && depth < 10; depth += 1, current = current.parentElement) {
-              const match = current.textContent?.match(/ID[:：]\s*(\d+)/);
-              if (match?.[1]) return match[1];
-            }
-            return undefined;
-          })
-        : undefined;
+      const landingObserved = await this.readPersistedLandingPage(editPage, landingExpected);
       const landingStatus = !landingExpected || !landingObserved
         ? "not_checked"
         : landingObserved === landingExpected ? "matched" : "drifted";
@@ -1766,6 +2244,31 @@ export class PlaywrightPageOperations implements PageOperations {
     } finally {
       await editPage.close().catch(() => undefined);
     }
+  }
+
+  private async readPersistedLandingPage(editPage: Page, expected: string | undefined) {
+    // The editor renders empty controls before its saved data arrives.
+    // Wait for a saved value, not merely for the input to exist.
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const inputs = editPage.locator("input[placeholder*='落地页链接']:visible");
+      const count = await inputs.count();
+      if (count > 1) return undefined;
+      if (count === 1) {
+        const observed = expected?.startsWith("http")
+          ? (await inputs.inputValue()).trim()
+          : await inputs.evaluate((element) => {
+            let current: Element | null = element;
+            for (let depth = 0; current && depth < 10; depth += 1, current = current.parentElement) {
+              const match = current.textContent?.match(/ID[:：]\s*(\d+)/);
+              if (match?.[1]) return match[1];
+            }
+            return undefined;
+          });
+        if (observed) return observed;
+      }
+      await editPage.waitForTimeout(250);
+    }
+    return undefined;
   }
 }
 

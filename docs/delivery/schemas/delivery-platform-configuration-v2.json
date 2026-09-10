@@ -209,7 +209,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["mode"],
-          "properties": { "mode": { "const": "account_info" } }
+          "properties": { "mode": { "enum": ["account_info", "all_douyin_accounts"] } }
         },
         {
           "type": "object",
@@ -232,6 +232,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "title_mode": { "enum": ["original_video", "manual"] },
+        "search_terms": { "type": "array", "maxItems": 3, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 14 } },
         "call_to_action": {
           "type": "array",
           "maxItems": 10,

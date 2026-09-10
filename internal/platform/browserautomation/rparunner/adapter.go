@@ -153,6 +153,30 @@ func (a PlaywrightRPAAdapter) ReconcileResultUnknown(ctx context.Context, run br
 	return page, nil
 }
 
+func (a PlaywrightRPAAdapter) ReconcilePartialProject(ctx context.Context, run browserautomation.BrowserRpaRun, target browserautomation.PreparedPage) (browserautomation.PreparedPage, error) {
+	env, policy, err := a.resolveSession(ctx, run)
+	if err != nil {
+		return browserautomation.PreparedPage{}, err
+	}
+	compiler, ok := a.V3Compiler.(interface {
+		CompileReconciliationV3(context.Context, browserautomation.BrowserRpaRun, browserautomation.SitePolicy, browserautomation.PreparedPage) (json.RawMessage, error)
+	})
+	if a.protocol() != ProtocolV3 || !ok {
+		return browserautomation.PreparedPage{}, browserautomation.ErrInvalidContract
+	}
+	plan, err := compiler.CompileReconciliationV3(ctx, run, policy, target)
+	if err != nil {
+		return browserautomation.PreparedPage{}, err
+	}
+	result, err := a.sessionRunner(env).RunV3Reconcile(ctx, plan)
+	if err != nil {
+		return browserautomation.PreparedPage{}, err
+	}
+	page := preparedPageFromResult(result)
+	attachPlannedObject(plan, &page)
+	return page, nil
+}
+
 func (a PlaywrightRPAAdapter) Prepare(ctx context.Context, run browserautomation.BrowserRpaRun) (browserautomation.PreparedPage, error) {
 	env, policy, err := a.resolveSession(ctx, run)
 	if err != nil {
@@ -447,6 +471,8 @@ func (a PlaywrightRPAAdapter) keepLeaseAlive(ctx context.Context, cancel context
 
 func classifyResult(result RpaResult) error {
 	switch result.ErrorCode {
+	case "native_promotion_submit_not_calibrated":
+		return fmt.Errorf("%w: %s", browserautomation.ErrNativePromotionSubmitNotCalibrated, result.ErrorMessage)
 	case CodeAccountMismatch:
 		return fmt.Errorf("%w: %s", browserautomation.ErrAccountMismatch, result.ErrorMessage)
 	case CodeCDPUnavailable, CodeEnvironmentUnavailable, CodeTimeout, CodeInternal:
@@ -466,6 +492,9 @@ func preparedPageFromResult(result RpaResult) browserautomation.PreparedPage {
 		Readback:        map[string]string{},
 	}
 	page.Readback["final_click_performed"] = strconv.FormatBool(result.FinalClickPerformed)
+	if result.ErrorCode != "" && result.ErrorCode != CodeOK {
+		page.Readback["runner_error_code"] = result.ErrorCode
+	}
 	for _, step := range result.Steps {
 		for key, value := range stringReadback(step.Readback) {
 			page.Readback[key] = value

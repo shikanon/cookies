@@ -18,3 +18,25 @@
 .platform-entity-pending { display: grid; gap: 7px; padding: 16px; border: 1px solid #e5bd63; background: #fff9e9; }.platform-entity-pending h3 { margin: 0; font-size: 13px; }.platform-entity-pending > div { display: flex; justify-content: space-between; gap: 16px; font-size: 9px; }.platform-entity-pending small { color: var(--muted); }
 .platform-entity-state { display: grid; place-items: center; gap: 8px; min-height: 220px; padding: 28px; text-align: center; border: 1px dashed var(--line); background: var(--surface); }.platform-entity-state h2, .platform-entity-state p { margin: 0; }.platform-entity-state h2 { font-size: 15px; }.platform-entity-state p { color: var(--muted); font-size: 10px; }
 @media (max-width: 900px) { .platform-entity-header { display: grid; }.platform-entity-actions { justify-content: flex-start; }.platform-entity-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }.platform-entity-table > div { grid-template-columns: 1fr; }.platform-entity-table .heading { display: none; } }
+
+.platform-entity-editor, .platform-object-actions { padding: 18px; border: 1px solid var(--line); background: var(--surface); display: grid; gap: 12px; }
+.platform-entity-editor > header, .platform-object-actions article > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.platform-entity-editor label { display: grid; gap: 6px; }
+.platform-entity-editor input:not([type="checkbox"]) { padding: 9px; border: 1px solid var(--line); background: var(--surface); color: inherit; }
+.platform-entity-editor small, .platform-object-actions p, .platform-object-actions dd { color: var(--muted); }
+.platform-object-actions article { padding: 12px; border: 1px solid var(--line); }
+.platform-object-actions dl { display: grid; gap: 10px; }.platform-object-actions dd { margin: 4px 0 0; }
+.platform-entity-editor fieldset { display: grid; gap: 12px; border: 1px solid var(--line); }
+
+.platform-entity-editor { scroll-margin-top: 80px; }
+.platform-entity-editor, .platform-object-actions { font-family: Arial, "Microsoft YaHei", sans-serif; font-size: 13px; line-height: 1.6; }
+.platform-entity-editor input[readonly] { background: var(--subtle); color: var(--muted); }
+
+.field-capability-details { font-weight: 400; font-size: 12px; }
+.field-capability-details[open] { flex-basis: 100%; min-width: 0; }
+.field-capability-details summary { cursor: pointer; color: var(--muted); }
+.field-capability-table { overflow: auto; max-height: 360px; max-width: 100%; margin-top: 10px; }
+.field-capability-table table { width: 100%; border-collapse: collapse; text-align: left; }
+.field-capability-table th, .field-capability-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: normal; }
+
+.delivery-config-object-status:has(.field-capability-details[open]) { width: 100%; box-sizing: border-box; }

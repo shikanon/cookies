@@ -19,9 +19,10 @@ type platformObjectReader interface {
 	ImageMaterialsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
 	ProductImagesPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
 	VideoMaterialsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
+	DouyinVideosPage(context.Context, oceanengine.AssetPageRequest, oceanengine.DouyinVideoFilter) (map[string]any, error)
 	AwemePhotoMaterialsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
 	MarketingProductsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
-	OrangeLandingPagesPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
+	ApplicationsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error)
 	FilteredOrangeLandingPagesPage(context.Context, oceanengine.AssetPageRequest, oceanengine.OrangeLandingPageFilter) (map[string]any, error)
 	OptimizationTargets(context.Context, int, bool) (map[string]any, error)
 	BrandIndustries(context.Context) (map[string]any, error)
@@ -32,6 +33,9 @@ type platformObjectReader interface {
 type platformObjectPage struct {
 	Items      []map[string]any
 	TotalPages int
+	TotalCount int
+	HasMore    *bool
+	NextCursor string
 }
 
 type platformObjectReadError struct {
@@ -62,21 +66,15 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 		parse    func(map[string]any) platformObjectPage
 		convert  func(map[string]any) (PlatformObjectCandidate, bool)
 	}
-	multiLeadLandingActions, err := s.readMultiLeadOrangeLandingPageActions(ctx, request, runID, objectReader, limit, maxPages)
+	landingStats, err := s.syncQualifiedOrangeLandingPages(ctx, request, runID, objectReader, catalog, limit, maxPages)
 	if err != nil {
 		return nil, err
 	}
-	landingCandidate := func(item map[string]any) (PlatformObjectCandidate, bool) {
-		candidate, valid := orangeLandingCandidate(item)
-		if !valid {
-			return candidate, false
-		}
-		actions := multiLeadLandingActions[candidate.PlatformObjectID]
-		candidate.Metadata["multi_lead_external_actions"] = actions
-		candidate.Metadata["multi_conversion_eligible"] = containsString(actions, "100")
-		return candidate, true
-	}
 	sources := []source{
+		{PlatformObjectDouyinVideo, "douyin_video_list", func(ctx context.Context, request oceanengine.AssetPageRequest) (map[string]any, error) {
+			return objectReader.DouyinVideosPage(ctx, request, oceanengine.DouyinVideoFilter{})
+		}, douyinVideoPage, douyinVideoCandidate},
+		{PlatformObjectApplication, "application_list", objectReader.ApplicationsPage, applicationPage, applicationCandidate},
 		{PlatformObjectIndustryCategory, "industry_category_list", func(ctx context.Context, _ oceanengine.AssetPageRequest) (map[string]any, error) {
 			return objectReader.BrandIndustries(ctx)
 		}, industryCategoryPage, industryCategoryCandidate},
@@ -84,9 +82,6 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 			return objectReader.Brands(ctx)
 		}, brandPage, brandCandidate},
 		{PlatformObjectAuthorizedIdentity, "authorized_identity_list", objectReader.AuthorizedIdentitiesPage, authorizedIdentityPage, authorizedIdentityCandidate},
-		// Qualify landing pages before large material catalogs. A later material
-		// read failure must not leave stale landing-page eligibility in Cookies.
-		{PlatformObjectOrangeLandingPage, "orange_landing_page_list", objectReader.OrangeLandingPagesPage, orangeLandingPage, landingCandidate},
 		{PlatformObjectImageMaterial, "image_material_list", objectReader.ImageMaterialsPage, imageMaterialPage, imageMaterialCandidate},
 		{PlatformObjectProductImage, "product_image_list", objectReader.ProductImagesPage, imageMaterialPage, productImageCandidate},
 		{PlatformObjectVideoMaterial, "video_material_list", objectReader.VideoMaterialsPage, videoMaterialPage, videoMaterialCandidate},
@@ -94,6 +89,7 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 		{PlatformObjectMarketingProduct, "marketing_product_list", objectReader.MarketingProductsPage, marketingProductPage, marketingProductCandidate},
 	}
 	result := make(map[PlatformObjectKind]PlatformObjectSyncStats, len(sources)+2)
+	result[PlatformObjectOrangeLandingPage] = landingStats
 	optimizationStats, err := s.syncOptimizationObjects(ctx, request, runID, objectReader, catalog)
 	if err != nil {
 		return result, err
@@ -104,12 +100,14 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 	for _, current := range sources {
 		candidates := []PlatformObjectCandidate{}
 		observedAt := time.Time{}
+		nextCursor := ""
+		seenCursors := map[string]bool{}
 		for page := 1; page <= maxPages; page++ {
 			cursor := fmt.Sprintf("platform_objects:%s:page:%d", current.kind, page)
 			if err := s.Writer.UpdateSyncCursor(ctx, runID, cursor); err != nil {
 				return result, err
 			}
-			payload, err := current.fetch(ctx, oceanengine.AssetPageRequest{Page: page, Limit: limit})
+			payload, err := current.fetch(ctx, oceanengine.AssetPageRequest{Page: page, Limit: limit, Cursor: nextCursor})
 			if err != nil {
 				stage := string(current.kind)
 				var staged interface{ ReadStage() string }
@@ -118,7 +116,11 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 				}
 				return result, platformObjectReadError{stage: stage, err: err}
 			}
-			_, collectedAt, err := s.storeRaw(ctx, request, runID, current.endpoint, map[string]any{"page": page, "limit": limit}, payload)
+			requestShape := map[string]any{"page": page, "limit": limit}
+			if nextCursor != "" {
+				requestShape["cursor"] = nextCursor
+			}
+			_, collectedAt, err := s.storeRaw(ctx, request, runID, current.endpoint, requestShape, payload)
 			if err != nil {
 				return result, err
 			}
@@ -130,8 +132,21 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 				}
 			}
 			complete := parsed.TotalPages > 0 && page >= parsed.TotalPages
-			if parsed.TotalPages == 0 && len(parsed.Items) < limit {
+			if parsed.TotalCount > 0 {
+				complete = page*limit >= parsed.TotalCount
+			}
+			if parsed.TotalPages == 0 && parsed.TotalCount == 0 && len(parsed.Items) < limit {
 				complete = true
+			}
+			if parsed.HasMore != nil {
+				complete = !*parsed.HasMore
+				if !complete {
+					if parsed.NextCursor == "" || seenCursors[parsed.NextCursor] {
+						return result, fmt.Errorf("%w: %s pagination cursor did not advance", ErrInvalidFact, current.kind)
+					}
+					seenCursors[parsed.NextCursor] = true
+					nextCursor = parsed.NextCursor
+				}
 			}
 			if complete {
 				break
@@ -152,50 +167,75 @@ func (s Synchronizer) syncPlatformObjectCatalog(ctx context.Context, request Syn
 	return result, nil
 }
 
-func (s Synchronizer) readMultiLeadOrangeLandingPageActions(ctx context.Context, request SyncRequest, runID string, reader platformObjectReader, limit, maxPages int) (map[string][]string, error) {
-	result := map[string][]string{}
-	for _, externalAction := range []int{2, 100} {
+func (s Synchronizer) syncQualifiedOrangeLandingPages(ctx context.Context, request SyncRequest, runID string, reader platformObjectReader, catalog PlatformObjectCatalog, limit, maxPages int) (PlatformObjectSyncStats, error) {
+	result := map[string]PlatformObjectCandidate{}
+	observedAt := time.Time{}
+	for _, externalAction := range []int{2, 100, 20} {
+		multiLead := externalAction != 20
+		contextKey := "multi_lead_external_actions"
+		if !multiLead {
+			contextKey = "ecommerce_external_actions"
+		}
 		for page := 1; page <= maxPages; page++ {
-			if err := s.Writer.UpdateSyncCursor(ctx, runID, fmt.Sprintf("platform_objects:orange_landing_page:multi_lead:action:%d:page:%d", externalAction, page)); err != nil {
-				return nil, err
+			if err := s.Writer.UpdateSyncCursor(ctx, runID, fmt.Sprintf("platform_objects:orange_landing_page:%s:action:%d:page:%d", contextKey, externalAction, page)); err != nil {
+				return PlatformObjectSyncStats{}, err
 			}
 			filter := oceanengine.OrangeLandingPageFilter{
-				MultiAssetTypes:       []int{2},
 				ExternalAction:        externalAction,
 				FilterDPA:             true,
 				CheckConversionTarget: true,
 				ConvertTargetForCheck: externalAction,
 			}
+			if multiLead {
+				filter.MultiAssetTypes = []int{2}
+			}
 			payload, err := reader.FilteredOrangeLandingPagesPage(ctx, oceanengine.AssetPageRequest{Page: page, Limit: limit}, filter)
 			if err != nil {
-				return nil, platformObjectReadError{stage: fmt.Sprintf("orange_landing_page:multi_lead:%d", externalAction), err: err}
+				return PlatformObjectSyncStats{}, platformObjectReadError{stage: fmt.Sprintf("orange_landing_page:%s:%d", contextKey, externalAction), err: err}
 			}
 			queryEvidence := map[string]any{
 				"page": page, "limit": limit, "search": "", "order_mode": 1, "search_mode": 3,
-				"need_uba": false, "audit_status_list": []int{0, 9, 1, 10}, "multi_asset_types": []int{2},
+				"need_uba": false, "audit_status_list": []int{0, 9, 1, 10},
 				"external_action": externalAction, "status": []int{0, 5, 8}, "filter_dpa": 1, "convert_target_for_check": externalAction,
 			}
-			if _, _, err = s.storeRaw(ctx, request, runID, "orange_landing_page_multi_lead", queryEvidence, payload); err != nil {
-				return nil, err
+			if multiLead {
+				queryEvidence["multi_asset_types"] = []int{2}
+			}
+			if _, observedAt, err = s.storeRaw(ctx, request, runID, "orange_landing_page_qualified", queryEvidence, payload); err != nil {
+				return PlatformObjectSyncStats{}, err
 			}
 			parsed := orangeLandingPage(payload)
 			for _, item := range parsed.Items {
 				if candidate, valid := orangeLandingCandidate(item); valid {
-					result[candidate.PlatformObjectID] = appendUniqueString(result[candidate.PlatformObjectID], strconv.Itoa(externalAction))
+					if existing, ok := result[candidate.PlatformObjectID]; ok {
+						candidate = existing
+					}
+					actions, _ := candidate.Metadata[contextKey].([]string)
+					candidate.Metadata[contextKey] = appendUniqueString(actions, strconv.Itoa(externalAction))
+					result[candidate.PlatformObjectID] = candidate
 				}
 			}
 			if (parsed.TotalPages > 0 && page >= parsed.TotalPages) || (parsed.TotalPages == 0 && len(parsed.Items) < limit) {
 				break
 			}
 			if page == maxPages {
-				return nil, fmt.Errorf("%w: orange_landing_page multi-lead action %d exceeds page limit", ErrInvalidFact, externalAction)
+				return PlatformObjectSyncStats{}, fmt.Errorf("%w: orange_landing_page action %d exceeds page limit", ErrInvalidFact, externalAction)
 			}
 		}
 	}
+	ids := make([]string, 0, len(result))
 	for id := range result {
-		sort.Strings(result[id])
+		ids = append(ids, id)
 	}
-	return result, nil
+	sort.Strings(ids)
+	candidates := make([]PlatformObjectCandidate, 0, len(ids))
+	for _, id := range ids {
+		candidate := result[id]
+		actions, _ := candidate.Metadata["multi_lead_external_actions"].([]string)
+		candidate.Metadata["multi_conversion_eligible"] = containsString(actions, "100")
+		candidates = append(candidates, candidate)
+	}
+	return catalog.ReconcilePlatformObjects(ctx, request.OrganizationID, request.ProjectID, request.AccountRef, runID, PlatformObjectOrangeLandingPage, observedAt, candidates)
 }
 
 func containsString(values []string, expected string) bool {
@@ -264,6 +304,12 @@ func imageMaterialPage(payload map[string]any) platformObjectPage {
 func videoMaterialPage(payload map[string]any) platformObjectPage {
 	data, _ := payload["data"].(map[string]any)
 	return platformObjectPage{Items: mapItems(data["videos"]), TotalPages: totalPages(data, 0)}
+}
+
+func douyinVideoPage(payload map[string]any) platformObjectPage {
+	data, _ := payload["data"].(map[string]any)
+	more, _ := data["has_more"].(bool)
+	return platformObjectPage{Items: mapItems(data["items"]), HasMore: &more, NextCursor: firstString(data, "last_index")}
 }
 
 func awemePhotoMaterialPage(payload map[string]any) platformObjectPage {
@@ -452,6 +498,35 @@ func videoMaterialCandidate(item map[string]any) (PlatformObjectCandidate, bool)
 	}, true
 }
 
+func douyinVideoCandidate(item map[string]any) (PlatformObjectCandidate, bool) {
+	id := firstString(item, "item_id")
+	if !numericPlatformObjectID(id) {
+		return PlatformObjectCandidate{}, false
+	}
+	metadata := scalarMetadata(item, "ies_core_user_id", "author_uid", "aweme_nickname", "uniq_or_short_id", "video_id", "duration", "width", "height", "image_mode", "item_status", "create_time")
+	if author, ok := item["aweme_user_info"].(map[string]any); ok {
+		if firstString(item, "aweme_nickname") == "" {
+			metadata["aweme_nickname"] = firstString(author, "nickname")
+		}
+	}
+	var previewURL string
+	var expiresAt *time.Time
+	if image, ok := item["image_url"].(map[string]any); ok {
+		if urls, ok := image["url_list"].([]any); ok && len(urls) > 0 {
+			if raw, ok := urls[0].(string); ok {
+				previewURL, expiresAt = platformPreview(raw)
+			}
+		}
+	}
+	if previewURL == "" {
+		if video, ok := item["video_info"].(map[string]any); ok {
+			previewURL, expiresAt = firstPlatformPreview(video, "video_poster")
+		}
+	}
+	return PlatformObjectCandidate{Kind: PlatformObjectDouyinVideo, PlatformObjectID: id, DisplayName: firstString(item, "title"), Metadata: metadata,
+		PreviewURL: previewURL, PreviewKind: previewKind(previewURL, "video_poster"), PreviewExpiresAt: expiresAt}, true
+}
+
 func awemePhotoMaterialCandidate(item map[string]any) (PlatformObjectCandidate, bool) {
 	id := firstString(item, "material_id")
 	if !numericPlatformObjectID(id) {
@@ -464,6 +539,24 @@ func awemePhotoMaterialCandidate(item map[string]any) (PlatformObjectCandidate, 
 		Kind: PlatformObjectAwemePhotoMaterial, PlatformObjectID: id,
 		DisplayName: firstString(item, "file_name"), Metadata: metadata,
 		PreviewURL: previewURL, PreviewKind: previewKind(previewURL, "image"), PreviewExpiresAt: expiresAt,
+	}, true
+}
+
+func applicationPage(payload map[string]any) platformObjectPage {
+	data, _ := payload["data"].(map[string]any)
+	return platformObjectPage{Items: mapItems(data["basic_app_list"]), TotalCount: int(numberValue(data["total_count"]))}
+}
+
+func applicationCandidate(item map[string]any) (PlatformObjectCandidate, bool) {
+	id := firstString(item, "app_cloud_id")
+	if !numericPlatformObjectID(id) {
+		return PlatformObjectCandidate{}, false
+	}
+	metadata := scalarMetadata(item, "basic_package_id", "basic_package_int_id", "package_name", "version_code", "version_name", "status", "has_package", "has_extend_package", "create_time")
+	metadata["operating_system"] = "android"
+	return PlatformObjectCandidate{
+		Kind: PlatformObjectApplication, PlatformObjectID: id,
+		DisplayName: firstString(item, "app_name"), Metadata: metadata,
 	}, true
 }
 

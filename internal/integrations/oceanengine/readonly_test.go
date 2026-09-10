@@ -9,6 +9,126 @@ import (
 	"testing"
 )
 
+func TestDouyinVideoReadersSeparateAllAccountsAndSpecifiedAccount(t *testing.T) {
+	for _, userID := range []string{"", "7500877386264609852"} {
+		t.Run(userID, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/superior/api/v2/creative/material/video/list" || r.URL.Query().Get("aadvid") != "123" || r.URL.Query().Has("_signature") {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.RequestURI())
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if body["last_index"] != "previous-page" || body["page"] != float64(2) || body["page_size"] != float64(32) || body["landing_type"] != float64(7) || body["external_action"] != float64(102) || body["promotion_type"] != float64(3) {
+					t.Errorf("body=%#v", body)
+				}
+				if userID == "" {
+					filter, ok := body["item_filter"].(map[string]any)
+					if !ok || filter["aweme_related_scope"] != float64(2) || body["ies_core_user_id"] != "0" || body["need_aweme_user_info"] != true {
+						t.Errorf("all accounts=%#v", body)
+					}
+					if _, exists := body["ignore_auth"]; exists {
+						t.Error("all accounts has specified-account authorization flag")
+					}
+				} else {
+					if body["ies_core_user_id"] != userID || body["ignore_auth"] != false {
+						t.Errorf("specified account=%#v", body)
+					}
+					if _, exists := body["item_filter"]; exists {
+						t.Error("specified account must not carry all-account filter")
+					}
+					if _, exists := body["need_aweme_user_info"]; exists {
+						t.Error("specified account must preserve its observed request shape")
+					}
+				}
+				_, _ = w.Write([]byte(`{"code":0,"data":{"items":[],"has_more":false}}`))
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.Delay = 0
+			if _, err := client.DouyinVideosPage(context.Background(), AssetPageRequest{Page: 2, Limit: 100, Cursor: "previous-page"}, DouyinVideoFilter{IESCoreUserID: userID}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestDouyinVideoReaderRejectsIncompleteInventoryResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"code":0,"data":{}}`)) }))
+	defer server.Close()
+	client, _ := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+	client.Delay = 0
+	if _, err := client.DouyinVideosPage(context.Background(), AssetPageRequest{}, DouyinVideoFilter{}); err == nil {
+		t.Fatal("malformed inventory must not mark existing objects unavailable")
+	}
+}
+
+func TestDouyinVideoReaderRetriesNestedTimeout(t *testing.T) {
+	for _, persistent := range []bool{false, true} {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["last_index"] != "page-cursor" {
+				t.Errorf("retry lost cursor: %#v", body)
+			}
+			if persistent || calls == 1 {
+				_, _ = w.Write([]byte(`{"code":0,"data":{"base_resp":{"status_code":1204},"videos":[]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[],"has_more":false}}`))
+		}))
+		client, _ := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+		client.Delay = 0
+		client.MaxAttempts = 2
+		_, err := client.DouyinVideosPage(context.Background(), AssetPageRequest{Cursor: "page-cursor"}, DouyinVideoFilter{})
+		server.Close()
+		if calls != 2 || (err != nil) != persistent {
+			t.Fatalf("persistent=%v calls=%d err=%v", persistent, calls, err)
+		}
+	}
+}
+
+func TestDouyinVideoReaderRejectsUnchangedCursor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":0,"data":{"items":[],"has_more":true,"last_index":"same"}}`))
+	}))
+	defer server.Close()
+	client, _ := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+	client.Delay = 0
+	if _, err := client.DouyinVideosPage(context.Background(), AssetPageRequest{Cursor: "same"}, DouyinVideoFilter{}); err == nil {
+		t.Fatal("unchanged cursor must not continue or reconcile a partial catalog")
+	}
+}
+
+func TestApplicationsPagePreservesAccountAndPagination(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if r.Method != http.MethodGet || r.URL.Path != "/superior/api/v2/agw/ad/get_app_list_for_ebp" || query.Get("aadvid") != "123" || query.Get("status") != "4" || query.Get("version_type") != "2" || query.Get("operation_type") != "2" || query.Get("need_pkg_force_detail") != "true" || query.Get("with_no_pkg") != "1" {
+			t.Fatalf("unexpected application query: %s %s", r.Method, r.URL.RequestURI())
+		}
+		var page map[string]int
+		if err := json.Unmarshal([]byte(query.Get("page_info")), &page); err != nil || page["page"] != 2 || page["size"] != 10 {
+			t.Fatalf("application pagination=%v err=%v", page, err)
+		}
+		_, _ = w.Write([]byte(`{"code":0,"data":{"total_count":0,"basic_app_list":[]}}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "123", Session{Cookies: "session=x"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Delay = 0
+	if _, err := client.ApplicationsPage(context.Background(), AssetPageRequest{Page: 2, Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAssetLibraryReadersUseApprovedReadOnlyEndpoints(t *testing.T) {
 	requests := []struct {
 		method string

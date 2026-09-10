@@ -265,3 +265,15 @@ func TestPreparedPageRecordsFinalClickBoundary(t *testing.T) {
 		t.Fatalf("final click readback = %#v", page.Readback)
 	}
 }
+
+func TestNativePromotionCalibrationBlockIsNotPageDrift(t *testing.T) {
+	result := RpaResult{Outcome: "blocked", ErrorCode: "native_promotion_submit_not_calibrated", Reconciliation: "not_started"}
+	err := classifyResult(result)
+	if !errors.Is(err, browserautomation.ErrNativePromotionSubmitNotCalibrated) || errors.Is(err, browserautomation.ErrPageDrift) {
+		t.Fatalf("calibration block classified as %v", err)
+	}
+	page := preparedPageFromResult(result)
+	if page.Readback["runner_error_code"] != result.ErrorCode || page.Readback["final_click_performed"] != "false" || page.Readback["reconciliation"] != "not_started" {
+		t.Fatalf("calibration evidence=%#v", page.Readback)
+	}
+}

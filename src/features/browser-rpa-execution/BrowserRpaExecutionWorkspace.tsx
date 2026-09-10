@@ -4,7 +4,7 @@ import { controlledExecutionApi, ControlledExecutionApiError } from './api'
 import { deliveryExecutionApi } from '../../api/delivery'
 import type { BrowserRpaEvidence, BrowserRpaRun, BrowserRpaRunEvent, ControlledExecutionTransportState, ControlledExecutionWorkspace, EdgeSessionProbe, RunnerV3Plan } from './model'
 import { presentConfigurationIssue, presentObjectAvailability, presentPlanBlockedReason } from './objectAvailabilityPresentation'
-import { isSafePrepareRetryCandidate, isTerminalControlledExecutionState, presentControlledExecution, runMatchesExecutionView, shortHash } from './presentation'
+import { fieldDrift, isSafePrepareRetryCandidate, isTerminalControlledExecutionState, nativePromotionSubmitNotCalibrated, presentControlledExecution, runMatchesExecutionView, shortHash } from './presentation'
 import './browser-rpa-execution.css'
 
 type Props = {
@@ -139,7 +139,7 @@ function BrowserRpaExecutionDetail({ projectId, runId }: { projectId: string; ru
     }
   }, [projectId, transport.kind === 'ready' ? transport.workspace.lease?.id : '', transport.kind === 'ready' ? transport.workspace.run.state : ''])
 
-  const runWorkflow = useCallback(async (action: 'check' | 'plan' | 'prepare' | 'submit') => {
+  const runWorkflow = useCallback(async (action: 'check' | 'plan' | 'prepare' | 'submit' | 'lease') => {
     if (transport.kind !== 'ready') return
     const { run } = transport.workspace
     const apiDriver = effectiveExecutionDriver(run) === 'oceanengine-web-api/session/v1'
@@ -156,6 +156,11 @@ function BrowserRpaExecutionDetail({ projectId, runId }: { projectId: string; ru
         const nextPlan = await controlledExecutionApi.generatePlan(projectId, run.id)
         setPlan(nextPlan)
         setNotice(nextPlan.blocked_reasons.length ? '计划已生成，但存在阻塞原因。' : apiDriver ? 'API 编译输入已生成。该操作未写入平台。' : 'Runner v3 执行计划已生成。该操作未打开页面。')
+      } else if (action === 'lease') {
+        const acquired = await controlledExecutionApi.acquireLease(projectId, run.id, run.version)
+        setTransport({ kind: 'ready', workspace: { ...transport.workspace, run: acquired.run, lease: acquired.lease } })
+        setReviewed(false)
+        setNotice('已重新取得会话租约。请重新核对当前字段后确认提交。')
       } else if (action === 'prepare') {
         let currentRun = run
         const currentLease = transport.workspace.lease
@@ -192,7 +197,8 @@ function BrowserRpaExecutionDetail({ projectId, runId }: { projectId: string; ru
           setSessionProbe(undefined)
           setNotice(apiDriver ? '当前对象已创建并回写平台 ID。请生成下一个对象的 API 编译输入。' : '当前对象已创建并回写平台 ID。请重新检查 Edge 会话，然后生成下一个对象计划。')
         } else {
-          setNotice('Submit 已执行。请检查平台结果和写后证据。')
+          const result = presentControlledExecution(updated)
+          setNotice(`${result.title}。${result.detail}`)
         }
         await load()
       }
@@ -261,10 +267,10 @@ function BrowserRpaExecutionDetail({ projectId, runId }: { projectId: string; ru
   }, [projectId, transport])
 
   const reconcileResult = useCallback(async () => {
-    if (transport.kind !== 'ready' || transport.workspace.run.state !== 'result_unknown') return
+    if (transport.kind !== 'ready' || !['result_unknown', 'partial'].includes(transport.workspace.run.state)) return
     const { run } = transport.workspace
     setActionPending(true)
-    setNotice('正在只读查询巨量列表。系统不会再次点击 Submit。')
+    setNotice('正在只读核对巨量平台对象及字段。')
     try {
       const updated = await controlledExecutionApi.reconcileResult(projectId, run.id)
       setNotice(updated.state === 'failed'
@@ -315,7 +321,7 @@ function WorkspaceReady({ workspace, busy, notice, plan, sessionProbe, reviewed,
   sessionProbe: EdgeSessionProbe | undefined
   reviewed: boolean
   onReviewed: (value: boolean) => void
-  onWorkflow: (action: 'check' | 'plan' | 'prepare' | 'submit') => void
+  onWorkflow: (action: 'check' | 'plan' | 'prepare' | 'submit' | 'lease') => void
   onRefresh: () => void
   onControl: (action: 'pause' | 'resume' | 'cancel' | 'takeover' | 'release_takeover') => void
   onRetryPrepare: () => void
@@ -395,7 +401,7 @@ function ExecutionFlowPanel({ workspace, plan, busy, sessionProbe, reviewed, onR
   sessionProbe: EdgeSessionProbe | undefined
   reviewed: boolean
   onReviewed: (value: boolean) => void
-  onWorkflow: (action: 'check' | 'plan' | 'prepare' | 'submit') => void
+  onWorkflow: (action: 'check' | 'plan' | 'prepare' | 'submit' | 'lease') => void
   onRetryPrepare: () => void
   onReconcileResult: () => void
 }) {
@@ -413,7 +419,8 @@ function ExecutionFlowPanel({ workspace, plan, busy, sessionProbe, reviewed, onR
   const drift = fieldDrift(evidence)
   const leaseReady = Boolean(lease && !lease.released_at && new Date(lease.heartbeat_deadline).getTime() > Date.now())
   const canPrepare = sessionReady && actionSupported && generatedPlanReady && (run.state === 'queued' || run.state === 'environment_check')
-  const canSubmit = run.state === 'awaiting_confirmation' && prepared && reviewed && !drift && leaseReady
+  const nativeSubmitBlocked = !apiDriver && nativePromotionSubmitNotCalibrated(workspace, plan)
+  const canSubmit = run.state === 'awaiting_confirmation' && prepared && reviewed && !drift && leaseReady && !nativeSubmitBlocked
   const submitStarted = ['submitting', 'verifying', 'succeeded', 'partial', 'result_unknown'].includes(run.state)
   const flowSteps = [
     { label: apiDriver ? '检查 Connector 会话' : '检查真实 Edge 会话', done: bindingReady, active: !bindingReady },
@@ -422,25 +429,26 @@ function ExecutionFlowPanel({ workspace, plan, busy, sessionProbe, reviewed, onR
     { label: '复核回读与差异', done: prepared && reviewed, active: run.state === 'awaiting_confirmation' && !reviewed },
     { label: '一次性确认并 Submit', done: submitStarted, active: run.state === 'submitting' || run.state === 'verifying' },
   ]
-  const prepareStep = runSteps.find(step => step.action === 'prepare_and_readback')
+  const prepareStep = runSteps.filter(step => step.action === 'prepare_and_readback').at(-1)
   const canRetryPrepare = isSafePrepareRetryCandidate(workspace)
   return <section className="controlled-execution-flow" aria-label="执行操作闭环">
     <header><div><span className="section-label">Operation flow</span><h3>执行操作闭环</h3></div><small>Submit 会跨越最终点击边界。确认令牌仅在当前请求内存中存在。</small></header>
     <ol>{flowSteps.map((step, index) => <li key={step.label} className={step.done ? 'complete' : step.active ? 'active' : ''}><span>{step.done ? <CircleCheck size={15} /> : index + 1}</span>{step.label}</li>)}</ol>
     {prepareStep ? <p className={`controlled-execution-step-status ${prepareStep.status}`}><Clock3 size={14} />Prepare 服务端任务：{runStepStatusLabel(prepareStep.status)}{prepareStep.blocking_reason ? ` · ${prepareStep.blocking_reason}` : ''}</p> : null}
+    {nativeSubmitBlocked ? <p className="controlled-execution-retry-note" role="status"><b>此标题模式尚未完成提交校准。</b> 原生视频目前支持原视频标题模式提交；手动标题仍仅支持 Prepare。</p> : null}
     <div className="controlled-execution-flow-actions">
       {!apiDriver ? <button className="secondary-button" disabled={busy || isTerminalControlledExecutionState(run.state)} onClick={() => onWorkflow('check')}><MonitorCheck size={15} />检查 Edge 会话</button> : null}
       <button className="secondary-button" disabled={busy || !bindingReady || !actionSupported || isTerminalControlledExecutionState(run.state)} onClick={() => onWorkflow('plan')}><ListChecks size={15} />生成计划</button>
       <button className="secondary-button" disabled={busy || !canPrepare} onClick={() => onWorkflow('prepare')}><Play size={15} />执行 Prepare</button>
       {canRetryPrepare ? <button className="secondary-button" disabled={busy} onClick={onRetryPrepare}><RefreshCw size={15} />重试 Prepare</button> : null}
-      {run.state === 'result_unknown' && !apiDriver ? <button className="secondary-button" disabled={busy} onClick={onReconcileResult}><Search size={15} />只读查询平台结果</button> : null}
+      {['result_unknown', 'partial'].includes(run.state) && !apiDriver ? <button className="secondary-button" disabled={busy} onClick={onReconcileResult}><Search size={15} />只读查询平台结果</button> : null}
     </div>
     {canRetryPrepare ? <p className="controlled-execution-retry-note">重试会创建新 Run。失败 Run 和证据会保留。服务端会再次检查最终点击边界。</p> : null}
     {!actionSupported ? <p className="danger-copy">当前动作没有 Runner v3 单表单协议。系统不会生成可执行计划。</p> : null}
     {run.state === 'awaiting_confirmation' ? <div className="controlled-execution-confirm">
-      <label><input type="checkbox" checked={reviewed} onChange={event => onReviewed(event.target.checked)} disabled={busy || drift} />我已核对当前账户、目标对象、字段回读、差异和最终点击边界。</label>
+      <label><input type="checkbox" checked={reviewed} onChange={event => onReviewed(event.target.checked)} disabled={busy || drift || nativeSubmitBlocked} />我已核对当前账户、目标对象、字段回读、差异和最终点击边界。</label>
       <button className="primary-button" disabled={busy || !canSubmit} onClick={() => onWorkflow('submit')}><Send size={15} />确认并执行 Submit</button>
-      {!leaseReady ? <small>租约已缺失或过期。刷新页面后重新取得有效运行状态。</small> : null}
+      {!leaseReady ? <><small>租约已缺失或过期，需要重新取得会话租约。</small><button className="secondary-button" disabled={busy} onClick={() => onWorkflow('lease')}>重新取得租约</button></> : null}
       {drift ? <small>检测到字段漂移。系统阻止 Submit。</small> : null}
     </div> : null}
   </section>
@@ -489,9 +497,10 @@ function PlanPanel({ plan, run }: { plan: RunnerV3Plan; run: BrowserRpaRun }) {
   const unavailableCount = objectPresentations.filter(item => !item.available).length
   const configurationIssues = plan.configuration_issues ?? []
   const blocked = plan.blocked_reasons.length > 0
+  const nativeSubmitBlocked = effectiveExecutionDriver(run) !== 'oceanengine-web-api/session/v1' && nativePromotionSubmitNotCalibrated({ steps: [], evidence: [] }, plan)
   const boundary = plan.steps.find(step => step.remote_write) ?? plan.steps.at(-1)
   return <section className="controlled-execution-plan" aria-label="Runner v3 执行计划">
-    <header><div><span className="section-label">Runner v3 plan</span><h3>{plan.plan_kind}</h3></div><span className={plan.blocked_reasons.length ? 'blocked' : 'ready'}>{plan.blocked_reasons.length ? '计划被阻止' : '计划可执行'}</span></header>
+    <header><div><span className="section-label">Runner v3 plan</span><h3>{plan.plan_kind}</h3></div><span className={blocked || nativeSubmitBlocked ? 'blocked' : 'ready'}>{blocked ? '计划被阻止' : nativeSubmitBlocked ? '仅支持 Prepare' : '计划可执行'}</span></header>
     <div className="controlled-execution-plan-summary"><span>账户 <b>{plan.account_reference}</b></span><span>当前阶段 <b>{plan.internal_object_kind === 'project' ? '创建项目' : plan.internal_object_kind === 'promotion' ? '创建单元' : plan.plan_kind}</b></span><span>Cookies 对象 <b>{plan.internal_object_id || '未提供'}</b></span><span>父项目 <b>{plan.parent_project_reference || '等待项目回写'}</b></span><span>字段 <b>{fields.length}</b></span></div>
     {plan.blocked_reasons.length ? <p className="danger-copy">{plan.blocked_reasons.map(presentPlanBlockedReason).join('；')}</p> : null}
     {configurationIssues.length ? <section className="controlled-execution-configuration-issues" aria-label="投放配置需补充">
@@ -516,7 +525,7 @@ function PlanPanel({ plan, run }: { plan: RunnerV3Plan; run: BrowserRpaRun }) {
       </article>)}
     </section> : null}
     <details><summary>查看字段计划和目标值</summary><div className="controlled-execution-plan-fields">{fields.map(step => <div key={step.id}><b>{step.field_key}</b><span>{step.operation}</span><code>{formatPlanValue(step.value)}</code></div>)}</div></details>
-    <div className="controlled-execution-boundary"><ShieldAlert size={18} /><div><b>远程写入边界</b><span>{blocked ? '未开放' : boundary?.scope || boundary?.target || boundary?.id || '未定义'}</span><small>{blocked ? '执行前检查未通过。系统不会打开平台页面。' : `Prepare：禁止远端写入。Submit：最多 ${Math.max(1, plan.maximum_final_clicks || 1)} 次最终点击。`}</small></div></div>
+    <div className="controlled-execution-boundary"><ShieldAlert size={18} /><div><b>远程写入边界</b><span>{blocked || nativeSubmitBlocked ? '未开放' : boundary?.scope || boundary?.target || boundary?.id || '未定义'}</span><small>{blocked ? '执行前检查未通过。系统不会打开平台页面。' : nativeSubmitBlocked ? 'Prepare：允许填写和回读。Submit：此标题模式尚未完成写后核验校准。' : `Prepare：禁止远端写入。Submit：最多 ${Math.max(1, plan.maximum_final_clicks || 1)} 次最终点击。`}</small></div></div>
   </section>
 }
 
@@ -568,13 +577,6 @@ function runnerV3ActionSupported(action: string) {
   return action === 'create_project_and_promotions'
     || action === 'create_promotions_in_existing_project'
     || action === 'update_promotion_budget'
-}
-
-function fieldDrift(evidence: BrowserRpaEvidence[]) {
-  return evidence.some(item => {
-    const readback = item.field_readback ?? item.after_page_facts ?? {}
-    return readback.field_reconciliation_status === 'drifted'
-  })
 }
 
 function formatPlanValue(value: unknown) {

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type PlatformObjectKind string
@@ -18,8 +19,10 @@ const (
 	PlatformObjectImageMaterial      PlatformObjectKind = "image_material"
 	PlatformObjectProductImage       PlatformObjectKind = "product_image"
 	PlatformObjectVideoMaterial      PlatformObjectKind = "video_material"
+	PlatformObjectDouyinVideo        PlatformObjectKind = "douyin_video"
 	PlatformObjectAwemePhotoMaterial PlatformObjectKind = "aweme_photo_material"
 	PlatformObjectMarketingProduct   PlatformObjectKind = "marketing_product"
+	PlatformObjectApplication        PlatformObjectKind = "application"
 	PlatformObjectOrangeLandingPage  PlatformObjectKind = "orange_landing_page"
 	PlatformObjectOptimizationTarget PlatformObjectKind = "optimization_target"
 	PlatformObjectConversionAsset    PlatformObjectKind = "conversion_event_asset"
@@ -30,8 +33,8 @@ const (
 
 func (k PlatformObjectKind) Valid() bool {
 	switch k {
-	case PlatformObjectImageMaterial, PlatformObjectProductImage, PlatformObjectVideoMaterial, PlatformObjectAwemePhotoMaterial,
-		PlatformObjectMarketingProduct, PlatformObjectOrangeLandingPage, PlatformObjectOptimizationTarget,
+	case PlatformObjectImageMaterial, PlatformObjectProductImage, PlatformObjectVideoMaterial, PlatformObjectDouyinVideo, PlatformObjectAwemePhotoMaterial,
+		PlatformObjectMarketingProduct, PlatformObjectApplication, PlatformObjectOrangeLandingPage, PlatformObjectOptimizationTarget,
 		PlatformObjectConversionAsset, PlatformObjectIndustryCategory, PlatformObjectBrand, PlatformObjectAuthorizedIdentity:
 		return true
 	default:
@@ -123,6 +126,7 @@ type PlatformObjectQuery struct {
 	Kind           PlatformObjectKind
 	Status         string
 	Search         string
+	IESCoreUserID  string
 	Cursor         string
 	Limit          int
 	SortBy         string
@@ -164,7 +168,7 @@ func (r MySQLRepository) ReconcilePlatformObjects(ctx context.Context, organizat
 	for _, candidate := range candidates {
 		candidate.PlatformObjectID = strings.TrimSpace(candidate.PlatformObjectID)
 		candidate.DisplayName = strings.TrimSpace(candidate.DisplayName)
-		if candidate.Kind != kind || !validPlatformObjectID(kind, candidate.PlatformObjectID) || len(candidate.DisplayName) > 512 {
+		if candidate.Kind != kind || !validPlatformObjectID(kind, candidate.PlatformObjectID) || !utf8.ValidString(candidate.DisplayName) || utf8.RuneCountInString(candidate.DisplayName) > 512 {
 			return stats, ErrInvalidFact
 		}
 		objectID := PlatformObjectID(organizationID, accountID, kind, candidate.PlatformObjectID)
@@ -251,8 +255,17 @@ func (r MySQLRepository) ListPlatformObjects(ctx context.Context, query Platform
 		args = append(args, query.Status)
 	}
 	if search := strings.TrimSpace(query.Search); search != "" {
-		statement += ` AND (o.display_name LIKE ? OR CONVERT(o.platform_object_id USING utf8mb4) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.metadata_json,'$.product_id')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.metadata_json,'$.unique_product_id')) LIKE ?)`
+		statement += ` AND (o.display_name LIKE ? OR CONVERT(o.platform_object_id USING utf8mb4) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.metadata_json,'$.product_id')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.metadata_json,'$.unique_product_id')) LIKE ?`
 		args = append(args, "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%")
+		if query.Kind == PlatformObjectDouyinVideo {
+			statement += ` OR JSON_UNQUOTE(JSON_EXTRACT(o.metadata_json,'$.aweme_nickname')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(o.metadata_json,'$.ies_core_user_id')) LIKE ?`
+			args = append(args, "%"+search+"%", "%"+search+"%")
+		}
+		statement += `)`
+	}
+	if query.IESCoreUserID != "" {
+		statement += ` AND o.object_kind='douyin_video' AND JSON_UNQUOTE(JSON_EXTRACT(o.metadata_json,'$.ies_core_user_id'))=?`
+		args = append(args, query.IESCoreUserID)
 	}
 	if cursor := strings.TrimSpace(query.Cursor); cursor != "" && query.SortBy == "" {
 		statement += ` AND o.id>?`
@@ -412,7 +425,7 @@ func (r MySQLRepository) ReadPlatformObjectPreview(ctx context.Context, query Pl
 
 func previewMediaHostAllowed(host string) bool {
 	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	for _, suffix := range []string{".oceanengine.com", ".byteadimg.com", ".byteimg.com", ".bytetos.com", ".douyinpic.com"} {
+	for _, suffix := range []string{".oceanengine.com", ".byteadimg.com", ".byteimg.com", ".bytetos.com", ".douyinpic.com", ".creativityeco.com"} {
 		if strings.HasSuffix(host, suffix) && len(host) > len(suffix) {
 			return true
 		}

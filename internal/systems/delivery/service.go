@@ -364,6 +364,7 @@ type Repository interface {
 }
 
 type Service struct {
+	FieldCapabilities       FieldCapabilityReader
 	Repository              Repository
 	Projects                ActiveProjectResolver
 	Adapter                 PlatformAdapter
@@ -427,6 +428,23 @@ func (s Service) UpdatePlan(ctx context.Context, actor contract.ActorContext, pr
 	}
 	if err := s.validateProjectAccount(ctx, actor, projectID, request.PlatformConfiguration); err != nil {
 		return DeliveryPlan{}, err
+	}
+	previousConfiguration := plan.CurrentVersion.PlatformConfiguration
+	if previousConfiguration != nil && previousConfiguration.Payload.OceanEngine != nil && request.PlatformConfiguration.Payload.OceanEngine != nil {
+		previous := previousConfiguration.Payload.OceanEngine.Project
+		next := request.PlatformConfiguration.Payload.OceanEngine.Project
+		if previous != nil && next != nil {
+			next.ProjectDraftID = previous.ProjectDraftID
+			if _, supported := s.Repository.(controlledAuthorityRepository); supported {
+				preview, previewErr := s.planObjectPreview(ctx, actor, projectID, plan)
+				if previewErr != nil {
+					return DeliveryPlan{}, previewErr
+				}
+				if err := validateBoundObjectEdits(previousConfiguration.Payload.OceanEngine, request.PlatformConfiguration.Payload.OceanEngine, preview); err != nil {
+					return DeliveryPlan{}, err
+				}
+			}
+		}
 	}
 	version, err := newPlatformPlanVersion(plan.ID, actor, projectID, request.ExpectedVersion+1, *request.Intent, *request.PlatformConfiguration, s.now())
 	if err != nil {

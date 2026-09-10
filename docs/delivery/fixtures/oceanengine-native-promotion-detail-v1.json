@@ -1,0 +1,25 @@
+{
+  "code": 0,
+  "data": {
+    "9000000000000000101": {
+      "id": "9000000000000000101",
+      "advertiser_id": "9000000000000000001",
+      "project_id": "9000000000000000100",
+      "name": "Native promotion fixture",
+      "is_del": 0,
+      "project_is_del": 0,
+      "data": {
+        "native_info": {
+          "origin_item_title_switch": 1
+        }
+      },
+      "material_group": {
+        "video_material_info": [
+          {
+            "aweme_item_id": "9000000000000000201"
+          }
+        ]
+      }
+    }
+  }
+}

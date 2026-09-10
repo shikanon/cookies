@@ -74,6 +74,14 @@ test('replaces the internal block code with a clear message', () => {
   )
 })
 
+test('uses each promotion material type instead of labelling every item as video', () => {
+  for (const [object_kind, expected] of [['video_material', '视频素材'], ['image_material', '图片素材'], ['aweme_photo_material', '图文素材']]) {
+    const result = presentObjectAvailability({ field_key: 'promotions.1.base_material_references.0', object_kind, internal_object_id: '123', available: true })
+    assert.equal(result.kindLabel, expected)
+    assert.equal(result.scopeLabel, '单元 2')
+  }
+})
+
 test('explains incomplete promotion fields without exposing its internal draft ID', () => {
   const issue = presentConfigurationIssue('promotion promotion-deliveryplan_123-1 requires copy, source, and name')
 

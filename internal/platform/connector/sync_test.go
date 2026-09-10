@@ -96,9 +96,16 @@ func (testReader) ProductImagesPage(context.Context, oceanengine.AssetPageReques
 func (testReader) VideoMaterialsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error) {
 	return map[string]any{"data": map[string]any{"videos": []any{map[string]any{"material_id": "2001", "video_name": "video"}}, "pagination": map[string]any{"total_page": 1.0}}}, nil
 }
+func (testReader) DouyinVideosPage(context.Context, oceanengine.AssetPageRequest, oceanengine.DouyinVideoFilter) (map[string]any, error) {
+	return map[string]any{"data": map[string]any{"items": []any{map[string]any{"item_id": "7681605279024303402", "title": "原生视频", "ies_core_user_id": "7500877386264609852"}}, "has_more": false}}, nil
+}
 func (testReader) AwemePhotoMaterialsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error) {
 	return map[string]any{"data": map[string]any{"list": []any{map[string]any{"material_id": "2501", "file_name": "photo"}}, "pagination": map[string]any{"total_page": 1.0}}}, nil
 }
+func (testReader) ApplicationsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error) {
+	return map[string]any{"data": map[string]any{"basic_app_list": []any{map[string]any{"app_cloud_id": "191511", "app_name": "测试应用"}}}}, nil
+}
+
 func (testReader) MarketingProductsPage(context.Context, oceanengine.AssetPageRequest) (map[string]any, error) {
 	return map[string]any{"data": map[string]any{"list": []any{map[string]any{"unique_product_id": "2601", "product_id": "1601", "name": "product"}}, "pagination": map[string]any{"total_page": 1.0}}}, nil
 }
@@ -261,10 +268,10 @@ func TestSynchronizerBuildsEncryptedImmutableLedgerSlice(t *testing.T) {
 	if result.ObjectCount != 5 || result.MetricCount != 2 || writer.completed != "completed" {
 		t.Fatalf("result=%#v completed=%s", result, writer.completed)
 	}
-	if len(writer.raw) != 20 || len(writer.configs) != 1 || len(writer.bindings) != 1 || len(writer.diagnoses) != 1 || len(writer.statuses) != 1 {
+	if len(writer.raw) != 22 || len(writer.configs) != 1 || len(writer.bindings) != 1 || len(writer.diagnoses) != 1 || len(writer.statuses) != 1 {
 		t.Fatalf("raw=%d config=%d binding=%d diagnosis=%d status=%d", len(writer.raw), len(writer.configs), len(writer.bindings), len(writer.diagnoses), len(writer.statuses))
 	}
-	if len(writer.platformObjects) != 11 || result.PlatformObjects[PlatformObjectProductImage].Created != 1 || result.PlatformObjects[PlatformObjectVideoMaterial].Created != 1 || result.PlatformObjects[PlatformObjectAwemePhotoMaterial].Created != 1 || result.PlatformObjects[PlatformObjectMarketingProduct].Created != 1 || result.PlatformObjects[PlatformObjectConversionAsset].Created != 1 || result.PlatformObjects[PlatformObjectAuthorizedIdentity].Created != 1 {
+	if len(writer.platformObjects) != 13 || result.PlatformObjects[PlatformObjectDouyinVideo].Created != 1 || result.PlatformObjects[PlatformObjectApplication].Created != 1 || result.PlatformObjects[PlatformObjectProductImage].Created != 1 || result.PlatformObjects[PlatformObjectVideoMaterial].Created != 1 || result.PlatformObjects[PlatformObjectAwemePhotoMaterial].Created != 1 || result.PlatformObjects[PlatformObjectMarketingProduct].Created != 1 || result.PlatformObjects[PlatformObjectConversionAsset].Created != 1 || result.PlatformObjects[PlatformObjectAuthorizedIdentity].Created != 1 {
 		t.Fatalf("platform objects=%#v result=%#v", writer.platformObjects, result.PlatformObjects)
 	}
 	landing := writer.platformObjects[PlatformObjectOrangeLandingPage][0]

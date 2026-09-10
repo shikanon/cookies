@@ -40,6 +40,12 @@ func (r MySQLRepository) GetControlledChangeSetByObjectFingerprint(ctx context.C
 	return value, err
 }
 
+func (r MySQLRepository) ControlledExecutionCancelled(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, changeID string) (bool, error) {
+	var cancelled bool
+	err := r.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM delivery_controlled_executions e JOIN browser_rpa_runs r ON r.organization_id=e.organization_id AND r.project_id=e.project_id AND r.id=e.browser_rpa_run_id WHERE e.organization_id=? AND e.project_id=? AND e.controlled_change_set_id=? AND r.state='cancelled')`, org, project, changeID).Scan(&cancelled)
+	return cancelled, err
+}
+
 func (r MySQLRepository) getControlledChangeSetByHash(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, hash string) (ControlledChangeSet, error) {
 	return scanControlledChangeSet(r.DB.QueryRowContext(ctx, controlledChangeSetSelect+` WHERE organization_id=? AND project_id=? AND canonical_hash=?`, org, project, hash))
 }
@@ -399,21 +405,6 @@ func (r MySQLRepository) RebindSafePendingPlatformEntityMapping(ctx context.Cont
 		return mapping, nil
 	}
 
-	var oldExecutionStatus, oldChangeSetID, oldChangeStatus, oldRunState, oldLeaseID string
-	var oldTakeoverActive bool
-	err = tx.QueryRowContext(ctx, `SELECT e.status,e.controlled_change_set_id,c.status,r.state,COALESCE(r.lease_id,''),r.takeover_active
-		FROM delivery_controlled_executions e
-		JOIN delivery_controlled_change_sets c ON c.organization_id=e.organization_id AND c.project_id=e.project_id AND c.id=e.controlled_change_set_id
-		JOIN browser_rpa_runs r ON r.organization_id=e.organization_id AND r.project_id=e.project_id AND r.id=?
-		WHERE e.organization_id=? AND e.project_id=? AND e.id=? FOR UPDATE`, mapping.BrowserRpaRunID, request.OrganizationID, request.ProjectID, mapping.BusinessExecutionID).
-		Scan(&oldExecutionStatus, &oldChangeSetID, &oldChangeStatus, &oldRunState, &oldLeaseID, &oldTakeoverActive)
-	if errors.Is(err, sql.ErrNoRows) {
-		return PlatformEntityMapping{}, ErrNotFound
-	}
-	if err != nil {
-		return PlatformEntityMapping{}, err
-	}
-
 	var newExecutionStatus, newRunState string
 	err = tx.QueryRowContext(ctx, `SELECT e.status,r.state FROM delivery_controlled_executions e
 		JOIN browser_rpa_runs r ON r.organization_id=e.organization_id AND r.project_id=e.project_id AND r.id=?
@@ -429,97 +420,16 @@ func (r MySQLRepository) RebindSafePendingPlatformEntityMapping(ctx context.Cont
 		return PlatformEntityMapping{}, ErrInvalidState
 	}
 
-	var stepCount, evidenceCount, attemptCount, failedAttemptCount, confirmationCount int
-	err = tx.QueryRowContext(ctx, `SELECT
-		(SELECT COUNT(*) FROM browser_rpa_run_steps WHERE organization_id=? AND project_id=? AND run_id=?),
-		(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=?),
-		(SELECT COUNT(*) FROM browser_rpa_controlled_action_attempts WHERE organization_id=? AND project_id=? AND run_id=?),
-		(SELECT COUNT(*) FROM browser_rpa_controlled_action_attempts WHERE organization_id=? AND project_id=? AND run_id=? AND status='failed'),
-		(SELECT COUNT(*) FROM browser_rpa_final_confirmations WHERE organization_id=? AND project_id=? AND run_id=?)`,
-		request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID,
-		request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID,
-		request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID,
-		request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID,
-		request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID).
-		Scan(&stepCount, &evidenceCount, &attemptCount, &failedAttemptCount, &confirmationCount)
+	recovery, err := inspectPendingMappingRecovery(ctx, tx, mapping, request.Now)
 	if err != nil {
 		return PlatformEntityMapping{}, err
 	}
-	oldLeaseInactive := oldLeaseID == ""
-	if oldLeaseID != "" && (oldRunState == "failed" || oldRunState == "cancelled" || oldRunState == "awaiting_confirmation") {
-		var inactiveCount int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM browser_rpa_session_leases WHERE organization_id=? AND project_id=? AND id=? AND run_id=? AND (released_at IS NOT NULL OR expires_at<=? OR heartbeat_deadline<=?)`, request.OrganizationID, request.ProjectID, oldLeaseID, mapping.BrowserRpaRunID, request.Now, request.Now).Scan(&inactiveCount); err != nil {
+	oldChangeSetID := recovery.changeSetID
+	activeOldRun, orphanedCancelledRun, preparedOldRun := recovery.active, recovery.orphanedCancelled, recovery.prepared
+	if recovery.leaseID != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE browser_rpa_session_leases SET active_lock_key=NULL,released_at=COALESCE(released_at,?),version=version+1 WHERE organization_id=? AND project_id=? AND id=? AND run_id=? AND released_at IS NULL`, request.Now, request.OrganizationID, request.ProjectID, recovery.leaseID, mapping.BrowserRpaRunID); err != nil {
 			return PlatformEntityMapping{}, err
 		}
-		oldLeaseInactive = inactiveCount == 1
-		if oldLeaseInactive {
-			if _, err := tx.ExecContext(ctx, `UPDATE browser_rpa_session_leases SET active_lock_key=NULL,released_at=COALESCE(released_at,?),version=version+1 WHERE organization_id=? AND project_id=? AND id=? AND run_id=? AND released_at IS NULL`, request.Now, request.OrganizationID, request.ProjectID, oldLeaseID, mapping.BrowserRpaRunID); err != nil {
-				return PlatformEntityMapping{}, err
-			}
-		}
-	}
-	controlledActionSafe := attemptCount == 0 && confirmationCount == 0
-	if oldRunState == "awaiting_confirmation" {
-		var noClickEvidenceCount, clickEvidenceCount int
-		if err := tx.QueryRowContext(ctx, `SELECT
-			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='false'),
-			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='true')`,
-			request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID,
-			request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID).
-			Scan(&noClickEvidenceCount, &clickEvidenceCount); err != nil {
-			return PlatformEntityMapping{}, err
-		}
-		controlledActionSafe = preparedRunCanRebind(attemptCount, confirmationCount, noClickEvidenceCount, clickEvidenceCount)
-	}
-	if oldRunState == "failed" && attemptCount > 0 && failedAttemptCount == attemptCount {
-		var noClickEvidenceCount, clickEvidenceCount int
-		if err := tx.QueryRowContext(ctx, `SELECT
-			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='false'),
-			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='true')`,
-			request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID,
-			request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID).
-			Scan(&noClickEvidenceCount, &clickEvidenceCount); err != nil {
-			return PlatformEntityMapping{}, err
-		}
-		controlledActionSafe = noClickEvidenceCount > 0 && clickEvidenceCount == 0
-	}
-	if oldRunState == "failed" && !controlledActionSafe && attemptCount > 0 && confirmationCount == attemptCount {
-		// One staged Run can create a project and then fail while it prepares a
-		// promotion. A project submit must not block recovery of the untouched
-		// promotion mapping. Require every controlled action to have final-click
-		// evidence for another object, and require no final-click evidence for
-		// the mapping that will move to the new Run.
-		var targetClickEvidenceCount, otherObjectAttemptCount int
-		if err := tx.QueryRowContext(ctx, `SELECT
-			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND object_fingerprint=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='true'),
-			(SELECT COUNT(DISTINCT a.id) FROM browser_rpa_controlled_action_attempts a
-			 JOIN browser_rpa_evidence e ON e.organization_id=a.organization_id AND e.project_id=a.project_id AND e.run_id=a.run_id AND e.step_id=a.step_id
-			 WHERE a.organization_id=? AND a.project_id=? AND a.run_id=? AND e.object_fingerprint<>?
-			 AND JSON_UNQUOTE(JSON_EXTRACT(e.evidence_json,'$.field_readback.final_click_performed'))='true')`,
-			request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID, mapping.InternalObjectID,
-			request.OrganizationID, request.ProjectID, mapping.BrowserRpaRunID, mapping.InternalObjectID).
-			Scan(&targetClickEvidenceCount, &otherObjectAttemptCount); err != nil {
-			return PlatformEntityMapping{}, err
-		}
-		controlledActionSafe = controlledActionsBelongToOtherObjects(attemptCount, confirmationCount, targetClickEvidenceCount, otherObjectAttemptCount)
-	}
-	if !oldLeaseInactive || oldTakeoverActive || !controlledActionSafe {
-		return PlatformEntityMapping{}, ErrInvalidState
-	}
-	// Prepare steps and readback evidence are safe to retain after a failed,
-	// cancelled, or unsubmitted prepared run. They do not prove a remote write.
-	// A queued run must still have no recorded page activity before reassignment.
-	if oldRunState != "failed" && oldRunState != "cancelled" && oldRunState != "awaiting_confirmation" && (stepCount != 0 || evidenceCount != 0) {
-		return PlatformEntityMapping{}, ErrInvalidState
-	}
-
-	activeOldRun := oldExecutionStatus == "running" && oldChangeStatus == string(ControlledChangeSetExecuting) && oldRunState == "queued"
-	cancelledOldRun := oldExecutionStatus == "cancelled" && oldChangeStatus == string(ControlledChangeSetInvalidated) && oldRunState == "cancelled"
-	orphanedCancelledRun := oldExecutionStatus == "running" && oldChangeStatus == string(ControlledChangeSetExecuting) && oldRunState == "cancelled"
-	failedOldRun := oldExecutionStatus == "running" && oldChangeStatus == string(ControlledChangeSetExecuting) && oldRunState == "failed"
-	preparedOldRun := oldExecutionStatus == "running" && oldChangeStatus == string(ControlledChangeSetExecuting) && oldRunState == "awaiting_confirmation"
-	if !activeOldRun && !cancelledOldRun && !orphanedCancelledRun && !failedOldRun && !preparedOldRun {
-		return PlatformEntityMapping{}, ErrInvalidState
 	}
 	if activeOldRun || orphanedCancelledRun || preparedOldRun {
 		updates := []struct {
@@ -573,6 +483,145 @@ func (r MySQLRepository) RebindSafePendingPlatformEntityMapping(ctx context.Cont
 		return PlatformEntityMapping{}, err
 	}
 	return r.GetPlatformEntityMapping(ctx, request.OrganizationID, request.ProjectID, request.MappingID)
+}
+
+type pendingMappingRecovery struct {
+	changeSetID       string
+	leaseID           string
+	active            bool
+	orphanedCancelled bool
+	prepared          bool
+}
+
+// Read and write paths use the same evidence conditions. Preview does not release leases or change executions.
+func inspectPendingMappingRecovery(ctx context.Context, tx *sql.Tx, mapping PlatformEntityMapping, now time.Time) (pendingMappingRecovery, error) {
+	if mapping.Status != PlatformEntityMappingPending || mapping.PlatformObjectID != "" || mapping.PlatformStatus != "" || mapping.ResultEvidenceID != "" || mapping.ListEvidenceID != "" {
+		return pendingMappingRecovery{}, ErrInvalidState
+	}
+	var oldExecutionStatus, oldChangeSetID, oldChangeStatus, oldRunState, oldLeaseID string
+	var oldTakeoverActive bool
+	err := tx.QueryRowContext(ctx, `SELECT e.status,e.controlled_change_set_id,c.status,r.state,COALESCE(r.lease_id,''),r.takeover_active
+		FROM delivery_controlled_executions e
+		JOIN delivery_controlled_change_sets c ON c.organization_id=e.organization_id AND c.project_id=e.project_id AND c.id=e.controlled_change_set_id
+		JOIN browser_rpa_runs r ON r.organization_id=e.organization_id AND r.project_id=e.project_id AND r.id=?
+		WHERE e.organization_id=? AND e.project_id=? AND e.id=? FOR UPDATE`, mapping.BrowserRpaRunID, mapping.OrganizationID, mapping.ProjectID, mapping.BusinessExecutionID).
+		Scan(&oldExecutionStatus, &oldChangeSetID, &oldChangeStatus, &oldRunState, &oldLeaseID, &oldTakeoverActive)
+	if errors.Is(err, sql.ErrNoRows) {
+		return pendingMappingRecovery{}, ErrNotFound
+	}
+	if err != nil {
+		return pendingMappingRecovery{}, err
+	}
+
+	var stepCount, evidenceCount, attemptCount, failedAttemptCount, confirmationCount int
+	err = tx.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM browser_rpa_run_steps WHERE organization_id=? AND project_id=? AND run_id=?),
+		(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=?),
+		(SELECT COUNT(*) FROM browser_rpa_controlled_action_attempts WHERE organization_id=? AND project_id=? AND run_id=?),
+		(SELECT COUNT(*) FROM browser_rpa_controlled_action_attempts WHERE organization_id=? AND project_id=? AND run_id=? AND status='failed'),
+		(SELECT COUNT(*) FROM browser_rpa_final_confirmations WHERE organization_id=? AND project_id=? AND run_id=?)`,
+		mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID,
+		mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID,
+		mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID,
+		mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID,
+		mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID).
+		Scan(&stepCount, &evidenceCount, &attemptCount, &failedAttemptCount, &confirmationCount)
+	if err != nil {
+		return pendingMappingRecovery{}, err
+	}
+	oldLeaseInactive := oldLeaseID == ""
+	if oldLeaseID != "" && (oldRunState == "failed" || oldRunState == "cancelled" || oldRunState == "awaiting_confirmation") {
+		var inactiveCount int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM browser_rpa_session_leases WHERE organization_id=? AND project_id=? AND id=? AND run_id=? AND (released_at IS NOT NULL OR expires_at<=? OR heartbeat_deadline<=?)`, mapping.OrganizationID, mapping.ProjectID, oldLeaseID, mapping.BrowserRpaRunID, now, now).Scan(&inactiveCount); err != nil {
+			return pendingMappingRecovery{}, err
+		}
+		oldLeaseInactive = inactiveCount == 1
+
+	}
+	controlledActionSafe := attemptCount == 0 && confirmationCount == 0
+	if oldRunState == "awaiting_confirmation" {
+		var noClickEvidenceCount, clickEvidenceCount int
+		if err := tx.QueryRowContext(ctx, `SELECT
+			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='false'),
+			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='true')`,
+			mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID,
+			mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID).
+			Scan(&noClickEvidenceCount, &clickEvidenceCount); err != nil {
+			return pendingMappingRecovery{}, err
+		}
+		controlledActionSafe = preparedRunCanRebind(attemptCount, confirmationCount, noClickEvidenceCount, clickEvidenceCount)
+	}
+	if oldRunState == "failed" && attemptCount > 0 && failedAttemptCount == attemptCount {
+		var noClickEvidenceCount, clickEvidenceCount int
+		if err := tx.QueryRowContext(ctx, `SELECT
+			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='false'),
+			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='true')`,
+			mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID,
+			mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID).
+			Scan(&noClickEvidenceCount, &clickEvidenceCount); err != nil {
+			return pendingMappingRecovery{}, err
+		}
+		controlledActionSafe = noClickEvidenceCount > 0 && clickEvidenceCount == 0
+	}
+	if oldRunState == "failed" && !controlledActionSafe && attemptCount > 0 && confirmationCount == attemptCount {
+		// One staged Run can create a project and then fail while it prepares a
+		// promotion. A project submit must not block recovery of the untouched
+		// promotion mapping. Require every controlled action to have final-click
+		// evidence for another object, and require no final-click evidence for
+		// the mapping that will move to the new Run.
+		var targetClickEvidenceCount, otherObjectAttemptCount int
+		if err := tx.QueryRowContext(ctx, `SELECT
+			(SELECT COUNT(*) FROM browser_rpa_evidence WHERE organization_id=? AND project_id=? AND run_id=? AND object_fingerprint=? AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.field_readback.final_click_performed'))='true'),
+			(SELECT COUNT(DISTINCT a.id) FROM browser_rpa_controlled_action_attempts a
+			 JOIN browser_rpa_evidence e ON e.organization_id=a.organization_id AND e.project_id=a.project_id AND e.run_id=a.run_id AND e.step_id=a.step_id
+			 WHERE a.organization_id=? AND a.project_id=? AND a.run_id=? AND e.object_fingerprint<>?
+			 AND JSON_UNQUOTE(JSON_EXTRACT(e.evidence_json,'$.field_readback.final_click_performed'))='true')`,
+			mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID, mapping.InternalObjectID,
+			mapping.OrganizationID, mapping.ProjectID, mapping.BrowserRpaRunID, mapping.InternalObjectID).
+			Scan(&targetClickEvidenceCount, &otherObjectAttemptCount); err != nil {
+			return pendingMappingRecovery{}, err
+		}
+		controlledActionSafe = controlledActionsBelongToOtherObjects(attemptCount, confirmationCount, targetClickEvidenceCount, otherObjectAttemptCount)
+	}
+	if !oldLeaseInactive || oldTakeoverActive || !controlledActionSafe {
+		return pendingMappingRecovery{}, ErrInvalidState
+	}
+	// Prepare steps and readback evidence are safe to retain after a failed,
+	// cancelled, or unsubmitted prepared run. They do not prove a remote write.
+	// A queued run must still have no recorded page activity before reassignment.
+	if oldRunState != "failed" && oldRunState != "cancelled" && oldRunState != "awaiting_confirmation" && (stepCount != 0 || evidenceCount != 0) {
+		return pendingMappingRecovery{}, ErrInvalidState
+	}
+
+	activeOldRun := oldExecutionStatus == "running" && oldChangeStatus == string(ControlledChangeSetExecuting) && oldRunState == "queued"
+	cancelledOldRun := oldExecutionStatus == "cancelled" && oldChangeStatus == string(ControlledChangeSetInvalidated) && oldRunState == "cancelled"
+	orphanedCancelledRun := oldExecutionStatus == "running" && oldChangeStatus == string(ControlledChangeSetExecuting) && oldRunState == "cancelled"
+	failedOldRun := oldExecutionStatus == "running" && oldChangeStatus == string(ControlledChangeSetExecuting) && oldRunState == "failed"
+	preparedOldRun := oldExecutionStatus == "running" && oldChangeStatus == string(ControlledChangeSetExecuting) && oldRunState == "awaiting_confirmation"
+	if !activeOldRun && !cancelledOldRun && !orphanedCancelledRun && !failedOldRun && !preparedOldRun {
+		return pendingMappingRecovery{}, ErrInvalidState
+	}
+	return pendingMappingRecovery{changeSetID: oldChangeSetID, leaseID: oldLeaseID, active: activeOldRun, orphanedCancelled: orphanedCancelledRun, prepared: preparedOldRun}, nil
+}
+
+func (r MySQLRepository) CanRebindPendingPlatformEntityMapping(ctx context.Context, mapping PlatformEntityMapping, now time.Time) (bool, error) {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	current, err := scanPlatformEntityMapping(tx.QueryRowContext(ctx, platformEntityMappingSelect+` WHERE organization_id=? AND project_id=? AND id=? FOR UPDATE`, mapping.OrganizationID, mapping.ProjectID, mapping.ID))
+	if err != nil {
+		return false, err
+	}
+	if current.Version != mapping.Version {
+		return false, nil
+	}
+	_, err = inspectPendingMappingRecovery(ctx, tx, current, now)
+	if errors.Is(err, ErrInvalidState) || errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func controlledActionsBelongToOtherObjects(attemptCount, confirmationCount, targetClickEvidenceCount, otherObjectAttemptCount int) bool {

@@ -33,12 +33,13 @@ func configurationObjectAvailability(configuration delivery.OceanEngineConfigura
 			platformID = strings.TrimSpace(ref.ID)
 		}
 		manualDirectLink := ref.ObjectKind == "direct_link" && ref.State == delivery.ReferenceResolved && validManualDirectLink(ref.ID)
+		applicationDownloadURL := ref.ObjectKind == "application" && ref.State == delivery.ReferenceResolved && validApplicationDownloadURL(ref.ID)
 		item := V3ObjectAvailability{
 			FieldKey: field, ObjectKind: ref.ObjectKind, InternalObjectID: ref.ID,
 			DisplayName: ref.DisplayNameSnapshot, PlatformObjectID: platformID,
-			Available: platformID != "" || manualDirectLink,
+			Available: platformID != "" || manualDirectLink || applicationDownloadURL,
 		}
-		if manualDirectLink {
+		if manualDirectLink || applicationDownloadURL {
 			item.PlatformObjectID = ""
 			item.Reason = "手动填写链接，无需绑定平台 ID"
 		}
@@ -70,7 +71,7 @@ func configurationObjectAvailability(configuration delivery.OceanEngineConfigura
 		return values
 	}
 	switch project.MarketingPurpose {
-	case "ecommerce", "lead_generation":
+	case "ecommerce", "lead_generation", "content_marketing":
 		appendReference("project.marketing_product_reference", project.MarketingProductReference)
 	case "application":
 		appendReference("project.application_reference", project.ApplicationReference)
@@ -84,6 +85,11 @@ func configurationObjectAvailability(configuration delivery.OceanEngineConfigura
 			appendReference(prefix+".delivery_identity.authorized_identity", promotion.DeliveryIdentity.AuthorizedIdentity)
 		}
 		appendReferences(prefix+".base_material_references", promotion.BaseMaterialReferences)
+		if project.MarketingPurpose == "content_marketing" && project.Carrier == "douyin_account" {
+			appendReference(prefix+".settings.category_reference", promotion.Settings.CategoryReference)
+			appendReference(prefix+".settings.brand_reference", promotion.Settings.BrandReference)
+			continue
+		}
 		appendReferences(prefix+".product_image_references", promotion.ProductImageReferences)
 		appendReference(prefix+".native_anchor_reference", promotion.NativeAnchorReference)
 		appendReference(prefix+".landing_page_reference", promotion.LandingPageReference)
@@ -145,6 +151,11 @@ func validManualDirectLink(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validApplicationDownloadURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && parsed.Host != "" && parsed.User == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && !strings.ContainsAny(value, " \t\r\n")
 }
 
 func platformReferenceID(ref delivery.StableReference) string {

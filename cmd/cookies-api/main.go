@@ -510,6 +510,7 @@ func main() {
 	}
 	var playwrightAdapter browserautomation.WorkerAdapter
 	if cfg.BrowserRPA.Enabled {
+		deliveryService.FieldCapabilities = &deliveryFieldCapabilityReader{command: strings.Fields(cfg.BrowserRPA.Command), sessionFile: cfg.BrowserRPA.EdgeSessionFile}
 		manifest, err := calibrationmanifest.Current()
 		if err != nil {
 			log.Fatalf("load OceanEngine calibration manifest: %v", err)

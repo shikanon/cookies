@@ -49,6 +49,17 @@ test('non-lead paths do not use the lead capability endpoint', () => {
   assert.equal(oceanEngineOptimizationTargetContext(project({ marketing_purpose: 'ecommerce' })), undefined)
 })
 
+test('content marketing requests its own product-based optimization goals', () => {
+  for (const carrier of ['douyin_account', 'orange_landing_page', 'owned_landing_page']) {
+    const context = oceanEngineOptimizationTargetContext(project({ marketing_purpose: 'content_marketing', carrier }))
+    assert.equal(context?.landing_type, 7)
+    assert.equal(context?.asset_type, 2)
+    assert.equal(context?.delivery_product, 5001)
+    assert.equal(context?.need_assets, false)
+    assert.equal(context?.multi_asset_types, undefined)
+  }
+})
+
 test('selection is valid only for the current immutable capability snapshot', () => {
   const selected = project({ optimization_target_reference: {
     namespace: 'oceanengine_capability', object_kind: 'optimization_target', scope: 'account:1', id: '2', state: 'resolved',

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -421,6 +422,21 @@ func (s Service) TransitionRun(ctx context.Context, organizationID contract.Orga
 	}
 	if !CanTransition(current.State, next) {
 		return BrowserRpaRun{}, ErrInvalidTransition
+	}
+	if current.State == RunPartial {
+		evidence, err := s.Repository.ListEvidence(ctx, organizationID, projectID, runID)
+		if err != nil {
+			return BrowserRpaRun{}, err
+		}
+		verified := false
+		for _, item := range evidence {
+			if item.StepID == runID+"-reidentified-v"+strconv.FormatInt(expectedVersion, 10)+"-list" && item.FieldReadback["read_only_reconciliation"] == "true" && item.FieldReadback["platform_write_performed"] == "false" && item.FieldReadback["field_reconciliation_status"] == "matched" {
+				verified = true
+			}
+		}
+		if !verified {
+			return BrowserRpaRun{}, ErrInvalidTransition
+		}
 	}
 	if _, active, err := s.Repository.ActiveKillSwitch(ctx, organizationID, current.Platform); err != nil {
 		return BrowserRpaRun{}, err
