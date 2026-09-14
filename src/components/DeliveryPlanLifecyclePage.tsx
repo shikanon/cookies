@@ -1,3 +1,4 @@
+import { DeliveryPlanFilling } from './DeliveryPlanFilling'
 import { DeliveryPlanPlatformFields } from './DeliveryPlanPlatformFields'
 import { ScheduleModeOptions } from './DeliveryChoiceFields'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -219,6 +220,8 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
           </div>
         </header>
 
+        <DeliveryPlanFilling key={`${projectId}:${selectedId}`} projectId={projectId} planId={isNew ? undefined : selectedId} draft={draft} changeDraft={changeDraft} disabled={busy || Boolean(selectedPlan?.currentVersion.readOnly)}/>
+
         <nav className="plan-tabs" aria-label="投放计划编辑顺序">
           {visibleSections.map(item => <button key={item} className={activeSection === item ? 'active' : ''} onClick={() => setSection(item)}>{item}</button>)}
         </nav>
@@ -376,6 +379,7 @@ function newPlanDraft(project: ProjectRecord, workbench: ReturnType<typeof usePr
 
 function draftFromVersion(version: DeliveryPlanVersion): DeliveryPlanDraft {
   return {
+    fillingHistory: version.fillingHistory,
     platformProject: version.platformProject ? structuredClone(version.platformProject) : undefined,
     name: version.name,
     objective: version.objective,

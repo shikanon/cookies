@@ -9519,3 +9519,13 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .delivery-config-object-badge.is-create { background: #e8f5ee; color: #21734b; }
 .delivery-config-object-badge.is-update { background: #fff2d9; color: #915e0c; }
 .delivery-config-object-badge.is-blocked { background: #fcebea; color: #ad3933; }
+
+.delivery-filling { margin: 12px 0; }
+.delivery-filling-body { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border-color, #ddd); border-radius: 8px; background: var(--surface, #fff); }
+.delivery-filling-body > label { display: grid; gap: 6px; }
+.delivery-filling-body > button { justify-self: start; }
+.delivery-filling-results { overflow-x: auto; }
+.delivery-filling-results table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.delivery-filling-results th, .delivery-filling-results td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
+.delivery-filling-results small { display: block; margin-top: 6px; color: #666; }
+.delivery-filling-results input[type="checkbox"] { width: 16px; height: 16px; }

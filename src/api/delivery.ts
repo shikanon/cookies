@@ -1,3 +1,4 @@
+import type { FillingAcceptance } from './deliveryFilling'
 import { changeConfigurationAccount, changeConfigurationProject } from '../lib/deliveryChoices'
 
 export class DeliveryApiError extends Error {
@@ -159,10 +160,11 @@ export type PlatformConfiguration = {
   configuration_provenance: { kind: 'manual' | 'rule' | 'decision_engine' | 'import'; generator_ref?: string; policy_version?: string }
   fact_provenance: { source: 'mock' | 'replay' | 'connector' | 'page_evidence'; snapshot_ref?: string; evidence_refs?: string[]; observed_at?: string }
   audit?: { created_by?: string; created_at?: string }
-  compilation_metadata: { field_evidence?: Array<{ field: string; state: 'observed' | 'sample_only' | 'operator_reviewed' | 'platform_pending' | 'blocked_by_event_asset' | 'write_validation_pending'; reason?: string }>; steps?: string[]; evidence_refs?: string[] }
+  compilation_metadata: { filling_history?: FillingAcceptance[]; field_evidence?: Array<{ field: string; state: 'observed' | 'sample_only' | 'operator_reviewed' | 'platform_pending' | 'blocked_by_event_asset' | 'write_validation_pending'; reason?: string }>; steps?: string[]; evidence_refs?: string[] }
 }
 
 export type DeliveryPlanDraft = {
+  fillingHistory?: FillingAcceptance[]
   platformProject?: NonNullable<PlatformConfiguration['payload']['ocean_engine']>['project']
   name: string
   objective: string
@@ -897,6 +899,7 @@ export const deliveryPlanApi = {
     const current = toDeliveryPlan(await deliveryPlanRequest<WireDeliveryPlan>(projectId, `/plans/${encodeURIComponent(planId)}`))
     if (current.currentVersionNumber !== expectedVersion) throw new DeliveryApiError('VERSION_CONFLICT', 409, '计划版本已更新，请刷新后重试。')
     const payload = toPlatformRuntimeDraft(projectId, planId, expectedVersion + 1, draft)
+    payload.platform_configuration.compilation_metadata = { ...current.currentVersion.platformConfiguration?.compilation_metadata, filling_history: draft.fillingHistory ?? current.currentVersion.platformConfiguration?.compilation_metadata.filling_history }
     const previous = current.currentVersion.platformConfiguration?.payload.ocean_engine
     const next = payload.platform_configuration.payload.ocean_engine
     if (previous && next) {
@@ -1506,7 +1509,7 @@ export function toPlatformRuntimeDraft(projectId: string, identity: string, vers
     ['valid_video_play', draft.tracking.monitoringValidVideoPlay],
   ].flatMap(([kind, url]) => url ? [{ namespace: 'oceanengine', object_kind: `monitoring_link_${kind}`, scope, id: url, state: 'resolved' as const }] : [])
   const landingPageReference: StableReference | undefined = draft.tracking.deliveryCarrier === 'owned_landing_page' && draft.tracking.landingPage ? {
-    namespace: 'cookies', object_kind: 'landing_page', scope, id: draft.tracking.landingPage, state: 'resolved',
+    namespace: 'cookies', object_kind: 'owned_landing_page', scope, id: draft.tracking.landingPage, state: 'resolved',
   } : undefined
   const materialReferences: StableReference[] = draft.creativeReferences.map(reference => reference.reference ? structuredClone(reference.reference) : ({
     namespace: 'cookies', object_kind: 'asset_version', scope,
@@ -1564,13 +1567,13 @@ export function toPlatformRuntimeDraft(projectId: string, identity: string, vers
           delivery_identity: { mode: draft.marketingPurpose === 'content_marketing' && draft.tracking.deliveryCarrier === 'douyin_account' ? 'all_douyin_accounts' : 'account_info' }, base_material_references: [reference], copy_items: [],
           product_name: draft.marketingProduct.name,
           landing_page_reference: landingPageReference,
-          settings: {}, promotion_name: `${draft.name}-${index + 1}`,
+          settings: { comments_enabled: false }, promotion_name: `${draft.name}-${index + 1}`,
         })),
       },
     },
     configuration_provenance: { kind: 'manual', generator_ref: 'delivery-plan-editor' },
     fact_provenance: { source: 'mock', snapshot_ref: `mock://platform-configuration/${identity}/${versionNumber}` },
-    compilation_metadata: { field_evidence: [{ field: 'project', state: 'operator_reviewed' }], steps: ['manual_mapping'], evidence_refs: [] },
+    compilation_metadata: { filling_history: draft.fillingHistory, field_evidence: [{ field: 'project', state: 'operator_reviewed' }], steps: ['manual_mapping'], evidence_refs: [] },
   }
   return { intent, platform_configuration: configuration }
 }
@@ -1705,6 +1708,7 @@ function toDeliveryPlanVersion(version: WireDeliveryPlanVersion): DeliveryPlanVe
     legacyConfiguration: version.three_tier_configuration ? true : undefined,
     deliveryIntent: intent,
     platformConfiguration: configuration,
+    fillingHistory: configuration?.compilation_metadata.filling_history,
   }
 }
 

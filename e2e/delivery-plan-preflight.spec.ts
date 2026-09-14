@@ -5,6 +5,60 @@ import { runtimeAccountId, seedRuntimeAccount } from './delivery-runtime-fixture
 const primaryProjectId = 'project_investor_precision_evidence'
 const otherProjectId = 'project_local'
 
+test('intelligent filling previews suggestions, protects edits, and persists accepted provenance across pages', async ({ page }) => {
+  seedRuntimeAccount(primaryProjectId)
+  await page.route('**/optimization-target-capabilities', route => route.fulfill({ json: { snapshot_id: 'filling-snapshot', context_hash: 'context', observed_at: new Date().toISOString(), options: [{ external_action: '19', semantic_key: 'click', display_name: '点击量' }] } }))
+  await page.route('**/strategy-packages', route => route.fulfill({ json: { items: [] } }))
+  let release: (() => void) | undefined
+  let delay = true
+  let calls = 0
+  await page.route('**/filling-suggestions', async route => {
+    calls += 1
+    if (delay) await new Promise<void>(resolve => { release = resolve })
+    await route.fulfill({ json: { suggestions: [{ field: 'name', value: '智能填写验收名称', reason: '沿用项目身份', sources: ['当前项目'] }], warnings: ['未选择已批准策略'], context_hash: 'hash', provider: 'ark_text', model: 'fixture-model' } })
+  })
+  await page.goto(`/projects/${primaryProjectId}/delivery/plans`)
+  await expect(page.getByRole('heading', { name: '计划草稿' })).toBeVisible()
+  await startNewPlan(page, `智能填写原名称 ${Date.now()}`)
+  await page.getByRole('button', { name: '目标与账户', exact: true }).click()
+  await page.getByRole('button', { name: '智能填写', exact: true }).click()
+  await page.getByRole('button', { name: '生成建议', exact: true }).click()
+  await expect.poll(() => calls).toBe(1)
+  await page.getByLabel('计划名称').fill('请求期间手工修改')
+  release?.()
+  await expect(page.getByRole('checkbox', { name: '应用名称建议' })).not.toBeChecked()
+  await page.getByRole('checkbox', { name: '应用名称建议' }).check()
+  await page.getByRole('button', { name: '应用所选建议' }).click()
+  await expect(page.getByText('待填写字段已被修改，请重新生成建议，避免覆盖当前编辑。')).toBeVisible()
+  await expect(page.getByLabel('计划名称')).toHaveValue('请求期间手工修改')
+  delay = false
+  await page.getByRole('button', { name: '生成建议', exact: true }).click()
+  await page.getByRole('checkbox', { name: '应用名称建议' }).check()
+  await page.getByRole('button', { name: '应用所选建议' }).click()
+  await expect(page.getByLabel('计划名称')).toHaveValue('智能填写验收名称')
+  await expect(page.getByRole('button', { name: '查看平台配置', exact: true })).toBeDisabled()
+  const create = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/plans'))
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  const saved = await (await create).json()
+  expect(saved.current_version.platform_configuration.compilation_metadata.filling_history[0].result.model).toBe('fixture-model')
+  const id = saved.id
+  await page.goto(`/projects/${primaryProjectId}/delivery/configuration?view=${encodeURIComponent('配置映射')}&plan_id=${id}`)
+  const panel = page.locator('.delivery-config-project-editor .delivery-filling').first()
+  await panel.getByRole('button', { name: '智能填写', exact: true }).click()
+  await expect(panel.getByText('已接受建议的来源（1 次）')).toBeVisible()
+  await panel.getByRole('button', { name: '生成建议', exact: true }).click()
+  await panel.getByRole('checkbox', { name: '应用名称建议' }).check()
+  await panel.getByRole('button', { name: '应用所选建议' }).click()
+  const update = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname.endsWith(`/plans/${id}`))
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  const updated = await (await update).json()
+  expect(updated.current_version.platform_configuration.payload.ocean_engine.promotions).toEqual(saved.current_version.platform_configuration.payload.ocean_engine.promotions)
+  expect(updated.current_version.platform_configuration.compilation_metadata.filling_history).toHaveLength(2)
+  await page.reload()
+  await page.locator('.delivery-config-project-editor .delivery-filling').first().getByRole('button', { name: '智能填写', exact: true }).click()
+  await expect(page.getByText('已接受建议的来源（2 次）')).toBeVisible()
+})
+
 test('DeliveryPlan editor creates immutable v2 intent/configuration history with authoritative preflight', async ({ page, request }) => {
   seedRuntimeAccount(primaryProjectId)
   await page.route('**/optimization-target-capabilities', route => route.fulfill({ json: { snapshot_id: 'e2e-snapshot', context_hash: 'e2e-context', observed_at: new Date().toISOString(), options: [{ external_action: '19', semantic_key: 'click', display_name: '点击量', need_assets: false }] } }))

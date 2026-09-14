@@ -466,7 +466,9 @@ func main() {
 	dependencies.AuthenticatedDomainMounts = append(dependencies.AuthenticatedDomainMounts,
 		httpserver.DomainMount{Pattern: "/api/media/v1/", Handler: mediaunderstandinghttp.New(*mediaUnderstandingService)})
 	connectorRepository := connector.MySQLRepository{DB: db}
+	fillingReader := &deliveryFillingReader{projects: projectService, assets: uploadService, catalog: connectorRepository}
 	deliveryService := &delivery.Service{
+		LoadFillingContext:      fillingReader.read,
 		Repository:              delivery.MySQLRepository{DB: db},
 		Projects:                projectService,
 		ConnectorSnapshots:      connectorRepository,
@@ -545,6 +547,14 @@ func main() {
 	// （COOKIES_STRATEGY_REAL_PROVIDER_ENABLED），这是个遗留：
 	// 想单独关掉素材洞察的提取而留着策略生成，现在做不到。
 	var textProvider *provider.Service
+	if cfg.DeliveryFillingEnabled {
+		adapter, err := buildTextAdapter(cfg, db)
+		if err != nil {
+			log.Fatalf("configure Delivery filling text adapter: %v", err)
+		}
+		deliveryService.FillingText = &provider.Service{TextAdapter: adapter}
+		deliveryService.FillingModelAlias = cfg.Strategy.TextModelAlias
+	}
 	if cfg.Strategy.RealProviderEnabled {
 		textAdapter, err := buildTextAdapter(cfg, db)
 		if err != nil {
@@ -650,6 +660,7 @@ func main() {
 	var connectorPatrol *connector.PatrolRunner
 	if cfg.OceanEngine.Enabled && sessionCipher != nil {
 		connectorRepository.Cipher = sessionCipher
+		fillingReader.catalog = connectorRepository
 		connectorSync := connector.Synchronizer{
 			Writer: connectorRepository,
 			Readers: oceanEngineConnectorReaderFactory{
@@ -663,6 +674,7 @@ func main() {
 			Cipher: sessionCipher,
 		}
 		connectorAccountSessions := connector.AccountSessionService{Store: connectorRepository, Cipher: sessionCipher}
+		fillingReader.capabilities = &connectorSync
 		connectorAccounts := connector.AccountService{Store: connectorRepository, Sessions: connectorRepository, Probe: oceanEngineAccountProbe{accountSessions: connectorRepository, cipher: sessionCipher, baseURL: cfg.OceanEngine.BaseURL, client: &http.Client{Timeout: 30 * time.Second}}}
 		if cfg.OceanEngine.PatrolEnabled {
 			connectorPatrol = &connector.PatrolRunner{Sessions: connectorRepository, Syncer: connectorSync, LookbackDays: cfg.OceanEngine.PatrolLookbackDays, Timeout: 15 * time.Minute}
@@ -773,6 +785,7 @@ func main() {
 			Writer: productEventWriter, NewID: func() (string, error) { return ids.New("strategyproductevent") },
 		}
 		knowledgeService.ResearchCompletion = strategyService
+		fillingReader.strategies = &strategyService
 		if err := strategyService.EnsureCreativeBusinessCatalog(context.Background()); err != nil {
 			log.Fatalf("seed Strategy creative business catalog: %v", err)
 		}

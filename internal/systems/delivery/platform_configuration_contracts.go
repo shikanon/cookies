@@ -224,9 +224,10 @@ type PlatformFieldEvidence struct {
 }
 
 type CompilationMetadata struct {
-	FieldEvidence []PlatformFieldEvidence `json:"field_evidence,omitempty"`
-	Steps         []string                `json:"steps,omitempty"`
-	EvidenceRefs  []string                `json:"evidence_refs,omitempty"`
+	FillingHistory []FillingAcceptance     `json:"filling_history,omitempty"`
+	FieldEvidence  []PlatformFieldEvidence `json:"field_evidence,omitempty"`
+	Steps          []string                `json:"steps,omitempty"`
+	EvidenceRefs   []string                `json:"evidence_refs,omitempty"`
 }
 
 // CalibrationManifestBinding is a frozen reference to redacted page-observation
