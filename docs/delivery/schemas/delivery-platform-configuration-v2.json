@@ -52,6 +52,169 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "filling_history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "result",
+              "accepted_at"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "result": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "suggestions",
+                  "warnings",
+                  "context_hash",
+                  "provider",
+                  "model"
+                ],
+                "properties": {
+                  "finance": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["rule_version", "entries", "warnings"],
+                    "properties": {
+                      "rule_version": {"type": "string"},
+                      "warnings": {"type": "array", "items": {"type": "string"}},
+                      "entries": {"type": "array", "items": {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["field", "amount_minor", "minimum_minor", "maximum_minor", "basis", "sources"],
+                        "properties": {
+                          "field": {"enum": ["daily_budget", "bid", "project_bid"]},
+                          "amount_minor": {"type": "integer", "minimum": 1},
+                          "minimum_minor": {"type": "integer", "minimum": 1},
+                          "maximum_minor": {"type": "integer", "minimum": 1},
+                          "basis": {"type": "string"},
+                          "sources": {"type": "array", "items": {"type": "string"}}
+                        }
+                      }}
+                    }
+                  },
+                  "suggestions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "field",
+                        "value",
+                        "reason",
+                        "sources"
+                      ],
+                      "properties": {
+                        "field": {
+                          "enum": [
+                            "name",
+                            "objective",
+                            "account",
+                            "marketing_purpose",
+                            "product",
+                            "materials",
+                            "carrier",
+                            "optimization_target",
+                            "product_name",
+                            "selling_points",
+                            "source_label", "search_keywords", "search_terms", "regions", "age_ranges", "gender", "smart_expansion", "search_expansion",
+                            "call_to_action",
+                            "category",
+                            "product_images",
+                            "copy",
+                            "total_budget",
+                            "daily_budget",
+                            "bid", "project_bid",
+                            "schedule",
+                            "landing_page",
+                            "monitoring",
+                            "identity"
+                          ]
+                        },
+                        "value": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "object"
+                            },
+                            {
+                              "type": "array"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "sources": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "warnings": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "context_hash": {
+                    "type": "string"
+                  },
+                  "provider": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "route_revision": {
+                    "type": "string"
+                  },
+                  "strategy": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "package_id",
+                      "version",
+                      "content_hash"
+                    ],
+                    "properties": {
+                      "package_id": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "content_hash": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "accepted_at": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "field_evidence": {
           "type": "array",
           "items": { "$ref": "#/$defs/PlatformFieldEvidence" }

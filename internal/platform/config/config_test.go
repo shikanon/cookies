@@ -6,6 +6,17 @@ import (
 	"testing"
 )
 
+func TestDeliveryFillingRequiresRealTextProvider(t *testing.T) {
+	value, err := FromLookup(mapLookup(nil))
+	if err != nil || value.DeliveryFillingEnabled {
+		t.Fatalf("unsafe default: %v", err)
+	}
+	_, err = FromLookup(mapLookup(map[string]string{"COOKIES_DELIVERY_FILLING_ENABLED": "true"}))
+	if err == nil || !strings.Contains(err.Error(), "COOKIES_DELIVERY_FILLING_ENABLED requires a real text adapter") {
+		t.Fatalf("fake provider accepted: %v", err)
+	}
+}
+
 func TestStrategyRolloutDefaultsAreSafe(t *testing.T) {
 	t.Parallel()
 	value, err := FromLookup(mapLookup(nil))

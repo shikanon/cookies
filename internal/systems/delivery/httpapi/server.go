@@ -98,6 +98,7 @@ type Server struct {
 
 func New(app Application) *Server {
 	server := &Server{app: app, mux: http.NewServeMux()}
+	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/filling-suggestions", server.suggestFilling)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/plans", server.listPlans)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/plans", server.createPlan)
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/plans/{plan_id}", server.getPlan)

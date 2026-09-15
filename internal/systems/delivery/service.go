@@ -12,6 +12,7 @@ import (
 	"github.com/shikanon/cookies/internal/platform/connector"
 	"github.com/shikanon/cookies/internal/platform/contract"
 	"github.com/shikanon/cookies/internal/platform/ids"
+	"github.com/shikanon/cookies/internal/platform/provider"
 )
 
 const (
@@ -364,6 +365,10 @@ type Repository interface {
 }
 
 type Service struct {
+	FillingText             *provider.Service
+	FillingModelAlias       string
+	LoadFillingImages       func(context.Context, contract.ActorContext, contract.ProjectID, FillingRequest, *FillingContext) ([]provider.TextMessage, error)
+	LoadFillingContext      func(context.Context, contract.ActorContext, contract.ProjectID, FillingRequest) (FillingContext, error)
 	FieldCapabilities       FieldCapabilityReader
 	Repository              Repository
 	Projects                ActiveProjectResolver

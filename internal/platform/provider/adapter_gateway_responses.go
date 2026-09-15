@@ -38,16 +38,23 @@ func (a *AdapterGatewayTextAdapter) generateResponses(
 	request TextAdapterRequest,
 	route GatewayRouteSnapshot,
 	token string,
-	messages []map[string]string,
 ) (SynchronousResult, error) {
-	input := make([]map[string]string, 0, len(messages))
-	instructions := make([]string, 0, 2)
-	for _, message := range messages {
-		if message["role"] == string(TextRoleSystem) {
-			instructions = append(instructions, message["content"])
-		} else {
-			input = append(input, message)
+	input := make([]map[string]any, 0, len(request.Messages))
+	instructions := []string{}
+	for _, message := range request.Messages {
+		if message.Role == TextRoleSystem {
+			instructions = append(instructions, message.Content)
+			continue
 		}
+		var content any = message.Content
+		if len(message.Images) > 0 {
+			parts := []map[string]any{{"type": "input_text", "text": message.Content}}
+			for _, img := range message.Images {
+				parts = append(parts, map[string]any{"type": "input_image", "image_url": img.dataURL()})
+			}
+			content = parts
+		}
+		input = append(input, map[string]any{"role": message.Role, "content": content})
 	}
 	body := map[string]any{"model": route.UpstreamModel, "input": input}
 	if len(instructions) > 0 {

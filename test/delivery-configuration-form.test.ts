@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { marketingPurposeOptions } from '../src/lib/deliveryChoices'
 
-const component = readFileSync(resolve(import.meta.dirname, '../src/components/DeliveryConfigurationPage.tsx'), 'utf8')
+const component = ['../src/components/DeliveryConfigurationPage.tsx', '../src/components/DeliveryObjectPickers.tsx', '../src/components/DeliveryChoiceFields.tsx', '../src/components/useDeliveryCatalog.ts', '../src/lib/deliveryChoices.ts'].map(file => readFileSync(resolve(import.meta.dirname, file), 'utf8')).join('\n')
 const executionWorkspace = readFileSync(resolve(import.meta.dirname, '../src/features/browser-rpa-execution/BrowserRpaExecutionWorkspace.tsx'), 'utf8')
 const styles = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8')
 
@@ -32,10 +33,11 @@ test('manual direct links do not require an OceanEngine object binding', () => {
 
 test('enumerated Runner paths and dynamic bid limits are visible before execution', () => {
   assert.match(component, /当前项目路径不能生成 Runner 计划/)
-  assert.match(component, /<option value="lead_generation">销售线索<\/option>/)
-  assert.match(component, /<option value="application" disabled>应用（暂不支持）<\/option>/)
-  assert.match(component, /<option value="product_catalog">商品<\/option>/)
-  assert.match(component, /<option value="content_marketing">内容营销<\/option>/)
+  assert.deepEqual(marketingPurposeOptions, [
+    { value: 'ecommerce', label: '电商' }, { value: 'lead_generation', label: '销售线索' },
+    { value: 'application', label: '应用（暂不支持）', disabled: true },
+    { value: 'product_catalog', label: '商品' }, { value: 'content_marketing', label: '内容营销' },
+  ])
   assert.match(component, /value="short_video_image_text"/)
   assert.match(component, /resolveOceanEngineBidConstraint/)
   assert.match(component, /项目出价必须在 \$\{formatOceanEngineMoneyRange\(projectBidConstraint\)\}之间/)
@@ -79,7 +81,7 @@ test('product targeting is limited to the product-catalog branch and uses one ex
   assert.match(component, /<option value="region_match">地域匹配<\/option><option value="delivery_conditions">商品投放条件<\/option>/)
   assert.doesNotMatch(component, /商品定向 · RTA 跳转/)
   assert.doesNotMatch(component, /商品定向 · 地域匹配/)
-  assert.match(component, /marketingPurpose === 'product_catalog' \? \{\} : \{ product_targeting: undefined \}/)
+  assert.match(component, /if \(next.marketing_purpose !== 'product_catalog'\) next.product_targeting = undefined/)
 })
 
 test('real execution selects one immutable Web API or Playwright driver', () => {

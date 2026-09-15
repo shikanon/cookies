@@ -34,22 +34,23 @@ type LocalIdentity struct {
 }
 
 type Config struct {
-	Environment        Environment
-	HTTPAddr           string
-	MySQL              MySQL
-	Auth               Auth
-	ObjectStorage      ObjectStorage
-	Scanner            Scanner
-	Media              Media
-	MediaUnderstanding MediaUnderstanding
-	Provider           Provider
-	Creative           Creative
-	Strategy           Strategy
-	Research           Research
-	Miyun              Miyun
-	OceanEngine        OceanEngine
-	BrowserRPA         BrowserRPA
-	LocalIdentity      *LocalIdentity
+	DeliveryFillingEnabled bool
+	Environment            Environment
+	HTTPAddr               string
+	MySQL                  MySQL
+	Auth                   Auth
+	ObjectStorage          ObjectStorage
+	Scanner                Scanner
+	Media                  Media
+	MediaUnderstanding     MediaUnderstanding
+	Provider               Provider
+	Creative               Creative
+	Strategy               Strategy
+	Research               Research
+	Miyun                  Miyun
+	OceanEngine            OceanEngine
+	BrowserRPA             BrowserRPA
+	LocalIdentity          *LocalIdentity
 }
 
 // BrowserRPA configures the Playwright-based browser automation executor that
@@ -351,6 +352,10 @@ func parseDotEnv(reader io.Reader) (map[string]string, error) {
 }
 
 func FromLookup(lookup func(string) (string, bool)) (Config, error) {
+	deliveryFillingEnabled, err := strictBoolValueOr(lookup, "COOKIES_DELIVERY_FILLING_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
 	environment := Environment(valueOr(lookup, "COOKIES_ENV", string(EnvironmentLocal)))
 	strategyEnabled, err := strictBoolValueOr(lookup, "COOKIES_STRATEGY_ENABLED", true)
 	if err != nil {
@@ -522,8 +527,9 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 		browserRpaScript = "scripts/browser-rpa-runner.ts"
 	}
 	config := Config{
-		Environment: environment,
-		HTTPAddr:    valueOr(lookup, "COOKIES_HTTP_ADDR", ":8080"),
+		Environment:            environment,
+		DeliveryFillingEnabled: deliveryFillingEnabled,
+		HTTPAddr:               valueOr(lookup, "COOKIES_HTTP_ADDR", ":8080"),
 		MySQL: MySQL{
 			DSN:          valueOr(lookup, "COOKIES_MYSQL_DSN", "cookies:cookies_local_development_only@tcp(127.0.0.1:3307)/cookies?parseTime=true&multiStatements=true"),
 			MaxOpenConns: intValueOr(lookup, "COOKIES_MYSQL_MAX_OPEN_CONNS", 10),
@@ -908,6 +914,9 @@ func (c Config) Validate() error {
 	}
 	if c.Provider.SpeechAdapter != "fake" && c.Provider.SpeechAdapter != "volcengine_speech" && c.Provider.SpeechAdapter != "minimax_speech" {
 		return fmt.Errorf("COOKIES_PROVIDER_SPEECH_ADAPTER must be fake, volcengine_speech, or minimax_speech")
+	}
+	if c.DeliveryFillingEnabled && c.Provider.TextAdapter != "adapter_gateway" && c.Provider.TextAdapter != "ark_text" {
+		return fmt.Errorf("COOKIES_DELIVERY_FILLING_ENABLED requires a real text adapter")
 	}
 	if c.Strategy.RealProviderEnabled && c.Provider.TextAdapter != "adapter_gateway" && c.Provider.TextAdapter != "ark_text" {
 		return fmt.Errorf("COOKIES_STRATEGY_REAL_PROVIDER_ENABLED requires a real text adapter")

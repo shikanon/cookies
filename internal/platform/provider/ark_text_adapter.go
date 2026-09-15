@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,7 +45,7 @@ func NewArkTextAdapter(config ArkTextConfig) (*ArkTextAdapter, error) {
 		apiKey:  config.APIKey,
 		model:   config.Model,
 		baseURL: baseURL,
-		client:  &http.Client{Timeout: 45 * time.Second},
+		client:  &http.Client{Timeout: 10 * time.Minute},
 	}, nil
 }
 
@@ -85,6 +86,12 @@ func (a *ArkTextAdapter) GenerateText(ctx context.Context, request TextAdapterRe
 
 	response, err := a.client.Do(httpRequest)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return SynchronousResult{}, fmt.Errorf("Ark text request timed out: %w", context.DeadlineExceeded)
+		}
+		if errors.Is(err, context.Canceled) {
+			return SynchronousResult{}, context.Canceled
+		}
 		return SynchronousResult{}, fmt.Errorf("Ark text request failed")
 	}
 	defer response.Body.Close()

@@ -4,10 +4,31 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
+	"time"
 )
+
+func TestArkTextAdapterAllowsLongResponsesAndPreservesTimeout(t *testing.T) {
+	adapter, err := NewArkTextAdapter(ArkTextConfig{APIKey: "secret-key", Model: "doubao-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.client.Timeout < 10*time.Minute {
+		t.Fatalf("model response timeout too short: %s", adapter.client.Timeout)
+	}
+	adapter.client.Transport = roundTripper(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})
+	_, err = adapter.GenerateText(context.Background(), TextAdapterRequest{
+		ModelAlias: "cookies.text.standard", Messages: []TextMessage{{Role: TextRoleUser, Content: "Return JSON."}},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || bytes.Contains([]byte(err.Error()), []byte("secret-key")) {
+		t.Fatalf("expected sanitized timeout, got %v", err)
+	}
+}
 
 func TestArkTextAdapterSendsMessagesAndNormalizesTextResponse(t *testing.T) {
 	t.Parallel()
@@ -118,5 +139,34 @@ func TestArkTextAdapterRejectsInvalidResponseWithoutExposingCredential(t *testin
 	})
 	if err == nil || bytes.Contains([]byte(err.Error()), []byte("secret-key")) {
 		t.Fatalf("GenerateText() error = %v, want sanitized rejection", err)
+	}
+}
+
+func TestArkTextSendsImageWithCandidateCaption(t *testing.T) {
+	adapter, _ := NewArkTextAdapter(ArkTextConfig{APIKey: "test", Model: "vision"})
+	adapter.client.Transport = roundTripper(func(request *http.Request) (*http.Response, error) {
+		var body struct {
+			Messages []struct {
+				Content []struct {
+					Type     string `json:"type"`
+					Text     string `json:"text"`
+					ImageURL struct {
+						URL string `json:"url"`
+					} `json:"image_url"`
+				} `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		parts := body.Messages[0].Content
+		if len(parts) != 2 || parts[0].Text != "candidate:7" || parts[1].ImageURL.URL != "data:image/jpeg;base64,aW1hZ2U=" {
+			t.Fatalf("image content lost: %+v", parts)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewBufferString(`{"choices":[{"message":{"content":"ok"}}]}`)), Header: make(http.Header)}, nil
+	})
+	_, err := adapter.GenerateText(context.Background(), TextAdapterRequest{ModelAlias: "text", Messages: []TextMessage{{Role: TextRoleUser, Content: "candidate:7", Images: []TextImage{{MIMEType: "image/jpeg", Data: []byte("image")}}}}})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
