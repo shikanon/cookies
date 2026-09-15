@@ -466,9 +466,10 @@ func main() {
 	dependencies.AuthenticatedDomainMounts = append(dependencies.AuthenticatedDomainMounts,
 		httpserver.DomainMount{Pattern: "/api/media/v1/", Handler: mediaunderstandinghttp.New(*mediaUnderstandingService)})
 	connectorRepository := connector.MySQLRepository{DB: db}
-	fillingReader := &deliveryFillingReader{projects: projectService, assets: uploadService, catalog: connectorRepository}
+	fillingReader := &deliveryFillingReader{projects: projectService, assets: uploadService, catalog: connectorRepository, frames: mediaUnderstandingService.Frames}
 	deliveryService := &delivery.Service{
 		LoadFillingContext:      fillingReader.read,
+		LoadFillingImages:       fillingReader.images,
 		Repository:              delivery.MySQLRepository{DB: db},
 		Projects:                projectService,
 		ConnectorSnapshots:      connectorRepository,
@@ -673,8 +674,8 @@ func main() {
 			},
 			Cipher: sessionCipher,
 		}
+		fillingReader.previews = connectorSync
 		connectorAccountSessions := connector.AccountSessionService{Store: connectorRepository, Cipher: sessionCipher}
-		fillingReader.capabilities = &connectorSync
 		connectorAccounts := connector.AccountService{Store: connectorRepository, Sessions: connectorRepository, Probe: oceanEngineAccountProbe{accountSessions: connectorRepository, cipher: sessionCipher, baseURL: cfg.OceanEngine.BaseURL, client: &http.Client{Timeout: 30 * time.Second}}}
 		if cfg.OceanEngine.PatrolEnabled {
 			connectorPatrol = &connector.PatrolRunner{Sessions: connectorRepository, Syncer: connectorSync, LookbackDays: cfg.OceanEngine.PatrolLookbackDays, Timeout: 15 * time.Minute}

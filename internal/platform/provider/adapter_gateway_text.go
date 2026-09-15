@@ -42,15 +42,15 @@ func (a *AdapterGatewayTextAdapter) GenerateText(ctx context.Context, request Te
 	if err != nil {
 		return SynchronousResult{}, gatewayExecutionError("MODEL_AUTH_UNAVAILABLE", "Adapter gateway credential could not be resolved")
 	}
-	messages := make([]map[string]string, 0, len(request.Messages)+1)
+	messages := make([]map[string]any, 0, len(request.Messages)+1)
 	for _, message := range request.Messages {
 		if err := message.Validate(); err != nil {
 			return SynchronousResult{}, err
 		}
-		messages = append(messages, map[string]string{"role": string(message.Role), "content": message.Content})
+		messages = append(messages, map[string]any{"role": string(message.Role), "content": message.chatContent()})
 	}
 	if route.TextAPIMode == TextAPIResponses {
-		return a.generateResponses(ctx, request, route, token, messages)
+		return a.generateResponses(ctx, request, route, token)
 	}
 	body := map[string]any{"model": route.UpstreamModel, "messages": messages}
 	if len(request.OutputJSONSchema) > 0 {
@@ -195,10 +195,10 @@ func (a *AdapterGatewayTextAdapter) InspectTextRoute(ctx context.Context, organi
 	}, nil
 }
 
-func prependSchemaInstruction(messages []map[string]string, schema json.RawMessage) []map[string]string {
-	instruction := map[string]string{
+func prependSchemaInstruction(messages []map[string]any, schema json.RawMessage) []map[string]any {
+	instruction := map[string]any{
 		"role":    "system",
 		"content": "Return exactly one JSON object matching this JSON Schema. Do not use Markdown fences or add commentary.\n" + string(schema),
 	}
-	return append([]map[string]string{instruction}, messages...)
+	return append([]map[string]any{instruction}, messages...)
 }

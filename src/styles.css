@@ -9521,11 +9521,17 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .delivery-config-object-badge.is-blocked { background: #fcebea; color: #ad3933; }
 
 .delivery-filling { margin: 12px 0; }
-.delivery-filling-body { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border-color, #ddd); border-radius: 8px; background: var(--surface, #fff); }
-.delivery-filling-body > label { display: grid; gap: 6px; }
-.delivery-filling-body > button { justify-self: start; }
-.delivery-filling-results { overflow-x: auto; }
-.delivery-filling-results table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.delivery-filling-results th, .delivery-filling-results td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
-.delivery-filling-results small { display: block; margin-top: 6px; color: #666; }
-.delivery-filling-results input[type="checkbox"] { width: 16px; height: 16px; }
+.delivery-filling-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 24px; background: var(--panel, #fff); color: inherit; }
+.delivery-filling-dialog::backdrop { background: rgb(15 23 42 / 40%); }
+.delivery-filling-dialog header, .delivery-filling-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.delivery-filling-dialog header h3 { margin: 0; }
+.delivery-filling-dialog header button { background: none; border: 0; font-size: 24px; }
+.delivery-filling-dialog fieldset { display: grid; gap: 16px; padding: 0; border: 0; margin: 20px 0; }
+.delivery-filling-dialog label { display: grid; gap: 6px; }
+.delivery-filling-dialog input, .delivery-filling-dialog textarea, .delivery-filling-dialog select { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+.delivery-filling-counts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.delivery-filling-dialog footer { justify-content: flex-end; }
+.delivery-filling-dialog .delivery-filling-finance-toggle { display: flex; align-items: center; gap: 8px; }
+.delivery-filling-dialog .delivery-filling-finance-toggle input { width: auto; }
+.delivery-filling-finance { font-size: 13px; line-height: 1.6; }
+.delivery-filling-finance small { display: block; color: var(--muted); }

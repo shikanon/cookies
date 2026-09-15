@@ -1,77 +1,95 @@
 import { useEffect, useRef, useState } from 'react'
-import { deliveryFillingApi, type FillingAcceptance, type FillingField, type FillingRequest, type FillingResult, type FillingStrategy } from '../api/deliveryFilling'
-import { acceptedFilling, fillingContextKey, fillingFieldDisplay, fillingLabels, isEmptyFillingValue } from '../lib/deliveryFilling'
+import { deliveryFillingApi, type FillingAcceptance, type FillingRequest, type FillingFinance, type FillingStrategy } from '../api/deliveryFilling'
+import { automaticFilling, fillingContextKey, fillingLabels } from '../lib/deliveryFilling'
 
-export function DeliveryFillingPanel({ projectId, request, disabled, history = [], onApply }: {
-  projectId: string; request: FillingRequest; disabled?: boolean; history?: FillingAcceptance[]; onApply: (acceptance: FillingAcceptance) => void;
+export function DeliveryFillingPanel({ projectId, request, disabled, financialHistory, targets, onTargetChange, onApply }: {
+  targets: Array<{ id: string; label: string; disabled: boolean }>; onTargetChange: (id: string) => void;
+  projectId: string; request: FillingRequest; disabled?: boolean; financialHistory?: FillingFinance; onApply: (acceptance: FillingAcceptance) => void;
 }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const pending = useRef<AbortController | undefined>(undefined)
+  const applyLatest = useRef(onApply)
+  applyLatest.current = onApply
+  const latest = useRef(request)
+  latest.current = request
   const [open, setOpen] = useState(false)
-  const [strategy, setStrategy] = useState<FillingStrategy>()
-  const [strategies, setStrategies] = useState<Array<FillingStrategy & { label: string }>>([])
-  const [strategyError, setStrategyError] = useState('')
-  const [search, setSearch] = useState('')
-  const [retry, setRetry] = useState(0)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
-  const [response, setResponse] = useState<{ result: FillingResult; request: FillingRequest }>()
-  const [selected, setSelected] = useState<FillingField[]>([])
-  const generation = useRef(0)
-  const latest = useRef<FillingRequest>({ ...request, strategy, search })
-  latest.current = { ...request, strategy: strategy ? { package_id: strategy.package_id, version: strategy.version, content_hash: strategy.content_hash } : undefined, search }
-  const key = `${projectId}:${fillingContextKey(latest.current)}`
-  useEffect(() => { generation.current += 1; setBusy(false); setResponse(undefined); setSelected([]) }, [key])
-  useEffect(() => { setStrategy(undefined); setStrategies([]) }, [projectId])
+  const [strategy, setStrategy] = useState('')
+  const [strategies, setStrategies] = useState<Array<FillingStrategy & { label: string }>>([])
+  const [strategyError, setStrategyError] = useState('')
+  const [retry, setRetry] = useState(0)
+  const [search, setSearch] = useState('')
+  const [instructions, setInstructions] = useState('')
+  const [materialCount, setMaterialCount] = useState(1)
+  const [copyCount, setCopyCount] = useState(3)
+  const [fillFinance, setFillFinance] = useState(false)
+  const [unitWeight, setUnitWeight] = useState(1)
+  const [finance, setFinance] = useState<FillingFinance | undefined>(financialHistory)
+  useEffect(() => { setFinance(financialHistory) }, [financialHistory])
+  useEffect(() => { if (open) dialog.current?.showModal(); else dialog.current?.close() }, [open])
   useEffect(() => {
     if (!open) return
     let active = true
     setStrategyError('')
-    void deliveryFillingApi.strategies(projectId).then(items => { if (active) setStrategies(items) }).catch(error => {
-      if (active) setStrategyError(error instanceof Error ? error.message : '策略读取失败。')
-    })
+    void deliveryFillingApi.strategies(projectId).then(items => { if (active) setStrategies(items) }).catch(() => { if (active) setStrategyError('策略读取失败，可重试或不使用策略。') })
     return () => { active = false }
-  }, [projectId, open, retry])
-  useEffect(() => () => { generation.current += 1 }, [])
-
+  }, [open, projectId, retry])
+  useEffect(() => { pending.current?.abort(); setBusy(false); setOpen(false); setStrategy(''); setNotice(''); return () => pending.current?.abort() }, [projectId, request.plan_id, disabled])
+  useEffect(() => { pending.current?.abort(); setBusy(false); setNotice('') }, [request.target_id])
+  const close = () => { pending.current?.abort(); setBusy(false); setOpen(false) }
   const generate = async () => {
-    const id = ++generation.current
-    const snapshot = structuredClone(latest.current)
-    setBusy(true); setNotice(''); setResponse(undefined)
+    if (disabled || busy) return
+    const controller = new AbortController()
+    pending.current = controller
+    const selected = strategies.find(item => `${item.package_id}@${item.version}` === strategy)
+    const options = { finance: fillFinance ? { unit_weight: unitWeight } : undefined, instructions, search, material_count: materialCount, copy_count: copyCount, strategy: selected ? { package_id: selected.package_id, version: selected.version, content_hash: selected.content_hash } : undefined }
+    const snapshot = structuredClone({ ...latest.current, ...options })
+    setBusy(true); setNotice('')
     try {
-      const result = await deliveryFillingApi.suggest(projectId, snapshot)
-      if (id !== generation.current || fillingContextKey(snapshot) !== fillingContextKey(latest.current)) return
-      setResponse({ result, request: snapshot })
-      setSelected(result.suggestions.filter(item => !['total_budget', 'daily_budget', 'bid', 'schedule'].includes(item.field) && isEmptyFillingValue(snapshot.current[item.field])).map(item => item.field))
-    } catch (error) { if (id === generation.current) setNotice(error instanceof Error ? error.message : '生成失败，请重试。') }
-    finally { if (id === generation.current) setBusy(false) }
-  }
-  const apply = () => {
-    if (!response || disabled) return
-    try {
-      const acceptance = acceptedFilling(response.result, response.request, latest.current, selected)
-      onApply(acceptance)
-      setResponse(undefined)
-      setNotice(acceptance.result.suggestions.length < selected.length ? '已应用上层字段。请按新上下文重新生成其他建议，再保存草稿。' : '已应用所选建议，请检查并保存草稿。')
-    } catch (error) { setNotice(error instanceof Error ? error.message : '应用失败。') }
+      const result = await deliveryFillingApi.suggest(projectId, snapshot, controller.signal)
+      if (controller.signal.aborted) return
+      const current = { ...latest.current, ...options }
+      if (fillingContextKey(snapshot) !== fillingContextKey(current)) throw new Error('账户、产品或单元已变化，请重新生成。')
+      const { acceptance, skipped } = automaticFilling(result, snapshot, current)
+      if (acceptance.result.suggestions.length) applyLatest.current(acceptance)
+      setFinance(acceptance.result.finance)
+      setNotice([acceptance.result.suggestions.length ? `已填写 ${acceptance.result.suggestions.length} 项，请检查并保存草稿。` : '没有可填写的内容。', skipped.length ? `已保留期间手工修改的${skipped.join('、')}。` : '', ...result.warnings].filter(Boolean).join(' '))
+      setOpen(false)
+    } catch (error) { if (!controller.signal.aborted) setNotice(error instanceof Error ? error.message : '智能填写失败，请重试。') }
+    finally { if (pending.current === controller) setBusy(false) }
   }
   return <section className="delivery-filling">
-    <button type="button" className="secondary-button" disabled={disabled} aria-expanded={open} onClick={() => setOpen(value => !value)}>智能填写</button>
-    {open ? <div className="delivery-filling-body">
-      <p>先查看建议，再选择需要填写的字段。已有内容不会自动覆盖。</p>
-      <label><span>约束策略（可选）</span><select value={strategy ? `${strategy.package_id}@${strategy.version}` : ''} onChange={event => setStrategy(strategies.find(item => `${item.package_id}@${item.version}` === event.target.value))}>
-        <option value="">不使用已批准策略</option>{strategies.map(item => <option key={`${item.package_id}@${item.version}`} value={`${item.package_id}@${item.version}`}>{item.label}</option>)}
-      </select></label>
-      {strategyError ? <p role="alert">{strategyError}<button type="button" onClick={() => setRetry(value => value + 1)}>重试读取策略</button></p> : null}
-      <label><span>目录搜索（可选）</span><input value={search} maxLength={100} placeholder="产品或素材名称；留空读取全部候选" onChange={event => setSearch(event.target.value)}/></label>
-      <button type="button" className="primary-button" disabled={busy || disabled} onClick={() => void generate()}>{busy ? '正在生成建议…' : '生成建议'}</button>
-      {response ? <>
-        {response.result.warnings.map((warning, index) => <p key={index}>{warning}</p>)}
-        {!response.result.suggestions.length ? <p role="status">暂无有依据的填写建议，请补充项目资料或缩小目录搜索范围。</p> : <div className="delivery-filling-results"><table><thead><tr><th>应用</th><th>字段</th><th>当前值</th><th>建议值</th><th>依据</th></tr></thead><tbody>
-          {response.result.suggestions.map(item => <tr key={item.field}><td><input type="checkbox" aria-label={`应用${fillingLabels[item.field]}建议`} checked={selected.includes(item.field)} onChange={event => setSelected(values => event.target.checked ? [...values, item.field] : values.filter(field => field !== item.field))}/></td><th>{fillingLabels[item.field]}</th><td>{fillingFieldDisplay(item.field, latest.current.current[item.field])}</td><td>{fillingFieldDisplay(item.field, item.value)}</td><td>{item.reason}<small>{item.sources.join('；')}</small></td></tr>)}
-        </tbody></table></div>}
-        <button type="button" className="primary-button" disabled={disabled || !selected.length} onClick={apply}>应用所选建议</button>
-      </> : null}
-      {notice ? <p role="status">{notice}</p> : null}
-      {history.length ? <details><summary>已接受建议的来源（{history.length} 次）</summary>{history.map((item, index) => <p key={index}>{item.result.suggestions.map(suggestion => fillingLabels[suggestion.field]).join('、')} · {item.result.model} · {item.result.strategy ? `策略 ${item.result.strategy.package_id} V${item.result.strategy.version}` : '项目与目录'} · {new Date(item.accepted_at).toLocaleString('zh-CN')}</p>)}</details> : null}
+    <button type="button" className="secondary-button" disabled={disabled} onClick={() => { setNotice(''); setOpen(true) }}>智能填写</button>
+    {!open && notice ? <p role="status">{notice}</p> : null}
+    {!open && finance ? <div className="delivery-filling-finance" aria-label="预算与出价填写记录">
+      {finance.entries.length ? <><strong>本次金额填写记录</strong><ul>{finance.entries.map(entry => <li key={entry.field}>{fillingLabels[entry.field]}：¥{(entry.amount_minor / 100).toFixed(2)}{entry.field === 'daily_budget' ? ' / 天' : `（历史区间 ¥${(entry.minimum_minor / 100).toFixed(2)}～¥${(entry.maximum_minor / 100).toFixed(2)}）`}<small>{entry.basis}</small></li>)}</ul></> : null}
+      {finance.warnings.map((warning, index) => <p key={index}>{warning}</p>)}
     </div> : null}
+    <dialog ref={dialog} className="delivery-filling-dialog" aria-labelledby={`filling-title-${request.target_id}`} onCancel={event => { event.preventDefault(); close() }}>
+      <form onSubmit={event => { event.preventDefault(); void generate() }}>
+        <header><h3 id={`filling-title-${request.target_id}`}>智能填写</h3><button type="button" aria-label="关闭智能填写" onClick={close}>×</button></header>
+        <p>填写投放项目与所选单元。搜索关键词、定向及项目出价作用于整个项目；素材、文案及单元金额只写入所选单元。不会自动保存。</p>
+        <fieldset disabled={busy}>
+          <label>填写单元<select value={request.target_id} onChange={event => onTargetChange(event.target.value)}>{targets.map(target => <option key={target.id} value={target.id} disabled={target.disabled}>{target.label}{target.disabled ? '（已绑定，不可填写）' : ''}</option>)}</select></label>
+          <div className="delivery-filling-counts">
+            <label>选用素材数量<input type="number" min={1} max={request.ocean.project.marketing_purpose === 'content_marketing' && request.ocean.project.carrier === 'douyin_account' ? 1 : 10} required value={materialCount} onChange={event => setMaterialCount(Number(event.target.value))}/></label>
+            {request.fields.includes('copy') ? <label>生成文案数量<input type="number" min={1} max={10} required value={copyCount} onChange={event => setCopyCount(Number(event.target.value))}/></label> : null}
+          </div>
+          <label className="delivery-filling-finance-toggle"><input type="checkbox" checked={fillFinance} onChange={event => setFillFinance(event.target.checked)}/>填写预算与出价</label>
+          {fillFinance ? <div className="delivery-filling-finance">
+            <p>项目日预算 ¥{(request.ocean.project.budget_and_bidding.daily_budget_minor / 100).toFixed(2)}。保留其他单元已设预算，将剩余预算按权重分配，仅填写当前单元。出价只参考条件一致的真实历史；资料不足时保留原值。</p>
+            <label>当前单元预算权重<input type="number" min={1} max={10} step={1} required value={unitWeight} onChange={event => setUnitWeight(Number(event.target.value))}/></label>
+            <small>其他未设预算单元权重为 1。项目统一控预算的模式不填写单元预算。附加说明不会直接改变金额规则。</small>
+          </div> : null}
+          <label>附加说明<textarea rows={4} maxLength={2000} value={instructions} placeholder="例如：面向上海年轻用户，突出活动入口，避免承诺具体优惠金额" onChange={event => setInstructions(event.target.value)}/></label>
+          <label>素材筛选（可选）<input maxLength={100} value={search} placeholder="素材名称关键词；候选过多时缩小范围" onChange={event => setSearch(event.target.value)}/></label>
+          <label>约束策略（可选）<select value={strategy} onChange={event => setStrategy(event.target.value)}><option value="">使用产品资料和附加说明</option>{strategies.map(item => <option key={`${item.package_id}@${item.version}`} value={`${item.package_id}@${item.version}`}>{item.label}</option>)}</select></label>
+        </fieldset>
+        {strategyError ? <p role="alert">{strategyError}<button type="button" onClick={() => setRetry(value => value + 1)}>重试</button></p> : null}
+        {notice ? <p role="alert">{notice}</p> : null}
+        <footer><button type="button" className="secondary-button" onClick={close}>取消</button><button type="submit" className="primary-button" disabled={busy || disabled}>{busy ? '正在填写…' : '开始填写'}</button></footer>
+      </form>
+    </dialog>
   </section>
 }

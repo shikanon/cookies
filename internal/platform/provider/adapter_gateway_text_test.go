@@ -407,3 +407,41 @@ func textRouteSnapshot(baseURL string) ImageRouteSnapshot {
 		TextResponseMode: TextResponseJSONSchema,
 	}
 }
+
+func TestGatewayTextImageContentInBothAPIModes(t *testing.T) {
+	for _, mode := range []TextAPIMode{TextAPIChatCompletions, TextAPIResponses} {
+		t.Run(string(mode), func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				key := "messages"
+				if mode == TextAPIResponses {
+					key = "input"
+				}
+				if !strings.Contains(string(body[key]), "data:image/jpeg;base64,aW1hZ2U=") || !strings.Contains(string(body[key]), "candidate:7") {
+					t.Fatalf("image lost: %s", body[key])
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if mode == TextAPIResponses {
+					fmt.Fprint(w, `{"id":"1","model":"test","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`)
+				} else {
+					fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+				}
+			}))
+			defer server.Close()
+			route := textRouteSnapshot(server.URL)
+			route.TextAPIMode = mode
+			if mode == TextAPIResponses {
+				route.OutputTokenParameter = TextOutputTokenParameterMaxOutputTokens
+			}
+			adapter, _ := NewAdapterGatewayTextAdapter(textRouteStub{snapshot: route}, credentialStub("token"), false)
+			adapter.client = server.Client()
+			_, err := adapter.GenerateText(context.Background(), TextAdapterRequest{OrganizationID: "org_1", ModelAlias: "text", Messages: []TextMessage{{Role: TextRoleUser, Content: "candidate:7", Images: []TextImage{{MIMEType: "image/jpeg", Data: []byte("image")}}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

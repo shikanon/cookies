@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"github.com/shikanon/cookies/internal/platform/contract"
 	"github.com/shikanon/cookies/internal/systems/delivery"
 	"net/http"
@@ -9,6 +10,15 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestFillingHTTPReportsTimeoutWithoutBlamingConfiguration(t *testing.T) {
+	app := &fillingApplicationStub{err: fmt.Errorf("%w: %w", delivery.ErrFillingUnavailable, context.DeadlineExceeded)}
+	response := httptest.NewRecorder()
+	New(app).ServeHTTP(response, authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/filling-suggestions", `{"page":"plan","fields":["name"],"current":{},"ocean":{}}`))
+	if response.Code != http.StatusGatewayTimeout || !strings.Contains(response.Body.String(), "FILLING_TIMEOUT") || strings.Contains(response.Body.String(), "配置") {
+		t.Fatalf("unexpected timeout response: %d %s", response.Code, response.Body.String())
+	}
+}
 
 type fillingApplicationStub struct {
 	applicationStub

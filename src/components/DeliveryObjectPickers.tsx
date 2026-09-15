@@ -463,6 +463,15 @@ export function BaseMaterialsField({ value, assets, platformObjects = [], loadVi
     image: referencesFor('image').length,
     graphic: referencesFor('graphic').length,
   }
+  const { video, image, graphic } = tabCounts
+  useEffect(() => {
+    setTab(current => {
+      const counts = { video, image, graphic }
+      if (counts[current]) return current
+      return (['video', 'image', 'graphic'] as const).find(kind => counts[kind]) ?? current
+    })
+  }, [video, image, graphic])
+
   return (
     <div className="delivery-config-material-group">
       <header><b>基础素材{!value.length ? ' · 必填 · 待补' : ''}</b><small>视频 {tabCounts.video}/30 · 图片 {tabCounts.image}/50 · 图文 {tabCounts.graphic}/10</small></header>

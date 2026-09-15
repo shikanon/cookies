@@ -367,6 +367,7 @@ type Repository interface {
 type Service struct {
 	FillingText             *provider.Service
 	FillingModelAlias       string
+	LoadFillingImages       func(context.Context, contract.ActorContext, contract.ProjectID, FillingRequest, *FillingContext) ([]provider.TextMessage, error)
 	LoadFillingContext      func(context.Context, contract.ActorContext, contract.ProjectID, FillingRequest) (FillingContext, error)
 	FieldCapabilities       FieldCapabilityReader
 	Repository              Repository

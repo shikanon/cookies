@@ -150,7 +150,7 @@ export type PlatformConfiguration = {
         direct_link_reference?: StableReference
         product_reference?: StableReference
         creative_component_references?: StableReference[]
-        budget_and_bidding?: { currency: 'CNY'; daily_budget_minor: number; bidding_strategy: string; charging_mode: string; bid_minor?: number }
+        budget_and_bidding?: { budget_mode?: 'daily' | 'unlimited'; currency: 'CNY'; daily_budget_minor: number; bidding_strategy: string; charging_mode: string; bid_minor?: number }
         settings: { title_mode?: 'original_video' | 'manual'; search_terms?: string[]; call_to_action?: string[]; source_label?: string; comments_enabled?: boolean; smart_generation_enabled?: boolean; client_download_enabled?: boolean; direct_link_mode?: 'automatic' | 'manual'; category_reference?: StableReference; brand_reference?: StableReference }
         promotion_name: string
       }>

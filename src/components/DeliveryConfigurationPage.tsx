@@ -402,7 +402,7 @@ function PromotionSettingsEditor({ promotion, nativeContent = false, index, acco
   return <section className="delivery-config-settings-editor" aria-label="单元设置">
     <h5>05 单元设置</h5>
     <div className="delivery-config-unit-fields delivery-config-unit-fields--wide">
-      <label><RequiredFieldLabel label="来源" missing={missingRequiredFields.has('source_label')}/><input name={`promotion_${index}_source`} aria-invalid={missingRequiredFields.has('source_label')} aria-required="true" required className={missingRequiredFields.has('source_label') ? 'field-missing' : undefined} placeholder="请输入产品或公司名称" value={promotion.settings.source_label ?? ''} onChange={event => onChange({ settings: { ...promotion.settings, source_label: event.target.value } })}/><small>来源是产品或公司名称，不是备注说明。</small></label>
+      <label><RequiredFieldLabel label="来源" missing={missingRequiredFields.has('source_label')}/><input name={`promotion_${index}_source`} aria-invalid={missingRequiredFields.has('source_label')} aria-required="true" required className={missingRequiredFields.has('source_label') ? 'field-missing' : undefined} placeholder="请输入平台或品牌名称" value={promotion.settings.source_label ?? ''} onChange={event => onChange({ settings: { ...promotion.settings, source_label: event.target.value } })}/><small>填写商品所属的平台或品牌名称。</small></label>
       {!nativeContent ? <ToggleField label="单元评论" checked={promotion.settings.comments_enabled ?? false} onChange={comments_enabled => onChange({ settings: { ...promotion.settings, comments_enabled } })}/> : null}
       <ReferenceObjectPicker label={`所属类别 · ${missingRequiredFields.has('category') ? '必填 · 待补' : '必填'}`} pickerTitle="选择类别" value={promotion.settings.category_reference} objectKind="industry_category" loadPlatformObjects={loadCategories} onChange={category_reference => onChange({ settings: { ...promotion.settings, category_reference } })}/>
       <ReferenceObjectPicker label="品牌名称" pickerTitle="选择或填写品牌" value={promotion.settings.brand_reference} objectKind="brand" loadPlatformObjects={loadBrands} onChange={brand_reference => onChange({ settings: { ...promotion.settings, brand_reference } })}/>
@@ -478,6 +478,7 @@ function PlatformConfigurationEditor({ projectId, planId, value, onChange, bound
   }
   return <section className="delivery-config-editor" aria-labelledby="platform-config-editor-title">
     <header className="delivery-config-editor-intro"><div><span className="section-label">本地配置</span><h3 id="platform-config-editor-title">编辑投放项目和推广单元</h3><p>保存后生成 cookies 计划版本。Playwright RPA 在执行阶段读取该版本。</p></div><span className="delivery-config-local-badge">不会写入巨量</span></header>
+    <DeliveryConfigurationFilling key={planId} projectId={projectId} planId={planId} value={value} boundObjects={boundObjects} disabled={!objectPreview} onChange={onChange}/>
     {missingRequiredCount ? <div className="delivery-config-required-summary" role="alert">
       <CircleAlert size={18} aria-hidden="true"/>
       <div><b>执行前还需填写 {missingRequiredCount} 个必填项</b><ul>{promotionRequirements.flatMap((fields, index) => fields.length ? <li key={ocean.promotions[index].promotion_draft_id}>推广单元 {index + 1}：{fields.map(field => promotionRequiredFieldLabels[field]).join('、')}</li> : [])}</ul><small>可以保存未完成草稿。生成 Runner 计划前必须补全这些字段。</small></div>
@@ -489,7 +490,6 @@ function PlatformConfigurationEditor({ projectId, planId, value, onChange, bound
     <fieldset disabled={boundObjects.has(ocean.project.project_draft_id)} className="delivery-config-project-editor">
       <legend className="delivery-config-object-status"><PlanObjectStatus projectId={projectId} object={objectPreview?.objects.find(object => object.internal_id === ocean.project.project_draft_id)} loading={!objectPreview} onEdit={onEditObject}/></legend>
       <div className="delivery-config-subheading"><div><span>01</span><div><h4 id={`object-${ocean.project.project_draft_id}`}>投放项目</h4><p>{boundObjects.has(ocean.project.project_draft_id) ? '项目已创建，当前配置只读。新增单元会使用此项目。' : '设置营销路径、预算、竞价、排期和定向。'}</p></div></div></div>
-      <DeliveryConfigurationFilling projectId={projectId} planId={planId} value={value} disabled={!objectPreview || boundObjects.has(ocean.project.project_draft_id)} onChange={onChange}/>
       <div className="delivery-config-editor-fields delivery-config-editor-fields--wide">
         <AccountChoice value={ocean.project.account_reference} accounts={connectorAccounts} onChange={updateAccount}/>
         {!accountAvailable ? <div className="delivery-config-account-error" role="alert"><CircleAlert size={16}/><span>计划账户 <code>{accountID || '未设置'}</code> 未绑定当前 Project。请选择已验证账户。</span></div> : null}

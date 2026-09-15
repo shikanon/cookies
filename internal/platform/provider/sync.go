@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,13 +23,44 @@ const (
 )
 
 type TextMessage struct {
-	Role    TextRole `json:"role"`
-	Content string   `json:"content"`
+	Role    TextRole    `json:"role"`
+	Content string      `json:"content"`
+	Images  []TextImage `json:"-"`
+}
+
+type TextImage struct {
+	MIMEType string
+	Data     []byte
+}
+
+func (m TextMessage) chatContent() any {
+	if len(m.Images) == 0 {
+		return m.Content
+	}
+	parts := []map[string]any{{"type": "text", "text": m.Content}}
+	for _, img := range m.Images {
+		parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]string{"url": img.dataURL()}})
+	}
+	return parts
+}
+func (img TextImage) dataURL() string {
+	return "data:" + img.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(img.Data)
+}
+func (m TextMessage) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{"role": m.Role, "content": m.chatContent()})
 }
 
 func (m TextMessage) Validate() error {
 	if m.Role != TextRoleSystem && m.Role != TextRoleUser && m.Role != TextRoleAssistant {
 		return fmt.Errorf("text message role is invalid")
+	}
+	if len(m.Images) > 24 || (len(m.Images) > 0 && m.Role != TextRoleUser) {
+		return fmt.Errorf("invalid text image inputs")
+	}
+	for _, img := range m.Images {
+		if img.MIMEType != "image/jpeg" && img.MIMEType != "image/png" || len(img.Data) == 0 || len(img.Data) > 2<<20 {
+			return fmt.Errorf("invalid text image")
+		}
 	}
 	if strings.TrimSpace(m.Content) == "" {
 		return fmt.Errorf("text message content is required")

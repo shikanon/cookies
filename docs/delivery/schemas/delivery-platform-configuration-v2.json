@@ -73,6 +73,26 @@
                   "model"
                 ],
                 "properties": {
+                  "finance": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["rule_version", "entries", "warnings"],
+                    "properties": {
+                      "rule_version": {"type": "string"},
+                      "warnings": {"type": "array", "items": {"type": "string"}},
+                      "entries": {"type": "array", "items": {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["field", "amount_minor", "minimum_minor", "maximum_minor", "basis", "sources"],
+                        "properties": {
+                          "field": {"enum": ["daily_budget", "bid", "project_bid"]},
+                          "amount_minor": {"type": "integer", "minimum": 1},
+                          "minimum_minor": {"type": "integer", "minimum": 1},
+                          "maximum_minor": {"type": "integer", "minimum": 1},
+                          "basis": {"type": "string"},
+                          "sources": {"type": "array", "items": {"type": "string"}}
+                        }
+                      }}
+                    }
+                  },
                   "suggestions": {
                     "type": "array",
                     "items": {
@@ -97,10 +117,14 @@
                             "optimization_target",
                             "product_name",
                             "selling_points",
+                            "source_label", "search_keywords", "search_terms", "regions", "age_ranges", "gender", "smart_expansion", "search_expansion",
+                            "call_to_action",
+                            "category",
+                            "product_images",
                             "copy",
                             "total_budget",
                             "daily_budget",
-                            "bid",
+                            "bid", "project_bid",
                             "schedule",
                             "landing_page",
                             "monitoring",
