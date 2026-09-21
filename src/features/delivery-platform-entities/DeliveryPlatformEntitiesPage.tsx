@@ -15,11 +15,13 @@ type PageState = {
 }
 
 export function DeliveryPlatformEntitiesPage({ projectId, activeView }: Props) {
+  const pageSize = 50
   const [state, setState] = useState<PageState>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [editing, setEditing] = useState<DeliveryPlatformEntityMapping>()
+  const [page, setPage] = useState(0)
   const selectedAccountRef = useRef('')
   const accountRequestRef = useRef(0)
 
@@ -99,13 +101,17 @@ export function DeliveryPlatformEntitiesPage({ projectId, activeView }: Props) {
   }, [loadAccount, projectId, state])
 
   const visibleObjects = useMemo(() => filterObjects(state?.objects ?? [], state?.mappingByPlatformRef ?? new Map(), activeView), [activeView, state])
+  const pageCount = Math.max(1, Math.ceil(visibleObjects.length / pageSize))
+  const currentPage = Math.min(page, pageCount - 1)
+  const pagedObjects = visibleObjects.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
+  useEffect(() => { setPage(0) }, [activeView, state?.selectedAccountId])
   if (error) return <PageState title="项目与单元读取失败" detail={error} onRetry={() => void load()} />
-  if (!state) return <PageState title="正在读取项目与单元" detail="正在并行读取 Connector 快照和 Cookies 绑定。" />
+  if (!state) return <PageState title="正在读取项目与单元" detail="正在读取平台对象和 Cookies 绑定。" />
   if (!state.accounts.length) return <PageState title="没有可用投放账号" detail="请先在账户与环境页登记投放账号。" />
 
   return <section className="platform-entity-page" aria-label="项目与单元管理">
     <header className="platform-entity-header">
-      <div><span className="section-label">Ocean Engine inventory</span><h2>项目与单元</h2><p>统一查看账号同步对象、Cookies 绑定、巨量 ID 和来源 Run。</p></div>
+      <div><span className="section-label">平台对象</span><h2>项目与单元</h2><p>查看账号中的投放项目、推广单元和 Cookies 绑定状态。</p></div>
       <div className="platform-entity-actions">
         <select value={state.selectedAccountId} onChange={event => void loadAccount(event.target.value)} aria-label="投放账号">
           {state.accounts.map(account => <option key={account.id} value={account.id}>{account.display_label || account.id}</option>)}
@@ -122,20 +128,20 @@ export function DeliveryPlatformEntitiesPage({ projectId, activeView }: Props) {
       <article><b>{state.mappings.filter(item => item.status === 'confirmed').length}</b><span>Cookies 已绑定</span></article>
       <article><b>{state.mappings.filter(item => item.status !== 'confirmed').length}</b><span>待确认绑定</span></article>
     </div>
-    {visibleObjects.length ? <div className="platform-entity-table" role="table">
-      <div className="heading" role="row"><span>平台对象</span><span>平台引用</span><span>Cookies 绑定</span><span>来源</span></div>
-      {visibleObjects.map(item => {
+    {visibleObjects.length ? <><div className="platform-entity-table" role="table">
+      <div className="heading" role="row"><span>平台对象</span><span>同步状态</span><span>Cookies 绑定</span><span>操作</span></div>
+      {pagedObjects.map((item, index) => {
         const mapping = state.mappingByPlatformRef.get(item.object_ref)
         return <div key={`${item.object_kind}:${item.object_ref}`} role="row">
-          <span><b>{entityName(item)}</b><small>{item.object_kind === 'project' ? '项目' : '单元'} · {entityStatus(item)}</small></span>
-          <code title={item.object_ref}>{shortRef(item.object_ref)}</code>
-          <span className={mapping?.status === 'confirmed' ? 'bound' : 'unbound'}>{mapping?.status === 'confirmed' ? <CircleCheck size={14}/> : <CircleAlert size={14}/>}<span>{mapping ? `${mapping.internal_object_kind} · ${mapping.internal_object_id}` : '未绑定 Cookies 对象'}</span></span>
-          <span>{mapping ? <><code title={mapping.platform_object_id}>{mapping.platform_object_id}</code><small>Run {shortRef(mapping.browser_rpa_run_id)}</small><button className="secondary-button" type="button" onClick={() => setEditing(mapping)}>编辑</button></> : <small>来自 Connector 账号同步</small>}</span>
+          <span><b>{entityName(item, currentPage * pageSize + index + 1)}</b><small>{item.object_kind === 'project' ? '项目' : '单元'}</small></span>
+          <span>{entityStatus(item)}</span>
+          <span className={mapping?.status === 'confirmed' ? 'bound' : 'unbound'}>{mapping?.status === 'confirmed' ? <CircleCheck size={14}/> : <CircleAlert size={14}/>}<span>{mapping ? `${mapping.internal_object_kind === 'project' ? '项目' : '单元'} · ${mapping.status === 'confirmed' ? '已确认' : '待确认'}` : '未绑定 Cookies 对象'}</span></span>
+          <span>{mapping ? <button className="secondary-button" type="button" onClick={() => setEditing(mapping)}>编辑绑定</button> : <small>平台账号同步</small>}</span>
         </div>
       })}
-    </div> : <PageState title="当前筛选没有对象" detail="运行账号同步，或切换到其他视图。" />}
-    {state.mappings.length ? <section className="platform-entity-mappings">
-      <header><div><span className="section-label">Cookies bindings</span><h3>Cookies 绑定记录</h3></div><small>此列表不依赖 Connector 同步结果。</small></header>
+    </div><nav className="platform-entity-pagination" aria-label="项目与单元分页"><span>第 {currentPage + 1} / {pageCount} 页，共 {visibleObjects.length} 个对象</span><div><button className="secondary-button" type="button" disabled={currentPage === 0} onClick={() => setPage(value => Math.max(0, value - 1))}>上一页</button><button className="secondary-button" type="button" disabled={currentPage >= pageCount - 1} onClick={() => setPage(value => Math.min(pageCount - 1, value + 1))}>下一页</button></div></nav></> : <PageState title="当前筛选没有对象" detail="运行账号同步，或切换到其他视图。" />}
+    {state.mappings.length ? <details className="platform-entity-mappings">
+      <summary>绑定技术详情（{state.mappings.length}）</summary>
       <div className="platform-entity-table" role="table">
         <div className="heading" role="row"><span>Cookies 对象</span><span>巨量对象</span><span>绑定状态</span><span>来源 Run</span></div>
         {state.mappings.map(mapping => <div key={mapping.id} role="row">
@@ -145,8 +151,7 @@ export function DeliveryPlatformEntitiesPage({ projectId, activeView }: Props) {
           <span><code title={mapping.browser_rpa_run_id}>{shortRef(mapping.browser_rpa_run_id)}</code><small>更新于 {formatTime(mapping.updated_at)}</small><button className="secondary-button" type="button" onClick={() => setEditing(mapping)}>编辑{mapping.internal_object_kind === 'project' ? '项目' : '单元'}</button></span>
         </div>)}
       </div>
-    </section> : null}
-    {state.mappings.some(mapping => !mapping.platform_object_id) ? <section className="platform-entity-pending"><h3>待确认绑定</h3>{state.mappings.filter(mapping => !mapping.platform_object_id).map(mapping => <div key={mapping.id}><span>{mapping.internal_object_kind} · {mapping.internal_object_id}</span><small>Run {mapping.browser_rpa_run_id} · {mapping.status}</small></div>)}</section> : null}
+    </details> : null}
   </section>
 }
 
@@ -168,17 +173,28 @@ function filterObjects(values: ApiConnectorObjectSnapshot[], mappings: Map<strin
   return values
 }
 
-function entityName(value: ApiConnectorObjectSnapshot): string {
+function entityName(value: ApiConnectorObjectSnapshot, fallbackIndex?: number): string {
   for (const key of ['name', 'promotion_name', 'project_name', 'ad_name', 'title']) {
     const candidate = value.state[key]
     if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
   }
-  return value.object_kind === 'project' ? `项目 ${shortRef(value.object_ref)}` : `单元 ${shortRef(value.object_ref)}`
+  const label = value.object_kind === 'project' ? '未命名项目' : '未命名单元'
+  return fallbackIndex ? `${label} ${fallbackIndex}` : label
 }
 
 function entityStatus(value: ApiConnectorObjectSnapshot): string {
   const status = value.state.status ?? value.state.delivery_status ?? value.quality_status
-  return typeof status === 'string' ? status : '已同步'
+  if (typeof status !== 'string') return '已同步'
+  const labels: Record<string, string> = {
+    accept: '可用',
+    active: '启用中',
+    enabled: '已启用',
+    delivering: '投放中',
+    paused: '已暂停',
+    disabled: '已停用',
+    deleted: '已删除',
+  }
+  return labels[status.toLowerCase()] ?? '已同步'
 }
 
 async function opaquePlatformRef(platformObjectId: string): Promise<string> {

@@ -1,7 +1,7 @@
 import {
   Activity, Aperture, Archive, BadgeCheck, BarChart3, BookOpenCheck, Bot,
   Boxes, BrainCircuit, ChartNoAxesCombined, CircleGauge, ClipboardCheck, Compass,
-  Database, FileCheck2, FileSearch, Film, FlaskConical, FolderKanban,
+  Database, FileSearch, Film, FlaskConical, FolderKanban,
   GalleryHorizontalEnd, Library, Lightbulb, ListChecks,
   Megaphone, MonitorCog, Package, PackageCheck, PanelTop, PlaySquare, Rocket,
   SearchCheck, Send, Settings2, ShieldCheck, SlidersHorizontal, Sparkles,
@@ -151,15 +151,14 @@ export const systems: SystemDefinition[] = [
     statement: '把批准策略和创意转化为安全、可审计的投放动作。',
     nav: [
       { id: 'plans', label: '投放计划', icon: Megaphone, group: '计划与执行', layout: 'workspace', description: '配置目标、预算、受众、版位、创意和校验。', views: ['全部计划', '草稿', '待审批', '执行中', '已完成', '版本'] },
-        { id: 'configuration', label: '平台配置', icon: Boxes, group: '计划与执行', layout: 'workspace', description: '查看业务意图到平台配置的不可变映射，并提交检查与审批。', views: ['配置映射', '字段校准与处置', '检查与提交'] },
+        { id: 'configuration', label: '平台配置', icon: Boxes, group: '计划与执行', layout: 'workspace', description: '配置投放项目与推广单元，并在检查后批准创建执行。', views: ['配置映射', '检查与批准'] },
       { id: 'execution', label: '执行中心', icon: PlaySquare, group: '计划与执行', layout: 'operations', description: '管理受控执行、等待用户、接管、恢复和验证。', views: ['待执行', '执行中', '等待用户', '结果未知', '失败', '接管', '完成'] },
       { id: 'platform-entities', label: '项目与单元', icon: Database, group: '资源', layout: 'table', description: '同步投放账号的项目和单元，并统一查看 Cookies 绑定。', views: ['全部对象', '项目', '单元', '未绑定'] },
-      { id: 'monitoring', label: '模拟与巡检', icon: Activity, group: '监控与优化', layout: 'analysis', description: '上线前运行 Mechanistic 概率模拟。上线后使用 Connector 事实巡检告警。', views: ['概率模拟', 'Connector 巡检', '消耗异常', '转化异常', '跑量不足'] },
-      { id: 'optimization', label: '优化中心', icon: TrendingUp, group: '监控与优化', layout: 'analysis', description: '基于同一 SimulationRun 的指标与告警生成建议，由人工采纳或拒绝并跟踪优化草稿。', views: ['待处理建议', '已采纳', '观察中', '已拒绝', '效果跟踪'] },
+      { id: 'monitoring', label: '模拟与巡检', icon: Activity, group: '监控与优化', layout: 'analysis', description: '上线前运行概率模拟。上线后使用平台同步数据巡检告警。', views: ['概率模拟', '投后巡检', '消耗异常', '转化异常', '跑量不足'] },
+      { id: 'optimization', label: '优化中心', icon: TrendingUp, group: '监控与优化', layout: 'analysis', description: '基于同一次模拟的指标与告警生成建议，由人工采纳或拒绝并跟踪优化草稿。', views: ['待处理建议', '已采纳', '观察中', '已拒绝', '效果跟踪'] },
       { id: 'accounts', label: '账户与环境', icon: UsersRound, group: '资源', layout: 'table', description: '管理广告账户、平台资产、权限和执行环境。', views: ['广告账户', '平台资产', '权限', '登录状态', '执行设备'] },
       { id: 'products', label: '产品目录', icon: Package, group: '资源', layout: 'table', description: '管理组织级业务产品对象；产品在巨量平台录入后回绑商品 ID。', views: ['产品列表', '巨量映射'] },
-      { id: 'approvals', label: '审批中心', icon: FileCheck2, group: '审批与审计', layout: 'workspace', description: '审查预算、上线、暂停、扩量和紧急动作。', views: ['待我审批', '我发起的', '预算', '上线', '暂停与扩量', '已完成'] },
-      { id: 'evidence', label: '证据与审计', icon: Archive, group: '审批与审计', layout: 'operations', description: '保存执行时间线、截图、结构化日志和前后差异。', views: ['执行时间线', '页面截图', '结构化日志', '前后差异', '导出'] },
+      { id: 'evidence', label: '证据与审计', icon: Archive, group: '审计', layout: 'operations', description: '保存执行时间线、截图、结构化日志和前后差异。', views: ['执行时间线', '页面截图', '结构化日志', '前后差异', '导出'] },
     ],
   },
 ]

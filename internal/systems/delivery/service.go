@@ -37,8 +37,6 @@ var (
 	ErrApprovalScopeExceeded             = errors.New("delivery approval scope or budget was exceeded")
 	ErrIdempotencyConflict               = errors.New("delivery idempotency key was reused with a different request")
 	ErrUnsupportedConfigurationWorkflow  = errors.New("delivery repository does not support the configuration workflow")
-	ErrUnsupportedTour                   = errors.New("delivery repository does not support delivery tours")
-	ErrTourOwnerMismatch                 = errors.New("delivery tour belongs to another owner")
 	ErrLegacyConfigurationUnsupported    = errors.New("legacy delivery configuration is read-only and unsupported by this operation")
 	ErrImmutableContractIdentityConflict = errors.New("delivery immutable contract identity conflict")
 )
@@ -115,9 +113,6 @@ type DeliveryPlan struct {
 	Platform             string                  `json:"platform"`
 	Source               Source                  `json:"source"`
 	Scenario             Scenario                `json:"scenario"`
-	TourRunID            string                  `json:"tour_run_id,omitempty"`
-	TourOwnerID          string                  `json:"tour_owner_id,omitempty"`
-	TourCase             string                  `json:"tour_case,omitempty"`
 	CurrentVersionNumber int                     `json:"current_version_number"`
 	CurrentVersion       DeliveryPlanVersion     `json:"current_version"`
 	Versions             []DeliveryPlanVersion   `json:"versions"`
@@ -425,7 +420,7 @@ func (s Service) UpdatePlan(ctx context.Context, actor contract.ActorContext, pr
 	if plan.Status != DeliveryPlanDraft {
 		return DeliveryPlan{}, ErrInvalidState
 	}
-	if plan.TourRunID != "" || plan.CurrentVersion.ReadOnly || !plan.CurrentVersion.IsPlatformConfigurationV2() {
+	if plan.CurrentVersion.ReadOnly || !plan.CurrentVersion.IsPlatformConfigurationV2() {
 		return DeliveryPlan{}, ErrLegacyConfigurationUnsupported
 	}
 	if err := request.Validate(); err != nil {
@@ -552,7 +547,7 @@ func (s Service) RunPlanPreflight(ctx context.Context, actor contract.ActorConte
 	if err != nil {
 		return PreflightResult{}, err
 	}
-	if plan.TourRunID != "" || plan.CurrentVersion.ReadOnly || !plan.CurrentVersion.IsPlatformConfigurationV2() {
+	if plan.CurrentVersion.ReadOnly || !plan.CurrentVersion.IsPlatformConfigurationV2() {
 		return PreflightResult{}, ErrLegacyConfigurationUnsupported
 	}
 	checks := RunPreflight(plan.CurrentVersion)

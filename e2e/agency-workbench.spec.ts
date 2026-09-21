@@ -168,17 +168,6 @@ test('广告账户页使用专用账户绑定视图而不是通用业务记录�
   await expect(page.getByText(/Token|登录凭据/)).toHaveCount(0)
 })
 
-test('未人工确认素材禁止执行投放模拟', async ({ page }) => {
-  await page.goto('/projects/project-nova-home-launch/delivery/approvals')
-
-  await expect(page.getByRole('heading', { name: '执行确认' })).toBeVisible()
-  await expect(page.getByText('未人工确认，禁止执行')).toBeVisible()
-  await expect(page.getByText('高：存在未确认素材、账户异常或预算追踪阻断')).toBeVisible()
-  await expect(page.getByRole('button', { name: /模拟执行/ })).toBeDisabled()
-  await expect(page.getByText('硬门禁')).toBeVisible()
-  await expect(page.getByText('未人工确认素材不能执行')).toBeVisible()
-})
-
 async function chooseProject(page: Page, projectName: string) {
   await page.getByRole('button', { name: /夏季清洁增长|睡眠健康线索|开学季预售/ }).first().click()
   await page.getByPlaceholder('搜索客户、品牌、Project、代码或负责人').fill(projectName)

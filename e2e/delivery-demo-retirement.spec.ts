@@ -16,7 +16,7 @@ test('retired demo endpoints return Gone and leave historical lists unchanged', 
   expect(await (await request.get(`${base}/executions`)).json()).toEqual(beforeExecutions)
 })
 
-test('normal and old Tour URLs use the same business optimization page', async ({ page }) => {
+test('normal and legacy demo URLs use the same business optimization page', async ({ page }) => {
   const retiredRequests: string[] = []
   page.on('request', request => { if (/tour-runs|recommendations(?::generate|\/|$)|simulation-runs/.test(new URL(request.url()).pathname) && !request.url().includes('mechanistic')) retiredRequests.push(request.url()) })
   for (const query of ['', '?tour_run_id=old-run&tour_case=golden_path']) {
@@ -52,11 +52,12 @@ test('configuration hands off to the controlled execution center without demo wr
     expect(route.request().postDataJSON()).toEqual({ expected_version: plan.current_version_number, execution_driver: 'playwright-rpa/edge/v3' })
     await route.fulfill({ status: 201, json: { controlled_change_set: { id: 'controlled-fixture' }, controlled_execution: { id: 'execution-fixture' }, browser_rpa_run: { run_id: runId } } })
   })
-  await page.goto(`/projects/${projectId}/delivery/configuration?view=${encodeURIComponent('检查与提交')}&plan_id=${plan.id}&tour_run_id=old-run`)
+  await page.goto(`/projects/${projectId}/delivery/configuration?view=${encodeURIComponent('检查与批准')}&plan_id=${plan.id}&tour_run_id=old-run`)
   await expect(page.getByRole('button', { name: '确认投放', exact: true })).toHaveCount(0)
   await expect(page.getByRole('radio', { name: /Web API/ })).toBeChecked()
   await page.getByRole('radio', { name: /Playwright/ }).check()
-  await page.getByRole('button', { name: '使用 Playwright创建执行', exact: true }).click()
+  await page.getByRole('checkbox', { name: /我已核对并批准创建本次执行/ }).check()
+  await page.getByRole('button', { name: '批准并使用 Playwright创建执行', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/delivery/execution/${runId}$`))
   await expect(page.getByRole('heading', { name: '暂无受控执行 Run' })).toBeVisible()
   expect(retiredRequests).toEqual([])

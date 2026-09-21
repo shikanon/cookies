@@ -20,7 +20,7 @@ export function useDeliveryCatalog(projectId: string, accountID: string | undefi
   const loadApplications = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('application', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
   const loadOptimizationTargets = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('optimization_target', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])
   const loadOptimizationCapabilities = useCallback((selectedAccountID: string, context: ApiOptimizationTargetContext) => {
-    if (!connectorAccounts.some(account => account.id === selectedAccountID)) return Promise.reject(new Error('请选择当前 Project 已验证账户。'))
+    if (!connectorAccounts.some(account => account.id === selectedAccountID)) return Promise.reject(new Error('请选择当前项目中已验证的账户。'))
     return api.readProjectOptimizationTargetCapabilities(projectId, selectedAccountID, context)
   }, [projectId, connectorAccounts])
   const loadAuthorizedIdentities = useCallback<PlatformObjectLoader>((query, cursor, sortBy, sortOrder) => loadPlatformObjectPage('authorized_identity', query, cursor, sortBy, sortOrder), [loadPlatformObjectPage])

@@ -66,7 +66,7 @@ The test prior fixture is artificial. It is not an industry benchmark.
 | Integer metric counters | Reuse | They preserve atomic count and minor-unit semantics. |
 | Fixed CPM, CTR, CVR, and revenue values | Replace in the new service | The new service accepts only an explicit prior set. |
 | Single selected scenario | Replace | v0 reports independent multi-label probabilities. |
-| Execution-bound create endpoint | Keep for legacy Tour compatibility | Existing records and the historical mock path stay readable. |
+| Execution-bound create endpoint | Removed with the investor walkthrough | Existing records stay readable as audit history. |
 | Legacy MetricSnapshot and Recommendation records | Keep unchanged | v0 stores a separate versioned result envelope. |
 | Legacy alert rules | Do not reuse for prediction | v0 scenario detection reads only its Monte Carlo summary. |
 

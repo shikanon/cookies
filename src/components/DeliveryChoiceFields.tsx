@@ -8,7 +8,7 @@ import { OptimizationTargetCapabilityField, ReferenceObjectPicker, type Platform
 export function AccountChoice({ value, accounts, onChange }: { value: StableReference; accounts: ApiConnectorAccount[]; onChange: (id: string) => void }) {
   const available = accounts.some(account => account.id === value.id)
   return <label><span>巨量账户</span><select aria-label="巨量账户" value={value.id ?? ''} onChange={event => onChange(event.target.value)}>
-    <option value="">请选择当前 Project 已验证账户</option>
+    <option value="">请选择当前项目中已验证的账户</option>
     {value.id && !available ? <option value={value.id} disabled>{value.display_name_snapshot || value.id}（未绑定当前 Project）</option> : null}
     {accounts.map(account => <option key={account.id} value={account.id}>{account.display_label || account.id}</option>)}
   </select><small>切换账户会清除旧账户对象引用。Cookies 素材引用保持不变。</small></label>

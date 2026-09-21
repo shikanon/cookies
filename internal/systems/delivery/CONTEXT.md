@@ -34,4 +34,4 @@ future `connector`), freshness, quality, and evidence references.
 
 Historical fixtures and stored OutcomeSimulation records remain readable for audit and regression tests. They cannot create new business alerts. The retired `alerts:evaluate` endpoint returns HTTP 410; real monitoring uses `InspectConnectorAlerts` and its freshness, quality, and account boundaries.
 
-Tour and legacy Recommendation writes are retired. The old approval and execution panels are read-only. Tests explicitly inject their deterministic execution adapter; missing production execution capability never generates simulated success.
+The investor walkthrough has been removed; its legacy write endpoints still answer HTTP 410. Legacy Recommendation writes are retired. Tests explicitly inject their deterministic execution adapter; missing production execution capability never generates simulated success.

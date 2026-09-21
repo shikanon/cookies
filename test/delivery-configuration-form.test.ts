@@ -31,8 +31,8 @@ test('manual direct links do not require an OceanEngine object binding', () => {
   assert.match(component, /missingRequiredFields\.has\('direct_link'\)/)
 })
 
-test('enumerated Runner paths and dynamic bid limits are visible before execution', () => {
-  assert.match(component, /当前项目路径不能生成 Runner 计划/)
+test('unsupported project paths and dynamic bid limits are visible before execution', () => {
+  assert.match(component, /当前配置不能开始自动执行/)
   assert.deepEqual(marketingPurposeOptions, [
     { value: 'ecommerce', label: '电商' }, { value: 'lead_generation', label: '销售线索' },
     { value: 'application', label: '应用（暂不支持）', disabled: true },

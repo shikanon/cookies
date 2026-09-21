@@ -199,7 +199,7 @@ paths:
       operationId: generateDeliveryRecommendation
       deprecated: true
       summary: Historical demo writes have been retired
-      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records.
       responses:
         '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
@@ -629,7 +629,7 @@ paths:
     get:
       operationId: listDeliveryRecommendations
       deprecated: true
-      summary: List project-scoped historical Tour recommendations
+      summary: List project-scoped historical optimization recommendations
       parameters:
         - $ref: '#/components/parameters/Limit'
       responses:
@@ -665,7 +665,7 @@ paths:
       operationId: acceptDeliveryRecommendation
       deprecated: true
       summary: Historical demo writes have been retired
-      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records.
       responses:
         '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
@@ -677,7 +677,7 @@ paths:
       operationId: rejectDeliveryRecommendation
       deprecated: true
       summary: Historical demo writes have been retired
-      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records.
       responses:
         '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
@@ -1076,7 +1076,7 @@ paths:
       operationId: createDemoDeliveryMetricSnapshot
       deprecated: true
       summary: Historical demo writes have been retired
-      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records.
       responses:
         '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
@@ -1102,7 +1102,7 @@ paths:
       operationId: evaluateDeliveryMonitoringAlerts
       deprecated: true
       summary: Historical demo writes have been retired
-      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records.
       responses:
         '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
@@ -1237,7 +1237,7 @@ paths:
       operationId: prepareDeliveryTourRun
       deprecated: true
       summary: Historical demo writes have been retired
-      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records.
       responses:
         '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
@@ -1249,7 +1249,7 @@ paths:
       operationId: createDeliveryOutcomeSimulationRun
       deprecated: true
       summary: Historical demo writes have been retired
-      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records.
       responses:
         '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
@@ -1266,23 +1266,6 @@ paths:
           content: { application/json: { schema: { $ref: '#/components/schemas/OutcomeSimulationResult' } } }
         '404': { $ref: '#/components/responses/Problem' }
         default: { $ref: '#/components/responses/Problem' }
-  /api/delivery/v1/projects/{project_id}/tour-runs/{run_id}:
-    parameters:
-      - $ref: '#/components/parameters/ProjectID'
-      - $ref: '#/components/parameters/TourRunID'
-    get:
-      operationId: getDeliveryTourRun
-      summary: Read historical tour progress
-      responses:
-        '200':
-          description: The run, seven cases, and progress derived from persisted delivery authority data.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DeliveryTourRun' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '404': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
-        default: { $ref: '#/components/responses/Problem' }
   /api/delivery/v1/projects/{project_id}/tour-runs/{run_id}:reset:
     parameters:
       - $ref: '#/components/parameters/ProjectID'
@@ -1291,7 +1274,7 @@ paths:
       operationId: resetDeliveryTourRun
       deprecated: true
       summary: Historical demo writes have been retired
-      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records. Historical GET operations remain available.
+      description: Returns DELIVERY_DEMO_RETIRED without creating, updating, or deleting records.
       responses:
         '410': { $ref: '#/components/responses/DemoRetired' }
         default: { $ref: '#/components/responses/Problem' }
@@ -1424,94 +1407,6 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/RecommendationDecisionResult' }
-    DeliveryTourCaseKey:
-      type: string
-      enum: [golden_path, preflight_failure, approval_expired, plan_stale, partial_execution, result_unknown, review_rejected_alert]
-    DeliveryTourRunStatus:
-      type: string
-      enum: [preparing, prepared, reset]
-    DeliveryTourCase:
-      type: object
-      additionalProperties: false
-      required: [key, title, plan_id, status, expected_outcome, start_url, source, scenario, evidence, observed_at]
-      properties:
-        key: { $ref: '#/components/schemas/DeliveryTourCaseKey' }
-        title: { type: string }
-        plan_id: { type: string }
-        status: { type: string, enum: [missing, prepared, ready, observed] }
-        expected_outcome: { type: string }
-        start_url: { type: string }
-        source: { type: string, const: mock }
-        scenario: { $ref: '#/components/schemas/DeliveryTourCaseKey' }
-        evidence:
-          type: array
-          items: { type: string }
-        observed_at: { type: string, format: date-time }
-    DeliveryTourStep:
-      type: object
-      additionalProperties: false
-      required: [key, title, completion_condition, complete, url, explanation, evidence]
-      properties:
-        key:
-          type: string
-          enum: [plan_creation, configuration, first_approval, execution, monitoring, recommendation, new_change_set, second_approval]
-        title: { type: string }
-        completion_condition: { type: string }
-        complete: { type: boolean }
-        url: { type: string }
-        explanation: { type: string }
-        evidence:
-          type: array
-          items: { type: string }
-    DeliveryTourRun:
-      type: object
-      additionalProperties: false
-      required: [id, organization_id, project_id, owner_id, status, source, scenario, prepared_at, reset_at, created_at, updated_at, cases, steps, current_step, suggested_next_url]
-      properties:
-        id: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{2,63}$' }
-        organization_id: { type: string }
-        project_id: { type: string }
-        owner_id: { type: string }
-        status: { $ref: '#/components/schemas/DeliveryTourRunStatus' }
-        source: { type: string, const: mock }
-        scenario: { type: string, const: delivery_tour }
-        prepared_at:
-          oneOf:
-            - { type: string, format: date-time }
-            - { type: 'null' }
-        reset_at:
-          oneOf:
-            - { type: string, format: date-time }
-            - { type: 'null' }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-        cases:
-          type: array
-          minItems: 7
-          maxItems: 7
-          items: { $ref: '#/components/schemas/DeliveryTourCase' }
-        steps:
-          type: array
-          minItems: 8
-          maxItems: 8
-          items: { $ref: '#/components/schemas/DeliveryTourStep' }
-        current_step:
-          type: string
-          enum: [plan_creation, configuration, first_approval, execution, monitoring, recommendation, new_change_set, second_approval, complete]
-        suggested_next_url: { type: string }
-    DeliveryTourResetResult:
-      type: object
-      additionalProperties: false
-      required: [run, deleted, source, scenario, reset_at, isolation_key]
-      properties:
-        run: { $ref: '#/components/schemas/DeliveryTourRun' }
-        deleted:
-          type: object
-          additionalProperties: { type: integer, minimum: 0 }
-        source: { type: string, const: mock }
-        scenario: { type: string, const: delivery_tour_reset }
-        reset_at: { type: string, format: date-time }
-        isolation_key: { type: string }
     Problem:
       description: Cookies problem response.
       content:
@@ -2085,18 +1980,6 @@ components:
         platform: { type: string, enum: [ocean_engine, magnetic_engine, ocean_engine_mock] }
         source: { type: string, const: mock }
         scenario: { $ref: '#/components/schemas/Scenario' }
-        tour_run_id:
-          oneOf:
-            - { type: string, pattern: '^[a-z0-9][a-z0-9_-]{2,63}$' }
-            - { type: 'null' }
-        tour_owner_id:
-          oneOf:
-            - { type: string }
-            - { type: 'null' }
-        tour_case:
-          oneOf:
-            - { $ref: '#/components/schemas/DeliveryTourCaseKey' }
-            - { type: 'null' }
         current_version_number: { type: integer, minimum: 1 }
         current_version: { $ref: '#/components/schemas/DeliveryPlanVersion' }
         versions:
@@ -3397,7 +3280,7 @@ components:
         fixture: { $ref: '#/components/schemas/MonitoringFixture' }
         execution_id:
           type: string
-          description: Optional project-scoped execution seed. Tour preparation uses it to avoid selecting unrelated project metrics.
+          description: Optional project-scoped execution seed. It avoids selecting unrelated project metrics.
     AlertEvaluationResult:
       type: object
       additionalProperties: false

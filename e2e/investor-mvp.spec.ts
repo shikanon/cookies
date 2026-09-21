@@ -484,12 +484,6 @@ for (const width of [1280, 1440, 1680]) {
         primary: () => page.getByRole('button', { name: '重新拉取' }),
       },
       {
-        path: `/projects/${projectId}/delivery/approvals`,
-        heading: '审批中心',
-        headingLevel: 1,
-        primary: () => page.getByRole('button', { name: '刷新审批队列' }),
-      },
-      {
         path: `/projects/${projectId}/delivery/evidence`,
         heading: '证据与审计',
         headingLevel: 1,

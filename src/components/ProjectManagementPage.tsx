@@ -96,7 +96,7 @@ export function ProjectManagementPage({ onOpenWorkbench, onOpenProject }: {
       : !hasCompletedCreative
         ? { label: '进入创意生产', detail: '基于已确认 Brief 生成并评审素材', system: 'creative' as const, navId: 'tasks', blocker: '缺少可用于投放的已完成创意。' }
         : pendingChangeSet
-          ? { label: '处理 ChangeSet', detail: pendingChangeSet.title, system: 'delivery' as const, navId: 'approvals', blocker: `${pendingChangeSet.id} 等待受控处理。` }
+          ? { label: '检查投放计划', detail: pendingChangeSet.title, system: 'delivery' as const, navId: 'plans', blocker: `变更申请 ${pendingChangeSet.id} 待复核。` }
           : { label: '查看项目进展', detail: '复核当前阶段与跨模块工作', system: 'strategy' as const, navId: 'workspaces', blocker: '当前没有阻塞项。' }
 
   const saveScope = async (event: FormEvent) => {

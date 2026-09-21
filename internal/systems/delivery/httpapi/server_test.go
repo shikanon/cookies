@@ -306,16 +306,6 @@ func TestExecutionHTTPRequiresIdempotencyKeyAndCreates(t *testing.T) {
 	}
 }
 
-func TestDeliveryTourHTTPMapsOwnerMismatch(t *testing.T) {
-	t.Parallel()
-	response := httptest.NewRecorder()
-	request := authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/tour-runs/investor-tour-01:reset", "")
-	writeError(response, request, delivery.ErrTourOwnerMismatch)
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "TOUR_OWNER_MISMATCH") {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-}
-
 func TestDecisionWorkflowHTTPStopsAtReadyForFinalApproval(t *testing.T) {
 	app := &applicationStub{
 		decision:  delivery.DeliveryDecision{ID: "decision_1", SchemaVersion: delivery.DeliveryDecisionSchemaV1},
@@ -388,8 +378,6 @@ type applicationStub struct {
 	plan                delivery.DeliveryPlan
 	changeSet           delivery.ChangeSet
 	createdPlanID       string
-	tourRun             delivery.DeliveryTourRun
-	tourRunID           string
 	decision            delivery.DeliveryDecision
 	selection           delivery.DecisionSelection
 	observatoryRun      delivery.DeliveryObservatoryRun
@@ -603,8 +591,4 @@ func (s *applicationStub) ListAlerts(context.Context, contract.ActorContext, con
 }
 func (s *applicationStub) UpdateAlert(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.UpdateAlertRequest) (delivery.DeliveryAlert, error) {
 	return delivery.DeliveryAlert{}, nil
-}
-func (s *applicationStub) GetTourRun(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, runID string) (delivery.DeliveryTourRun, error) {
-	s.tourRunID = runID
-	return s.tourRun, nil
 }

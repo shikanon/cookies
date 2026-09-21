@@ -39,7 +39,7 @@ const decisionUncertaintyLabel: Record<DeliveryDecisionCandidate['uncertainty'],
 
 const decisionDiagnosticCopy: Record<DeliveryDecision['diagnostic']['code'], { label: string; explanation: string; nextAction: string }> = {
   ready: { label: '可决策', explanation: '计划、模拟结果和指标证据均已完整绑定。', nextAction: '请选择一个候选方案并编译本地工作流。' },
-  insufficient_data: { label: '数据不足', explanation: '当前证据不足以生成可靠的候选方案。', nextAction: '请先为当前 PlanVersion 运行上线前概率模拟。' },
+  insufficient_data: { label: '数据不足', explanation: '当前证据不足以生成可靠的候选方案。', nextAction: '请先为当前计划版本运行上线前概率模拟。' },
   stale_data: { label: '数据已过期', explanation: '用于决策的平台事实或指标窗口已经过期。', nextAction: '请刷新平台事实并重新采集最新指标。' },
   blocked_by_asset: { label: '素材受阻', explanation: '候选方案依赖的素材尚不可用。', nextAction: '请解决素材状态或更换素材后重新生成。' },
   platform_pending: { label: '等待平台能力', explanation: '当前平台配置尚未具备生成候选方案的条件。', nextAction: '请完善平台配置或等待相应能力就绪。' },
@@ -132,7 +132,7 @@ function candidateActionLabel(value?: string) {
 
 function decisionDiagnosticDetail(decision: DeliveryDecision) {
   const explanation = ({
-    'no mechanistic simulation is available for the current plan version': '当前精确 PlanVersion 没有概率模拟。',
+    'no mechanistic simulation is available for the current plan version': '当前计划版本没有概率模拟。',
     'at least two mechanistic metric windows are required': '当前模拟少于两个预测窗口。',
     'the first mechanistic window has no usable median metrics': '首个预测窗口缺少可用的 P50 指标。',
     'the latest mechanistic window has no usable median metrics': '末个预测窗口缺少可用的 P50 指标。',
@@ -160,7 +160,7 @@ function MechanisticRecommendationCard({ item, index }: { item: MechanisticRecom
   return <article className="delivery-recommendation-card">
     <header><div><span>模拟优化方向 {index + 1}</span><h3>{mechanisticRecommendationLabel(item.recommendation_type)}</h3></div><strong className="delivery-recommendation-status proposed">需人工复核</strong></header>
     <dl className="delivery-recommendation-summary"><div><dt>建议目标</dt><dd>{mechanisticTargetLabel(item.target_field)}</dd></div><div><dt>置信度</dt><dd>{item.confidence === 'low' ? '低置信度' : item.confidence === 'medium' ? '中置信度' : '高置信度'}</dd></div><div className="wide"><dt>建议依据</dt><dd>{mechanisticRationaleLabel(item.rationale)}</dd></div><div className="wide"><dt>风险与约束</dt><dd>{[...(item.risks ?? []), ...(item.guardrails ?? [])].map(mechanisticRationaleLabel).join('；')}</dd></div></dl>
-    <footer><span>该方案来自上线前概率模拟。它尚未生成冻结配置或 ChangeSet。</span></footer>
+    <footer><span>该方案来自上线前概率模拟，尚未生成冻结配置。</span></footer>
   </article>
 }
 
@@ -316,10 +316,10 @@ export function DeliveryOptimizationPage({ state }: { state: DataState; activeVi
       <section className="delivery-optimization-context">
         <div><span>方案处理流程</span><b>生成方案 → 对比影响 → 运营确认</b><small>所有调整先保存为本地方案，不会自动修改广告平台。</small></div>
         <div><span>当前业务目标</span><b>{businessObjectiveLabel(selectedPlan?.currentVersion.objective)}</b><small>{selectedPlan ? `计划 ${selectedPlan.currentVersion.name} · V${selectedPlan.currentVersionNumber}` : '选择计划后显示冻结目标与候选配置。'}</small></div>
-        <div><CheckCircle2 size={17}/><span><b>方案确认后：等待正式审批</b><small>当前阶段只完成方案确认，不会自动修改广告平台。</small></span></div>
+        <div><CheckCircle2 size={17}/><span><b>方案确认后：到平台配置页检查优化配置</b><small>当前阶段只完成方案确认，不会自动修改广告平台。</small></span></div>
       </section>
       {mechanisticSimulation ? <section className="delivery-optimization-context">
-        <div><span>最新上线前模拟</span><b>PlanVersion V{mechanisticSimulation.planVersion} · {mechanisticSimulation.sampleCount.toLocaleString('zh-CN')} 个样本</b><small>校准状态：假设驱动。Run ID：{mechanisticSimulation.id}</small></div>
+        <div><span>最新上线前模拟</span><b>计划版本 V{mechanisticSimulation.planVersion} · {mechanisticSimulation.sampleCount.toLocaleString('zh-CN')} 个样本</b><small>校准状态：假设驱动 · 模拟记录 {mechanisticSimulation.id}</small></div>
         <div><ShieldCheck size={17}/><span><b>{mechanisticSimulation.recommendationDrafts.length} 个模拟优化方向</b><small>这些方向会自动随最新模拟显示。正式配置方案仍需人工选择和复核。</small></span></div>
       </section> : null}
       {mechanisticSimulation ? <div className="delivery-config-recommendations delivery-optimization-list">
@@ -338,7 +338,7 @@ export function DeliveryOptimizationPage({ state }: { state: DataState; activeVi
               return <article className="delivery-recommendation-card" key={candidate.id}>
                 <header><div><span>{decisionUncertaintyLabel[candidate.uncertainty]}</span><h3>{decisionCandidateLabel[candidate.kind]}</h3></div>{selected ? <strong className="delivery-recommendation-status accepted">已选择</strong> : candidate.id === decision.recommendedCandidateId ? <strong className="delivery-recommendation-status accepted">推荐</strong> : null}</header>
                 <dl className="delivery-recommendation-summary"><div><dt>优化焦点</dt><dd>{candidateFocusLabel(candidate.optimizationFocus)}</dd></div><div><dt>方案动作</dt><dd>{candidateActionLabel(candidate.proposedAction)}</dd></div><div><dt>动作范围</dt><dd>{candidate.actionMagnitudePercent ?? 0}%</dd></div><div><dt>情景概率</dt><dd>{candidate.scenarioProbability == null ? '旧规则未记录' : `${(candidate.scenarioProbability * 100).toFixed(1)}%`}</dd></div><div><dt>预算变化</dt><dd>{candidate.budgetChangePercent === 0 ? '保持不变' : `${candidate.budgetChangePercent}%`}</dd></div><div><dt>最终日预算</dt><dd>{candidate.targetConfiguration.payload.ocean_engine?.project ? formatCny(candidate.targetConfiguration.payload.ocean_engine.project.budget_and_bidding.daily_budget_minor) : '待平台能力确认'}</dd></div><div><dt>硬约束</dt><dd>{candidate.constraints.filter(item => item.passed).length}/{candidate.constraints.length} 通过</dd></div><div className="wide"><dt>理由</dt><dd>{candidate.rationale.map(decisionRationaleLabel).join('；')}</dd></div></dl>
-                <footer><span>{selected ? '已选为待确认方案' : `方案版本 ${candidate.targetConfiguration.canonical_hash?.slice(0, 8)}`}</span><button className="primary-button" aria-pressed={selected} disabled={busy || selected} onClick={() => void selectCandidate(decision, candidate)}>{selecting ? '正在准备方案…' : selected ? '待运营确认' : '选为待确认方案'}</button></footer>
+                <footer><span>{selected ? '已选为待确认方案' : `方案标识 ${candidate.targetConfiguration.canonical_hash?.slice(0, 8) ?? '待生成'}`}</span><button className="primary-button" aria-pressed={selected} disabled={busy || selected} onClick={() => void selectCandidate(decision, candidate)}>{selecting ? '正在准备方案…' : selected ? '待运营确认' : '选为待确认方案'}</button></footer>
               </article>
             })}
           </div>

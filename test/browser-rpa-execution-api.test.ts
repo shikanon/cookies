@@ -64,8 +64,8 @@ test('controlled execution API supports the complete Runner v3 browser flow', as
 test('controlled execution UI reports the real Edge probe and keeps unsupported actions blocked', () => {
   const source = readFileSync(resolve(import.meta.dirname, '../src/features/browser-rpa-execution/BrowserRpaExecutionWorkspace.tsx'), 'utf8')
   assert.match(source, /Edge 会话可用。CDP、登录状态和广告账户均匹配/)
-  assert.match(source, /DevTools WebSocket/)
-  assert.match(source, /当前动作没有 Runner v3 单表单协议/)
+  assert.match(source, /Edge 调试连接/)
+  assert.match(source, /当前动作暂不支持自动化执行协议/)
   assert.doesNotMatch(source, /尚未连接；Prepare 时检查/)
   assert.match(source, /受控平台执行记录/)
   assert.match(source, /只读查询平台结果/)
