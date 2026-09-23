@@ -41,12 +41,12 @@ function BrowserRpaRunList({ projectId, activeView }: { projectId: string; activ
   if (state.kind === 'error') return <WorkspaceState kind="error" message={state.message} onRetry={() => void load()} />
   const visibleRuns = state.runs.filter(run => runMatchesExecutionView(run, activeView))
   return <section className="controlled-execution-run-list" aria-label="受控平台执行记录">
-    <header className="controlled-execution-header"><div><span className="section-label">Controlled platform execution</span><h2>执行中心</h2><p>查看当前 Project 的受控平台执行。选择一条记录可继续检查、Prepare 或 Submit。</p></div><button className="secondary-button" onClick={() => void load()}><RefreshCw size={14}/>刷新</button></header>
+    <header className="controlled-execution-header"><div><span className="section-label">受控平台执行</span><h2>执行中心</h2><p>查看当前项目的受控平台执行。选择一条记录可继续检查或执行。</p></div><button className="secondary-button" onClick={() => void load()}><RefreshCw size={14}/>刷新</button></header>
     {visibleRuns.length ? <div className="controlled-execution-run-list-grid">{visibleRuns.map(run => {
       const presentation = presentControlledExecution(run)
       return <a key={run.id} href={`/projects/${encodeURIComponent(projectId)}/delivery/execution/${encodeURIComponent(run.id)}?view=${encodeURIComponent(activeView)}`} className={`controlled-execution-run-card ${presentation.tone}`}>
         <div><span>{runActionLabel(run.authority.action)}</span><b>{presentation.title}</b><small>{presentation.detail}</small></div>
-        <dl><div><dt>广告账户</dt><dd>{run.account_id}</dd></div><div><dt>执行驱动</dt><dd>{executionDriverLabel(run)}</dd></div><div><dt>Run</dt><dd>{shortHash(run.id)}</dd></div><div><dt>更新时间</dt><dd>{formatTime(run.updated_at)}</dd></div></dl>
+        <dl><div><dt>广告账户</dt><dd>尾号 {run.account_id.slice(-6)}</dd></div><div><dt>执行方式</dt><dd>{effectiveExecutionDriver(run) === 'oceanengine-web-api/session/v1' ? '平台接口' : '浏览器执行'}</dd></div><div><dt>更新时间</dt><dd>{formatTime(run.updated_at)}</dd></div></dl>
       </a>
     })}</div> : <div className="controlled-execution-run-empty"><Clock3 size={24}/><h3>{state.runs.length ? `${activeView}视图暂无记录` : '暂无执行记录'}</h3><p>{state.runs.length ? '请选择其他状态视图，或刷新执行记录。' : '请先在平台配置页检查计划，然后进入真实受控执行。'}</p></div>}
   </section>
@@ -155,7 +155,7 @@ function BrowserRpaExecutionDetail({ projectId, runId }: { projectId: string; ru
       } else if (action === 'plan') {
         const nextPlan = await controlledExecutionApi.generatePlan(projectId, run.id)
         setPlan(nextPlan)
-        setNotice(nextPlan.blocked_reasons.length ? '计划已生成，但存在阻塞原因。' : apiDriver ? 'API 编译输入已生成。该操作未写入平台。' : 'Runner v3 执行计划已生成。该操作未打开页面。')
+        setNotice(nextPlan.blocked_reasons.length ? '计划已生成，但存在阻塞原因。' : apiDriver ? 'API 编译输入已生成。该操作未写入平台。' : '执行计划已生成。该操作未打开页面。')
       } else if (action === 'lease') {
         const acquired = await controlledExecutionApi.acquireLease(projectId, run.id, run.version)
         setTransport({ kind: 'ready', workspace: { ...transport.workspace, run: acquired.run, lease: acquired.lease } })
@@ -338,7 +338,7 @@ function WorkspaceReady({ workspace, busy, notice, plan, sessionProbe, reviewed,
   return <section className="controlled-execution-workspace" aria-label="受控执行中心">
     <header className="controlled-execution-header">
       <div>
-        <span className="section-label">Controlled platform execution</span>
+        <span className="section-label">受控平台执行</span>
         <h2>受控执行中心</h2>
         <p>{apiDriver ? '按顺序检查 Connector 会话、生成 API 编译输入、执行 Prepare，并复核写入门禁。' : '按顺序检查真实 Edge 会话、生成计划、执行 Prepare、复核差异，再使用一次性授权执行 Submit。'}</p>
       </div>
@@ -355,6 +355,9 @@ function WorkspaceReady({ workspace, busy, notice, plan, sessionProbe, reviewed,
       reviewed={reviewed}
       onReviewed={onReviewed}
       onWorkflow={onWorkflow}
+      terminal={terminal}
+      showTakeover={showTakeover}
+      onControl={onControl}
       onRetryPrepare={onRetryPrepare}
       onReconcileResult={onReconcileResult}
     />
@@ -366,35 +369,42 @@ function WorkspaceReady({ workspace, busy, notice, plan, sessionProbe, reviewed,
 
     <div className="controlled-execution-layout">
       <section className="controlled-execution-main" aria-label="运行状态与步骤">
-        <RunTimeline run={run} />
-        <ControlPanel run={run} busy={busy} terminal={terminal} showTakeover={showTakeover} onControl={onControl} />
         <RecoveryPanel kind={presentation.kind} />
         <PlatformResultPanel run={run} evidence={evidence} />
         <EvidencePanel evidence={evidence} events={events} />
       </section>
       <aside className="controlled-execution-audit" aria-label="授权与审计摘要">
+        <h3>执行摘要</h3>
         <dl>
-          <div><dt>Run</dt><dd title={run.id}>{run.id}</dd></div>
-          <div><dt>账户</dt><dd>{run.account_id}</dd></div>
+          <div><dt>执行动作</dt><dd>{runActionLabel(run.authority.action)}</dd></div>
+          <div><dt>账户</dt><dd>尾号 {run.account_id.slice(-6)}</dd></div>
           <div><dt>执行驱动</dt><dd>{executionDriverLabel(run)}</dd></div>
-          <div><dt>ChangeSet</dt><dd title={run.authority.change_set_id}>{run.authority.change_set_id}</dd></div>
-          <div><dt>正式 Approval</dt><dd title={run.authority.approval_id}>{run.authority.approval_id}</dd></div>
-          {run.authority.target_mapping_id ? <div><dt>目标映射版本</dt><dd title={run.authority.target_mapping_id}>{shortHash(run.authority.target_mapping_id)} · v{run.authority.target_mapping_version}</dd></div> : null}
-          {run.authority.target_platform_object_id ? <div><dt>目标推广单元</dt><dd title={run.authority.target_platform_object_id}>{shortHash(run.authority.target_platform_object_id)}</dd></div> : null}
-          {run.authority.operator_principal_id ? <div><dt>绑定操作人</dt><dd title={run.authority.operator_principal_id}>{run.authority.operator_principal_id}</dd></div> : null}
+          <div><dt>人工批准</dt><dd>{run.blocking_reason === 'APPROVAL_INVALID' ? '无效或已过期' : '已完成'}</dd></div>
+          {run.authority.plan_version ? <div><dt>计划版本</dt><dd>V{run.authority.plan_version}</dd></div> : null}
+          {run.authority.target_mapping_id ? <div><dt>目标映射</dt><dd>已绑定 · V{run.authority.target_mapping_version}</dd></div> : null}
+          {run.authority.target_platform_object_id ? <div><dt>目标推广单元</dt><dd>已绑定</dd></div> : null}
           <div><dt>预算上限</dt><dd>¥{formatMinor(run.authority.budget_limit_minor)} {run.authority.currency}</dd></div>
-          <div><dt>Workflow</dt><dd title={run.authority.workflow_canonical_hash}>{shortHash(run.authority.workflow_canonical_hash)}</dd></div>
-          <div><dt>Platform Skill</dt><dd>{run.authority.skill_id && run.authority.skill_version ? <>{run.authority.skill_id} · {run.authority.skill_version}<small>仅代表已校准路径；执行当轮仍须复核页面和字段。</small></> : '未绑定；真实执行不可用'}</dd></div>
-          <div><dt>租约</dt><dd title={run.lease_id}>{run.lease_id}</dd></div>
-          <div><dt>策略</dt><dd title={run.policy_id}>{run.policy_id}</dd></div>
+          <div><dt>平台路径</dt><dd>{run.authority.skill_id && run.authority.skill_version ? '已校准' : '未校准'}</dd></div>
         </dl>
+        <details className="controlled-execution-technical-details"><summary>技术审计详情</summary><dl>
+          <div><dt>执行记录</dt><dd>{run.id}</dd></div>
+          <div><dt>变更申请</dt><dd>{run.authority.change_set_id}</dd></div>
+          <div><dt>正式审批</dt><dd>{run.authority.approval_id}</dd></div>
+          {run.authority.target_mapping_id ? <div><dt>目标映射 ID</dt><dd>{run.authority.target_mapping_id}</dd></div> : null}
+          {run.authority.target_platform_object_id ? <div><dt>平台对象 ID</dt><dd>{run.authority.target_platform_object_id}</dd></div> : null}
+          {run.authority.operator_principal_id ? <div><dt>操作人</dt><dd>{run.authority.operator_principal_id}</dd></div> : null}
+          <div><dt>工作流指纹</dt><dd>{shortHash(run.authority.workflow_canonical_hash)}</dd></div>
+          <div><dt>平台技能</dt><dd>{run.authority.skill_id || '未绑定'} · {run.authority.skill_version || '无版本'}</dd></div>
+          <div><dt>租约</dt><dd>{run.lease_id}</dd></div>
+          <div><dt>策略</dt><dd>{run.policy_id}</dd></div>
+        </dl></details>
       </aside>
     </div>
     {notice ? <div className="controlled-execution-notice" role="status">{notice}</div> : null}
   </section>
 }
 
-function ExecutionFlowPanel({ workspace, plan, busy, sessionProbe, reviewed, onReviewed, onWorkflow, onRetryPrepare, onReconcileResult }: {
+function ExecutionFlowPanel({ workspace, plan, busy, sessionProbe, reviewed, onReviewed, onWorkflow, terminal, showTakeover, onControl, onRetryPrepare, onReconcileResult }: {
   workspace: ControlledExecutionWorkspace
   plan?: RunnerV3Plan
   busy: boolean
@@ -402,6 +412,9 @@ function ExecutionFlowPanel({ workspace, plan, busy, sessionProbe, reviewed, onR
   reviewed: boolean
   onReviewed: (value: boolean) => void
   onWorkflow: (action: 'check' | 'plan' | 'prepare' | 'submit' | 'lease') => void
+  terminal: boolean
+  showTakeover: boolean
+  onControl: (action: 'pause' | 'resume' | 'cancel' | 'takeover' | 'release_takeover') => void
   onRetryPrepare: () => void
   onReconcileResult: () => void
 }) {
@@ -424,7 +437,7 @@ function ExecutionFlowPanel({ workspace, plan, busy, sessionProbe, reviewed, onR
   const submitStarted = ['submitting', 'verifying', 'succeeded', 'partial', 'result_unknown'].includes(run.state)
   const flowSteps = [
     { label: apiDriver ? '检查 Connector 会话' : '检查真实 Edge 会话', done: bindingReady, active: !bindingReady },
-    { label: apiDriver ? '生成 API 编译输入' : '生成 Runner v3 计划', done: planReady, active: bindingReady && !planReady },
+    { label: apiDriver ? '生成 API 编译输入' : '生成执行计划', done: planReady, active: bindingReady && !planReady },
     { label: '执行 Prepare', done: prepared, active: run.state === 'preparing' },
     { label: '复核回读与差异', done: prepared && reviewed, active: run.state === 'awaiting_confirmation' && !reviewed },
     { label: '一次性确认并 Submit', done: submitStarted, active: run.state === 'submitting' || run.state === 'verifying' },
@@ -432,7 +445,7 @@ function ExecutionFlowPanel({ workspace, plan, busy, sessionProbe, reviewed, onR
   const prepareStep = runSteps.filter(step => step.action === 'prepare_and_readback').at(-1)
   const canRetryPrepare = isSafePrepareRetryCandidate(workspace)
   return <section className="controlled-execution-flow" aria-label="执行操作闭环">
-    <header><div><span className="section-label">Operation flow</span><h3>执行操作闭环</h3></div><small>Submit 会跨越最终点击边界。确认令牌仅在当前请求内存中存在。</small></header>
+    <header><div><span className="section-label">操作闭环</span><h3>执行操作闭环</h3></div><small>Submit 会跨越最终点击边界。确认令牌仅在当前请求内存中存在。</small></header>
     <ol>{flowSteps.map((step, index) => <li key={step.label} className={step.done ? 'complete' : step.active ? 'active' : ''}><span>{step.done ? <CircleCheck size={15} /> : index + 1}</span>{step.label}</li>)}</ol>
     {prepareStep ? <p className={`controlled-execution-step-status ${prepareStep.status}`}><Clock3 size={14} />Prepare 服务端任务：{runStepStatusLabel(prepareStep.status)}{prepareStep.blocking_reason ? ` · ${prepareStep.blocking_reason}` : ''}</p> : null}
     {nativeSubmitBlocked ? <p className="controlled-execution-retry-note" role="status"><b>此标题模式尚未完成提交校准。</b> 原生视频目前支持原视频标题模式提交；手动标题仍仅支持 Prepare。</p> : null}
@@ -444,13 +457,14 @@ function ExecutionFlowPanel({ workspace, plan, busy, sessionProbe, reviewed, onR
       {['result_unknown', 'partial'].includes(run.state) && !apiDriver ? <button className="secondary-button" disabled={busy} onClick={onReconcileResult}><Search size={15} />只读查询平台结果</button> : null}
     </div>
     {canRetryPrepare ? <p className="controlled-execution-retry-note">重试会创建新 Run。失败 Run 和证据会保留。服务端会再次检查最终点击边界。</p> : null}
-    {!actionSupported ? <p className="danger-copy">当前动作没有 Runner v3 单表单协议。系统不会生成可执行计划。</p> : null}
+    {!actionSupported ? <p className="danger-copy">当前动作暂不支持自动化执行协议，系统不会生成可执行计划。</p> : null}
     {run.state === 'awaiting_confirmation' ? <div className="controlled-execution-confirm">
       <label><input type="checkbox" checked={reviewed} onChange={event => onReviewed(event.target.checked)} disabled={busy || drift || nativeSubmitBlocked} />我已核对当前账户、目标对象、字段回读、差异和最终点击边界。</label>
       <button className="primary-button" disabled={busy || !canSubmit} onClick={() => onWorkflow('submit')}><Send size={15} />确认并执行 Submit</button>
       {!leaseReady ? <><small>租约已缺失或过期，需要重新取得会话租约。</small><button className="secondary-button" disabled={busy} onClick={() => onWorkflow('lease')}>重新取得租约</button></> : null}
       {drift ? <small>检测到字段漂移。系统阻止 Submit。</small> : null}
     </div> : null}
+    <ControlPanel run={run} busy={busy} terminal={terminal} showTakeover={showTakeover} onControl={onControl} />
   </section>
 }
 
@@ -464,15 +478,15 @@ function SessionAndTargetPanel({ workspace, sessionProbe }: { workspace: Control
   return <section className="controlled-execution-context" aria-label="执行会话和目标">
     <article className={ready ? 'ready' : 'blocked'}><header><MonitorCheck size={18} /><b>{apiDriver ? 'Connector 组织账号会话' : '真实 Edge 会话'}</b></header><dl>
       <div><dt>控制面登记</dt><dd>{registered ? '一致' : '不一致'}</dd></div>
-      <div><dt>环境</dt><dd>{apiDriver ? environment.mode : `${environment.mode} · Edge ${environment.browser_version}`}</dd></div>
-      <div><dt>Profile</dt><dd>{profile.state}</dd></div>
+      <div><dt>环境</dt><dd>{apiDriver ? environmentModeLabel(environment.mode) : `${environmentModeLabel(environment.mode)} · Edge ${environment.browser_version}`}</dd></div>
+      <div><dt>浏览器档案</dt><dd>{profileStateLabel(profile.state)}</dd></div>
       <div><dt>登记账户一致</dt><dd>{accountMatches ? '是' : '否'}</dd></div>
-      {apiDriver ? <div><dt>会话检查</dt><dd>Prepare 时读取 ready 会话</dd></div> : <><div><dt>DevTools WebSocket</dt><dd>{sessionProbe ? sessionProbe.cdp_available ? '可用' : '不可用' : '等待检查'}</dd></div><div><dt>巨量页面已登录</dt><dd>{sessionProbe ? sessionProbe.logged_in ? '是' : '否' : '等待检查'}</dd></div><div><dt>页面账户匹配</dt><dd>{sessionProbe ? sessionProbe.account_matched ? '是' : '否' : '等待检查'}</dd></div>{sessionProbe ? <><div><dt>结果</dt><dd>{sessionProbeReason(sessionProbe.reason)}</dd></div><div><dt>检查时间</dt><dd>{formatTime(sessionProbe.checked_at)}</dd></div></> : null}</>}
+      {apiDriver ? <div><dt>会话检查</dt><dd>Prepare 时读取 ready 会话</dd></div> : <><div><dt>Edge 调试连接</dt><dd>{sessionProbe ? sessionProbe.cdp_available ? '可用' : '不可用' : '等待检查'}</dd></div><div><dt>巨量页面已登录</dt><dd>{sessionProbe ? sessionProbe.logged_in ? '是' : '否' : '等待检查'}</dd></div><div><dt>页面账户匹配</dt><dd>{sessionProbe ? sessionProbe.account_matched ? '是' : '否' : '等待检查'}</dd></div>{sessionProbe ? <><div><dt>结果</dt><dd>{sessionProbeReason(sessionProbe.reason)}</dd></div><div><dt>检查时间</dt><dd>{formatTime(sessionProbe.checked_at)}</dd></div></> : null}</>}
     </dl></article>
     <article className={projectAllowed ? 'ready' : 'blocked'}><header><FileCheck2 size={18} /><b>平台目标</b></header><dl>
-      <div><dt>当前广告账户</dt><dd>{run.account_id}</dd></div>
-      <div><dt>目标项目</dt><dd>{run.authority.parent_platform_project_id || '新建项目'}</dd></div>
-      <div><dt>目标单元</dt><dd>{run.authority.target_platform_object_id || '新建投放单元'}</dd></div>
+      <div><dt>当前广告账户</dt><dd>尾号 {run.account_id.slice(-6)}</dd></div>
+      <div><dt>目标项目</dt><dd>{run.authority.parent_platform_project_id ? '已有项目' : '新建项目'}</dd></div>
+      <div><dt>目标单元</dt><dd>{run.authority.target_platform_object_id ? '已有推广单元' : '新建推广单元'}</dd></div>
       <div><dt>账号路径</dt><dd>{projectAllowed ? '策略允许' : '策略阻止'}</dd></div>
     </dl></article>
   </section>
@@ -499,9 +513,9 @@ function PlanPanel({ plan, run }: { plan: RunnerV3Plan; run: BrowserRpaRun }) {
   const blocked = plan.blocked_reasons.length > 0
   const nativeSubmitBlocked = effectiveExecutionDriver(run) !== 'oceanengine-web-api/session/v1' && nativePromotionSubmitNotCalibrated({ steps: [], evidence: [] }, plan)
   const boundary = plan.steps.find(step => step.remote_write) ?? plan.steps.at(-1)
-  return <section className="controlled-execution-plan" aria-label="Runner v3 执行计划">
-    <header><div><span className="section-label">Runner v3 plan</span><h3>{plan.plan_kind}</h3></div><span className={blocked || nativeSubmitBlocked ? 'blocked' : 'ready'}>{blocked ? '计划被阻止' : nativeSubmitBlocked ? '仅支持 Prepare' : '计划可执行'}</span></header>
-    <div className="controlled-execution-plan-summary"><span>账户 <b>{plan.account_reference}</b></span><span>当前阶段 <b>{plan.internal_object_kind === 'project' ? '创建项目' : plan.internal_object_kind === 'promotion' ? '创建单元' : plan.plan_kind}</b></span><span>Cookies 对象 <b>{plan.internal_object_id || '未提供'}</b></span><span>父项目 <b>{plan.parent_project_reference || '等待项目回写'}</b></span><span>字段 <b>{fields.length}</b></span></div>
+  return <section className="controlled-execution-plan" aria-label="执行计划">
+    <header><div><span className="section-label">执行计划</span><h3>{plan.plan_kind}</h3></div><span className={blocked || nativeSubmitBlocked ? 'blocked' : 'ready'}>{blocked ? '计划被阻止' : nativeSubmitBlocked ? '仅支持 Prepare' : '计划可执行'}</span></header>
+    <div className="controlled-execution-plan-summary"><span>账户 <b>尾号 {plan.account_reference.slice(-6)}</b></span><span>当前阶段 <b>{plan.internal_object_kind === 'project' ? '创建项目' : plan.internal_object_kind === 'promotion' ? '创建单元' : plan.plan_kind}</b></span><span>Cookies 对象 <b>{plan.internal_object_id ? '已绑定' : '未绑定'}</b></span><span>父项目 <b>{plan.parent_project_reference ? '已绑定' : '等待项目回写'}</b></span><span>字段 <b>{fields.length}</b></span></div>
     {plan.blocked_reasons.length ? <p className="danger-copy">{plan.blocked_reasons.map(presentPlanBlockedReason).join('；')}</p> : null}
     {configurationIssues.length ? <section className="controlled-execution-configuration-issues" aria-label="投放配置需补充">
       <h4>投放配置需补充</h4>
@@ -539,8 +553,8 @@ function CreatedObjectsPanel({ evidence }: { evidence: BrowserRpaEvidence[] }) {
   }
   if (!objects.size) return null
   return <section className="controlled-execution-created-objects" aria-label="已匹配平台对象">
-    <header><div><span className="section-label">Runner reconciliation</span><h3>已匹配平台对象</h3></div><span>{objects.size} 个</span></header>
-    {[...objects.values()].map(item => <div key={item.internalId}><b>{item.internalId}</b><code>{item.platformId}</code></div>)}
+    <header><div><span className="section-label">平台对象核对</span><h3>已匹配平台对象</h3></div><span>{objects.size} 个</span></header>
+    {[...objects.values()].map((item, index) => <div key={item.internalId}><b>平台对象 {index + 1} 已匹配</b><details><summary>技术信息</summary><code>{item.internalId}</code><code>{item.platformId}</code></details></div>)}
   </section>
 }
 
@@ -551,7 +565,7 @@ function ReadbackPanel({ evidence }: { evidence: BrowserRpaEvidence[] }) {
   const planned = Object.entries(readback).filter(([key]) => key.startsWith('plan_diff.') && key.endsWith('.target'))
   const drift = fieldDrift(evidence)
   return <section className="controlled-execution-readback" aria-label="Prepare 字段回读和差异">
-    <header><div><span className="section-label">Prepare result</span><h3>字段回读和差异</h3></div><span className={drift ? 'blocked' : 'ready'}>{drift ? '检测到字段漂移' : '未检测到字段漂移'}</span></header>
+    <header><div><span className="section-label">回读结果</span><h3>字段回读和差异</h3></div><span className={drift ? 'blocked' : 'ready'}>{drift ? '检测到字段漂移' : '未检测到字段漂移'}</span></header>
     <div className="controlled-execution-readback-grid"><div><h4>字段回读</h4>{rows.length ? rows.map(([key, value]) => <div key={key}><b>{key}</b><span>{value}</span></div>) : <p>Evidence 未返回字段回读。</p>}</div><div><h4>计划差异</h4>{planned.length ? planned.map(([key, value]) => <div key={key}><b>{key.slice(10, -7)}</b><span>{value}</span></div>) : <p>{latest?.diff_keys.length ? latest.diff_keys.join('、') : '无计划差异。'}</p>}</div></div>
   </section>
 }
@@ -562,7 +576,7 @@ function PlatformResultPanel({ run, evidence }: { run: BrowserRpaRun; evidence: 
   const readback = latest?.field_readback ?? latest?.after_page_facts ?? {}
   const objectID = readback.platform_object_id || run.authority.target_platform_object_id
   return <section className={`controlled-execution-platform-result ${run.state}`} aria-label="平台执行结果">
-    <header><CircleCheck size={18} /><div><span className="section-label">Platform result</span><h3>{run.state}</h3></div></header>
+    <header><CircleCheck size={18} /><div><span className="section-label">平台结果</span><h3>{presentControlledExecution(run).title}</h3></div></header>
     <dl><div><dt>平台对象 ID</dt><dd>{objectID || '平台未返回对象 ID'}</dd></div><div><dt>字段校验</dt><dd>{readback.field_reconciliation_status || '未返回'}</dd></div><div><dt>结果证据</dt><dd>{latest?.page_reference || '无'}</dd></div></dl>
   </section>
 }
@@ -593,8 +607,8 @@ function AuthorityChain({ run }: { run: BrowserRpaRun }) {
   const confirmationReady = ['submitting', 'verifying', 'succeeded', 'failed', 'partial', 'result_unknown'].includes(run.state)
     && run.blocking_reason !== 'FINAL_CONFIRMATION_INVALID'
   return <ol className="controlled-execution-authority-chain" aria-label="受控写入授权链">
-    <li className="complete"><span>1</span><div><b>{emergencyPause ? '核对投放状态并创建紧急暂停' : controlledRestart ? '完成全部重检并创建受控重启' : changing ? '读取当前值并创建新变更' : '接受优化方案'}</b><small>{changing ? '当前值、目标值、对象、操作人和 Mapping 版本已经冻结；创建时的审批不可复用。' : '已接受/修改的反馈才可创建 ChangeSet；这不是写入批准。'}</small></div></li>
-    <li className={formalApproved ? 'complete' : 'blocked'}><span>2</span><div><b>批准平台写入</b><small>正式 Approval 绑定账户、预算、配置、Workflow 与阶段 B Skill 校准版本；这不代表实时 DOM 已复核。</small></div></li>
+    <li className="complete"><span>1</span><div><b>{emergencyPause ? '核对投放状态并创建紧急暂停' : controlledRestart ? '完成全部重检并创建受控重启' : changing ? '读取当前值并创建新变更' : '接受优化方案'}</b><small>{changing ? '当前值、目标值、对象、操作人和映射版本已经冻结；创建时的审批不可复用。' : '已接受/修改的反馈才可创建变更申请；这不是写入批准。'}</small></div></li>
+    <li className={formalApproved ? 'complete' : 'blocked'}><span>2</span><div><b>批准平台写入</b><small>正式审批绑定账户、预算、配置、工作流与技能校准版本；这不代表实时页面内容已复核。</small></div></li>
     <li className={confirmationReady ? 'complete' : 'waiting'}><span>3</span><div><b>一次性最终确认</b><small>仅对当前 Run 有效；签发或过期都不等于已经提交。</small></div></li>
   </ol>
 }
@@ -659,24 +673,6 @@ function StatusBanner({ presentation }: { presentation: ReturnType<typeof presen
   </div>
 }
 
-function RunTimeline({ run }: { run: BrowserRpaRun }) {
-  const steps: Array<{ state: BrowserRpaRun['state']; label: string }> = [
-    { state: 'environment_check', label: '环境检查' },
-    { state: 'preparing', label: '准备表单' },
-    { state: 'awaiting_confirmation', label: '核对差异与等待确认' },
-    { state: 'submitting', label: '受控提交' },
-    { state: 'verifying', label: '写后验证' },
-  ]
-  const activeIndex = isTerminalControlledExecutionState(run.state)
-    ? steps.length
-    : Math.max(0, steps.findIndex(step => step.state === run.state))
-  return <section className="controlled-execution-timeline" aria-label="执行阶段">
-    <h3>执行阶段</h3>
-    <ol>{steps.map((step, index) => <li key={step.state} className={index < activeIndex ? 'complete' : index === activeIndex ? 'active' : ''}><span>{index + 1}</span>{step.label}</li>)}</ol>
-    {run.paused ? <p><Pause size={14} />执行流程已暂停；这不代表平台推广单元已经暂停。恢复流程时必须重新识别页面与账户。</p> : null}
-  </section>
-}
-
 function ControlPanel({ run, busy, terminal, showTakeover, onControl }: {
   run: BrowserRpaRun
   busy: boolean
@@ -685,7 +681,7 @@ function ControlPanel({ run, busy, terminal, showTakeover, onControl }: {
   onControl: (action: 'pause' | 'resume' | 'cancel' | 'takeover' | 'release_takeover') => void
 }) {
   return <section className="controlled-execution-controls" aria-label="运行控制">
-    <div><span className="section-label">运行控制</span><h3>执行流程的暂停、接管和取消</h3><p>这里仅控制 Playwright RPA 执行流程，不会暂停广告平台上的推广单元；平台紧急暂停必须使用独立 ChangeSet 和 Approval。</p></div>
+    <div><span className="section-label">整条执行控制</span><h3>暂停、接管或取消本次执行</h3><p>这些操作作用于上方整条执行流程，不只作用于 Prepare，也不会改变广告平台中的推广单元状态。</p>{run.paused ? <p className="controlled-execution-paused"><Pause size={14} aria-hidden="true"/>执行已暂停。恢复时系统会重新识别页面与账户。</p> : null}</div>
     <div className="controlled-execution-control-actions">
       {run.paused ? <button className="secondary-button" onClick={() => onControl('resume')} disabled={busy || terminal}>恢复并重新识别</button> : <button className="secondary-button" onClick={() => onControl('pause')} disabled={busy || terminal}>暂停执行流程</button>}
       {showTakeover ? <button className="secondary-button" onClick={() => onControl(run.takeover_active ? 'release_takeover' : 'takeover')} disabled={busy || terminal}><Hand size={15} />{run.takeover_active ? '释放接管' : '人工接管'}</button> : null}
@@ -703,11 +699,11 @@ function RecoveryPanel({ kind }: { kind: ReturnType<typeof presentControlledExec
 
 function EvidencePanel({ evidence, events }: { evidence: BrowserRpaEvidence[]; events: BrowserRpaRunEvent[] }) {
   return <section className="controlled-execution-evidence" aria-label="证据与事件">
-    <header><div><span className="section-label">Evidence & Audit</span><h3>运行证据和历史记录</h3></div><small>服务端已脱敏字段值。页面不显示凭据和一次性确认令牌。</small></header>
-    <div className="controlled-execution-evidence-grid">
-      <div><h4>运行证据</h4>{evidence.length ? evidence.map(item => <article key={item.id}><b>{item.step_id}</b><span>{item.diff_keys.length ? item.diff_keys.join('、') : '无字段差异键'}</span><span title={item.page_reference}>{item.page_reference}</span>{item.screenshot_reference ? <small title={item.screenshot_reference}>截图证据：{item.screenshot_reference}</small> : null}<small>redaction={item.redaction_version} · selector={item.selector_version}</small></article>) : <p>服务端尚未返回 Evidence。</p>}</div>
-      <div><h4>事件时间线</h4>{events.length ? events.map(item => <article key={item.id}><b>{item.kind}</b><span>{item.summary}</span><small>{formatTime(item.created_at)} · {item.actor}</small></article>) : <p>服务端尚未返回 Run Event。</p>}</div>
-    </div>
+    <header><div><span className="section-label">证据与审计</span><h3>运行证据和历史记录</h3></div><small>服务端已脱敏字段值。页面不显示凭据和一次性确认令牌。</small></header>
+    <details className="controlled-execution-evidence-details"><summary>查看技术证据与事件</summary><div className="controlled-execution-evidence-grid">
+      <div><h4>运行证据</h4>{evidence.length ? evidence.map(item => <article key={item.id}><b>{item.step_id}</b><span>{item.diff_keys.length ? item.diff_keys.join('、') : '无字段差异键'}</span><span title={item.page_reference}>{item.page_reference}</span>{item.screenshot_reference ? <small title={item.screenshot_reference}>截图证据：{item.screenshot_reference}</small> : null}</article>) : <p>服务端尚未返回证据记录。</p>}</div>
+      <div><h4>事件时间线</h4>{events.length ? events.map(item => <article key={item.id}><b>{runEventKindLabel(item.kind)}</b><span>{item.summary}</span><small>{formatTime(item.created_at)} · {item.actor}</small></article>) : <p>服务端尚未返回事件记录。</p>}</div>
+    </div></details>
   </section>
 }
 
@@ -729,11 +725,23 @@ function controlNotice(action: 'pause' | 'resume' | 'cancel' | 'takeover' | 'rel
 function sessionProbeReason(reason: EdgeSessionProbe['reason']) {
   return ({
     session_ready: '会话可用',
-    cdp_unavailable: 'DevTools WebSocket 不可用',
+    cdp_unavailable: 'Edge 调试连接不可用',
     oceanengine_page_missing: '未找到巨量引擎页面',
     login_required: '巨量引擎需要登录',
     account_mismatch: '页面广告账户不匹配',
   } as const)[reason]
+}
+
+function environmentModeLabel(mode: string) {
+  return ({ local_visible: '本机可见窗口' } as Record<string, string>)[mode] ?? mode
+}
+
+function profileStateLabel(state: string) {
+  return ({ ready: '已就绪', takeover_required: '需要人工接管', disabled: '已停用' } as Record<string, string>)[state] ?? state
+}
+
+function runEventKindLabel(kind: string) {
+  return ({ run_created: '创建运行', lease_acquired: '取得执行租约', state_transition: '状态变更' } as Record<string, string>)[kind] ?? kind
 }
 
 function formatMinor(value: number) {

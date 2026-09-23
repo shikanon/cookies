@@ -14,7 +14,11 @@
 .platform-entity-table span { display: flex; align-items: center; gap: 6px; min-width: 0; }.platform-entity-table span > span, .platform-entity-table span > small { display: block; }
 .platform-entity-table b, .platform-entity-table small { display: block; }.platform-entity-table small { color: var(--muted); margin-top: 3px; }
 .platform-entity-table code { overflow-wrap: anywhere; white-space: normal; }.platform-entity-table .bound { color: #087044; }.platform-entity-table .unbound { color: #9d3026; }
-.platform-entity-mappings { display: grid; gap: 10px; }.platform-entity-mappings > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }.platform-entity-mappings h3 { margin: 4px 0 0; font-size: 14px; }.platform-entity-mappings header small { color: var(--muted); font-size: 9px; }
+.platform-entity-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 10px; }
+.platform-entity-pagination > div { display: flex; gap: 8px; }
+.platform-entity-mappings { display: grid; gap: 10px; }
+.platform-entity-mappings > summary { width: fit-content; cursor: pointer; color: var(--muted); font-size: 10px; font-weight: 700; }
+.platform-entity-mappings[open] > summary { margin-bottom: 10px; }
 .platform-entity-pending { display: grid; gap: 7px; padding: 16px; border: 1px solid #e5bd63; background: #fff9e9; }.platform-entity-pending h3 { margin: 0; font-size: 13px; }.platform-entity-pending > div { display: flex; justify-content: space-between; gap: 16px; font-size: 9px; }.platform-entity-pending small { color: var(--muted); }
 .platform-entity-state { display: grid; place-items: center; gap: 8px; min-height: 220px; padding: 28px; text-align: center; border: 1px dashed var(--line); background: var(--surface); }.platform-entity-state h2, .platform-entity-state p { margin: 0; }.platform-entity-state h2 { font-size: 15px; }.platform-entity-state p { color: var(--muted); font-size: 10px; }
 @media (max-width: 900px) { .platform-entity-header { display: grid; }.platform-entity-actions { justify-content: flex-start; }.platform-entity-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }.platform-entity-table > div { grid-template-columns: 1fr; }.platform-entity-table .heading { display: none; } }

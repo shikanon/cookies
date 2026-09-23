@@ -13,4 +13,4 @@ The Phase C observatory extends that spine with deterministic `mock` and `replay
 
 Historical Tour preparation/reset, Recommendation writes, OutcomeSimulation creation, demo metric creation, and simulated alert evaluation are retired. Their HTTP endpoints return 410 with `DELIVERY_DEMO_RETIRED`. Historical records remain readable without changing their hashes or source labels. Business optimization uses DeliveryDecision; post-launch monitoring uses Connector inspection.
 
-Execution never defaults to a mock adapter. Missing execution capability returns `EXECUTION_UNAVAILABLE` before records or IDs are created. Test adapters are explicitly injected. The frontend routes real operations to the controlled Browser RPA execution center; the old approval page is read-only.
+Execution never defaults to a mock adapter. Missing execution capability returns `EXECUTION_UNAVAILABLE` before records or IDs are created. Test adapters are explicitly injected. The frontend routes real operations to the controlled Browser RPA execution center.

@@ -45,7 +45,6 @@ type Application interface {
 	ListRecommendations(context.Context, contract.ActorContext, contract.ProjectID, int) ([]delivery.DeliveryRecommendation, error)
 	GetRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DeliveryRecommendation, error)
 	GetManualActionPackage(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.ManualActionPackage, error)
-	GetTourRun(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DeliveryTourRun, error)
 }
 
 type decisionWorkflowApplication interface {
@@ -159,7 +158,6 @@ func New(app Application) *Server {
 	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/alerts", server.listAlerts)
 	server.mux.HandleFunc("PATCH /api/delivery/v1/projects/{project_id}/alerts/{alert_id}", server.updateAlert)
 	server.mux.HandleFunc("POST /api/delivery/v1/projects/{project_id}/tour-runs/{tour_action}", server.retiredDemoWrite)
-	server.mux.HandleFunc("GET /api/delivery/v1/projects/{project_id}/tour-runs/{run_id}", server.getTourRun)
 	return server
 }
 
@@ -423,15 +421,6 @@ func (s *Server) getDecisionSelection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value, err := app.GetDecisionSelection(r.Context(), mustActor(r), projectID(r), r.PathValue("selection_id"))
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, value)
-}
-
-func (s *Server) getTourRun(w http.ResponseWriter, r *http.Request) {
-	value, err := s.app.GetTourRun(r.Context(), mustActor(r), projectID(r), r.PathValue("run_id"))
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -921,8 +910,6 @@ func writeError(writer http.ResponseWriter, request *http.Request, err error) {
 		status, code, message, retryable = http.StatusForbidden, "APPROVAL_SCOPE_EXCEEDED", "执行范围或预算超出批准快照", false
 	case errors.Is(err, delivery.ErrIdempotencyConflict):
 		status, code, message, retryable = http.StatusConflict, "IDEMPOTENCY_CONFLICT", "idempotency key conflicts with a different request", false
-	case errors.Is(err, delivery.ErrTourOwnerMismatch):
-		status, code, message, retryable = http.StatusConflict, "TOUR_OWNER_MISMATCH", "该演示运行属于其他负责人，不能准备或复位", false
 	case errors.Is(err, delivery.ErrVersionConflict):
 		status, code, message, retryable = http.StatusPreconditionFailed, "VERSION_CONFLICT", "资源已被更新，请刷新后重试", false
 	case strings.Contains(err.Error(), "scope is required"):

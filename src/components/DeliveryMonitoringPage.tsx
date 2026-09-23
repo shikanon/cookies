@@ -124,7 +124,7 @@ export function DeliveryMonitoringPage() {
       setAlerts(loadedAlerts.filter(alert => alert.source === 'connector'))
       setSimulation(latestSimulation)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '无法读取 Connector 告警。')
+      setError(reason instanceof Error ? reason.message : '无法读取平台数据告警。')
     }
   }
 
@@ -150,7 +150,7 @@ export function DeliveryMonitoringPage() {
       setInspection(result)
       setAlerts(result.items)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '无法运行 Connector 巡检。')
+      setError(reason instanceof Error ? reason.message : '无法运行投后巡检。')
     } finally { setBusy(undefined) }
   }
 
@@ -168,21 +168,21 @@ export function DeliveryMonitoringPage() {
   const state = forbidden ? 'forbidden' : error && alerts === null ? 'error' : alerts === null ? 'loading' : alerts.length === 0 ? 'empty' : 'ready'
   return <section className="delivery-monitoring" aria-label="投放模拟与巡检">
     <header className="delivery-monitoring__header">
-      <div><span className="section-label">智能投放</span><h2>上线前概率模拟与 Connector 巡检</h2><p>概率模拟直接读取冻结的 PlanVersion。上线后告警只读取 Connector 事实。两条链不依赖 Computer Use 执行。</p></div>
+      <div><span className="section-label">智能投放</span><h2>上线前概率模拟与投后巡检</h2><p>概率模拟读取冻结的计划版本；投后巡检只读取平台同步数据。两条链相互独立。</p></div>
       <label>投放计划<select value={planID} onChange={event => void selectPlan(event.target.value)}><option value="">请选择计划</option>{plans?.map(plan => <option key={plan.id} value={plan.id}>{plan.currentVersion.name} · V{plan.currentVersionNumber}</option>)}</select></label>
     </header>
     {error ? <div className="delivery-monitoring__error" role="alert"><CircleAlert size={15}/>{error}</div> : null}
     <section className="delivery-simulation-workspace" aria-label="上线前概率模拟">
       <header><div><span className="section-label">上线前</span><h3>账号校准概率模拟</h3><p>模型读取所选账号的历史项目首个七日窗口。结果区分普通情景和跑量号情景。</p></div><span className={`delivery-simulation-status ${simulation ? 'is-complete' : ''}`}>{simulation ? '模拟已完成' : '等待运行'}</span></header>
       <div className="delivery-simulation-controls">
-        <label>Plan 绑定账号<input value={calibratedAccounts.find(value => value.account.id === calibrationAccountRef)?.account.display_label || (calibrationAccountRef ? '账号不属于当前 Project' : '当前 Plan 未绑定账号')} disabled /></label>
-        <label>稳定 seed<input value={stableSeed} onChange={event => setStableSeed(event.target.value)} /></label>
+        <label>计划绑定账号<input value={calibratedAccounts.find(value => value.account.id === calibrationAccountRef)?.account.display_label || (calibrationAccountRef ? '账号不属于当前 Project' : '当前计划未绑定账号')} disabled /></label>
         <label>预测窗口<input value="首个 7 日" disabled /></label>
-        <label>样本数<input type="number" min={100} max={100000} value={sampleCount} onChange={event => setSampleCount(Number(event.target.value))} /></label>
         <button className="primary-button" disabled={!selectedPlan || !selectedCalibration || busy !== undefined || !stableSeed.trim()} onClick={() => void runSimulation()}><Play size={14} fill="currentColor"/>{busy === 'simulation' ? '模拟中…' : '运行概率模拟'}</button>
       </div>
-      {calibrationAccountRef ? <CalibrationSummary value={selectedCalibration}/> : <div className="delivery-monitoring__caution"><ShieldAlert size={15}/>请先为 Plan 绑定包含可用校准结果的 Project 账号。</div>}
-      <details className="delivery-alert-card__technical"><summary>补充假设：审核与转化</summary><p>账号报表未校准审核通过率、转化率和追踪可观测率。模型仅把这些值用于转化诊断。</p><div className="delivery-simulation-controls">
+      {calibrationAccountRef ? <CalibrationSummary value={selectedCalibration}/> : <div className="delivery-monitoring__caution"><ShieldAlert size={15}/>请先为计划绑定包含可用校准结果的 Project 账号。</div>}
+      <details className="delivery-alert-card__technical"><summary>高级模拟设置</summary><p>这些参数用于复现结果和调整模拟精度。通常无需修改。</p><div className="delivery-simulation-controls">
+        <label>复现标识<input value={stableSeed} onChange={event => setStableSeed(event.target.value)} /></label>
+        <label>模拟次数<input type="number" min={100} max={100000} value={sampleCount} onChange={event => setSampleCount(Number(event.target.value))} /></label>
         <PriorInput label="审核通过概率" value={prior.review} onChange={review => setPrior(value => ({ ...value, review }))}/>
         <PriorInput label="转化率（CVR）低值" value={prior.cvrMin} onChange={cvrMin => setPrior(value => ({ ...value, cvrMin }))}/>
         <PriorInput label="转化率（CVR）众数" value={prior.cvrMode} onChange={cvrMode => setPrior(value => ({ ...value, cvrMode }))}/>
@@ -191,10 +191,10 @@ export function DeliveryMonitoringPage() {
       </div></details>
       {simulation ? <MechanisticResult value={simulation}/> : <div className="delivery-simulation-empty"><Database size={17}/><span>选择计划并运行模拟。系统不会要求计划先上线。</span></div>}
     </section>
-    <section className="delivery-simulation-workspace" aria-label="Connector 巡检">
-      <header><div><span className="section-label">上线后</span><h3>Connector 事实巡检</h3><p>巡检使用账户指标窗口。隔离、过期或不完整数据不会生成确定性业务告警。</p></div><button className="secondary-button" disabled={!selectedPlan || busy !== undefined} onClick={() => void inspect()}><ShieldAlert size={14}/>{busy === 'inspection' ? '巡检中…' : '立即巡检'}</button></header>
+    <section className="delivery-simulation-workspace" aria-label="投后巡检">
+      <header><div><span className="section-label">上线后</span><h3>平台数据巡检</h3><p>巡检使用账户指标窗口。隔离、过期或不完整数据不会生成确定性业务告警。</p></div><button className="secondary-button" disabled={!selectedPlan || busy !== undefined} onClick={() => void inspect()}><ShieldAlert size={14}/>{busy === 'inspection' ? '巡检中…' : '立即巡检'}</button></header>
       {inspection ? <div className={`delivery-monitoring__notice ${inspection.status !== 'ready' ? 'delivery-monitoring__caution' : ''}`}><Database size={15}/><span>状态：{inspectionStatus(inspection.status)}。{inspection.statusReason} 数据集：{inspection.datasetVersion}。{inspection.dataThrough ? `数据覆盖到 ${formatTime(inspection.dataThrough)}。` : ''}</span></div> : null}
-      <StateBoundary state={state} contextLabel="投放 / Connector 巡检" emptyTitle="当前没有 Connector 告警" emptyDetail={inspection ? '本次巡检没有生成业务告警。请同时检查上方的数据质量状态。' : '运行 Connector 巡检后，系统会显示数据质量和真实告警。'} onRetry={() => void load()}>
+      <StateBoundary state={state} contextLabel="投放 / 平台数据巡检" emptyTitle="当前没有投放告警" emptyDetail={inspection ? '本次巡检没有生成业务告警。请同时检查上方的数据质量状态。' : '运行投后巡检后，系统会显示数据质量和真实告警。'} onRetry={() => void load()}>
         <div className="delivery-monitoring__list">{alerts?.map(alert => <AlertCard key={alert.id} alert={alert} busy={busy === alert.id} onAction={update}/>)}</div>
       </StateBoundary>
     </section>
@@ -229,14 +229,15 @@ function buildPriorSet(value: PriorForm): MechanisticPriorSet {
 function MechanisticResult({ value }: { value: MechanisticSimulation }) {
   const finalWindow = value.metricWindows.at(-1)
   return <div className="delivery-simulation-result">
-    <div className="delivery-simulation-summary"><dl><div><dt>计划版本</dt><dd>V{value.planVersion}</dd></div><div><dt>模型</dt><dd>{value.modelVersion}</dd></div><div><dt>先验版本</dt><dd>{value.priorSetVersion}</dd></div><div><dt>样本数</dt><dd>{value.sampleCount.toLocaleString('zh-CN')}</dd></div><div><dt>校准状态</dt><dd>{value.calibrationStatus === 'account_product_calibrated' ? '账号与商品已校准' : '假设驱动'}</dd></div><div><dt>Run ID</dt><dd>{value.id || '平台引用待解析'}</dd></div></dl></div>
-    {finalWindow ? <div className="delivery-simulation-metrics">{Object.entries(finalWindow.metrics).map(([name, quantiles]) => <article key={name}><header><span>{metricLabel[name] ?? name}</span><time>窗口 {finalWindow.sequence}</time></header><dl><div><dt>P10</dt><dd>{formatQuantile(quantiles.p10, quantiles.unit)}</dd></div><div><dt>P50</dt><dd>{formatQuantile(quantiles.p50, quantiles.unit)}</dd></div><div><dt>P90</dt><dd>{formatQuantile(quantiles.p90, quantiles.unit)}</dd></div></dl></article>)}</div> : <div className="delivery-monitoring__caution"><ShieldAlert size={15}/>计划存在未解析的平台引用。模拟器已 fail closed。</div>}
+    <div className="delivery-simulation-summary"><dl><div><dt>计划版本</dt><dd>V{value.planVersion}</dd></div><div><dt>样本数</dt><dd>{value.sampleCount.toLocaleString('zh-CN')}</dd></div><div><dt>校准状态</dt><dd>{value.calibrationStatus === 'account_product_calibrated' ? '账号与商品已校准' : '假设驱动'}</dd></div></dl></div>
+    {finalWindow ? <div className="delivery-simulation-metrics">{Object.entries(finalWindow.metrics).map(([name, quantiles]) => <article key={name}><header><span>{metricLabel[name] ?? name}</span><time>窗口 {finalWindow.sequence}</time></header><dl><div><dt>P10</dt><dd>{formatQuantile(quantiles.p10, quantiles.unit)}</dd></div><div><dt>P50</dt><dd>{formatQuantile(quantiles.p50, quantiles.unit)}</dd></div><div><dt>P90</dt><dd>{formatQuantile(quantiles.p90, quantiles.unit)}</dd></div></dl></article>)}</div> : <div className="delivery-monitoring__caution"><ShieldAlert size={15}/>计划存在未解析的平台引用。模拟器已停止输出。</div>}
+    <details className="delivery-alert-card__technical"><summary>技术标识</summary><span>Run ID：{value.id || '平台引用待解析'} · 模型：{value.modelVersion} · 先验：{value.priorSetVersion}</span></details>
     <div className="delivery-simulation-explanation"><div><h4>情景概率</h4>{value.scenarioProbabilities.map(item => { const copy = scenarioCopy[item.scenario] ?? { label: item.scenario, detail: '该情景暂无中文说明。' }; return <p key={item.scenario}><strong>{copy.label} · {(item.probability * 100).toFixed(1)}%</strong><span>{copy.detail} {scenarioStatusLabel[item.status] ?? item.status}。</span></p> })}</div><div><h4>反馈建议草案</h4>{value.recommendationDrafts.length ? value.recommendationDrafts.map(item => <p key={`${item.recommendation_type}-${item.target_field}`}><strong>{recommendationTypeLabel(item.recommendation_type)} · {confidenceLabel(item.confidence)}</strong><span>{recommendationRationale(item.rationale)} 需要人工复核。</span></p>) : <p><span>当前分布未触发建议草案。</span></p>}</div></div>
   </div>
 }
 function AlertCard({ alert, busy, onAction }: { alert: DeliveryAlert; busy: boolean; onAction: (alert: DeliveryAlert, action: 'acknowledge' | 'dismiss') => Promise<void> }) {
   return <article className={`delivery-alert-card severity-${alert.severity}`}><header><div><span className="delivery-alert-card__severity">风险等级：{severityLabel[alert.severity]}</span><h3>{typeLabel[alert.type]}</h3></div><span className={`delivery-alert-card__status status-${alert.status}`}>{statusLabel[alert.status]}</span></header>
-    <p className="delivery-alert-card__summary">{describeAlert(alert)}</p><dl><div><dt>平台对象</dt><dd>{alert.monitoredEntity.id}</dd></div><div><dt>监控窗口</dt><dd>{formatTime(alert.window.start)} 至 {formatTime(alert.window.end)}</dd></div><div><dt>数据覆盖到</dt><dd>{formatTime(alert.window.dataThrough)} · {freshnessLabel[alert.freshness.status]}</dd></div><div><dt>证据</dt><dd>{alert.evidenceRefs.length} 条 Connector 记录</dd></div></dl>
+    <p className="delivery-alert-card__summary">{describeAlert(alert)}</p><dl><div><dt>平台对象</dt><dd>{alert.monitoredEntity.id}</dd></div><div><dt>监控窗口</dt><dd>{formatTime(alert.window.start)} 至 {formatTime(alert.window.end)}</dd></div><div><dt>数据覆盖到</dt><dd>{formatTime(alert.window.dataThrough)} · {freshnessLabel[alert.freshness.status]}</dd></div><div><dt>证据</dt><dd>{alert.evidenceRefs.length} 条平台记录</dd></div></dl>
     <details className="delivery-alert-card__technical"><summary>查看技术标识</summary><span>规则：{alert.ruleId} {alert.ruleVersion} · 数据集：{alert.datasetVersion} · 口径：{alert.fixtureVersion}</span></details>
     {alert.status === 'open' ? <footer><button className="secondary-button" disabled={busy} onClick={() => void onAction(alert, 'acknowledge')}><Check size={14}/>确认跟进</button><button className="secondary-button" disabled={busy} onClick={() => void onAction(alert, 'dismiss')}><X size={14}/>忽略</button></footer> : <footer><Clock3 size={14}/>{alert.status === 'acknowledged' ? '已确认。告警记录保留。' : '已忽略。处置记录保留。'}</footer>}
   </article>
@@ -246,7 +247,7 @@ function describeAlert(alert: DeliveryAlert) {
   if (alert.type === 'zero_conversion') return `当前窗口有 ${metric.denominator ?? 0} 次点击，但没有转化。`
   return `当前值 ${formatQuantile(metric.observedValue, metric.unit)}。上一窗口 ${formatQuantile(metric.baselineValue, metric.unit)}。规则阈值 ${formatQuantile(metric.threshold, metric.unit)}。`
 }
-function inspectionStatus(value: ConnectorInspection['status']) { return ({ ready: '可评估', insufficient_data: '数据不足', quarantined: '数据隔离', stale: '数据过期', unavailable: 'Connector 不可用' })[value] }
+function inspectionStatus(value: ConnectorInspection['status']) { return ({ ready: '可评估', insufficient_data: '数据不足', quarantined: '数据隔离', stale: '数据过期', unavailable: '平台数据不可用' })[value] }
 function recommendationTypeLabel(value: string) { return ({ review_compliance: '审核合规检查', tracking_review: '追踪链路检查', delivery_review: '跑量约束检查', cost_review: '成本控制检查', creative_test: '并行素材测试（旧结果）', portfolio_test: '并行跑量与淘汰', portfolio_observation: '并行跑量观察', conversion_funnel_review: '转化漏斗检查', budget_pacing_review: '预算节奏检查' } as Record<string, string>)[value] ?? value }
 function confidenceLabel(value: string) { return ({ low: '低置信度', medium: '中置信度', high: '高置信度' } as Record<string, string>)[value] ?? value }
 function recommendationRationale(value: string) { return ({ 'Review the rejection reason or replace non-compliant material.': '检查审核拒绝原因，并替换不合规素材。', 'Check tracking before budget or bid changes.': '在调整预算或出价前，先检查转化追踪链路。', 'Review delivery constraints and use a controlled test.': '检查定向、出价和库存约束，并使用受控测试验证。', 'Review cost assumptions before increasing budget or bid.': '提高预算或出价前，先复核成本先验和成本边界。', 'Consider a controlled creative rotation test.': '使用并行项目或单元测试不同素材，不修改现有跑量对象。', 'Launch parallel projects or promotions with distinct materials; protect stable delivery objects and prune only after a mature observation window.': '为同一商品新建并行项目或单元。使用不同素材跑量。保护稳定对象，只在观察窗口成熟后淘汰低效对象。', 'Launch parallel projects or promotions, protect emerging winners, and prune only after the seven-day observation window matures.': '建立并行项目或单元。保护开始跑量的对象。只在七日观察窗口成熟后淘汰低效对象。', 'Check the conversion funnel before changing delivery settings.': '调整投放设置前，先检查转化漏斗。', 'Review budget pacing before changing the daily budget.': '调整日预算前，先检查预算消耗节奏。' } as Record<string, string>)[value] ?? value }

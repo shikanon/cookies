@@ -18,7 +18,7 @@ import {
 } from '../api/delivery'
 import { useProject } from '../context/ProjectContext'
 import { ApiRequestError, api, type ApiAssetVersionPointer, type ApiConnectorAccount, type ApiConnectorPlatformObject, type ApiOptimizationTargetCapabilitySnapshot, type ApiOptimizationTargetContext } from '../data/api'
-import { oceanEngineCalibrationDispositions, visibleOceanEngineManifestFields, type CalibrationDisposition, type VisibleManifestField } from '../lib/oceanengineCalibrationManifest'
+import { visibleOceanEngineManifestFields, type VisibleManifestField } from '../lib/oceanengineCalibrationManifest'
 import { fromShanghaiEndDate, fromShanghaiStartDate, toShanghaiDateInput } from '../lib/deliverySchedule'
 import { carrierUsesOrangeLandingPage, normalizeOceanEngineLandingPages } from '../lib/deliveryCarrier'
 import { isOceanEngineImageSourceIdentity, oceanEngineImageSourceIdentity } from '../lib/oceanengine-product-image'
@@ -73,33 +73,6 @@ function formatManifestValue(value: unknown, unit?: string, valueLabels: Record<
 function ManifestFieldList({ fields }: { fields: VisibleManifestField[] }) {
   if (!fields.length) return null
   return <dl className="delivery-config-project-facts">{fields.map(field => <div key={field.key}><dt>{field.label}</dt><dd>{formatManifestValue(field.value, field.unit, field.valueLabels, field.propertyLabels)}</dd></div>)}</dl>
-}
-
-const dispositionLabels: Record<CalibrationDisposition['state'], string> = {
-  ready: '可手动配置',
-  evidence_only: '仅校准证据',
-  blocked: '已阻断',
-  platform_pending: '等待平台条件',
-  condition_unmet: '当前条件未满足',
-  missing_value: '缺少当前值',
-}
-
-function CalibrationDispositionList({ title, items }: { title: string; items: CalibrationDisposition[] }) {
-  return <section className="delivery-config-disposition-group"><h4>{title}</h4><ol>{items.map(item => <li key={item.key}>
-    <div><b>{item.label}</b><code>{item.key}</code></div>
-    <strong data-state={item.state}>{dispositionLabels[item.state]}</strong>
-    <p>{item.reason}</p>
-  </li>)}</ol></section>
-}
-
-function CalibrationDispositionView({ value }: { value: PlatformConfiguration }) {
-  if (value.platform !== 'ocean_engine' || !value.payload.ocean_engine) return <div className="delivery-config-empty-inline"><CircleAlert size={18}/>当前平台没有可读取的字段校准记录。</div>
-  const configuration = value.payload.ocean_engine
-  return <section className="delivery-config-calibration-card">
-    <header><div><span className="section-label">只读</span><h3>字段校准与处置</h3><p>状态和原因直接来自冻结 Manifest。此视图不填写、不保存、不提交平台表单。</p></div></header>
-    <CalibrationDispositionList title="项目字段" items={oceanEngineCalibrationDispositions(configuration, 'project')}/>
-    <CalibrationDispositionList title="推广单元字段" items={oceanEngineCalibrationDispositions(configuration, 'promotion')}/>
-  </section>
 }
 
 function PlatformConfigurationDetails({ value }: { value: PlatformConfiguration }) {
@@ -282,7 +255,7 @@ async function addProductImagePickerEvidence(configuration: PlatformConfiguratio
     product_image_references: promotion.product_image_references?.map(reference => {
       const connectorID = reference.audit_attributes?.connector_platform_object_id
       const observed = observedByID.get(connectorID ?? '') ?? (reference.id ? observedByID.get(reference.id) : undefined)
-      if (!observed) throw new Error('已选产品主图不在当前 Connector 图片目录中。请重新同步或重新选择产品主图。')
+      if (!observed) throw new Error('已选产品主图不在当前平台图片目录中。请重新同步或重新选择产品主图。')
       const imageSourceIdentity = oceanEngineImageSourceIdentity(observed.metadata.web_uri ?? observed.preview_url)
       if (!imageSourceIdentity) throw new Error('产品主图缺少稳定图片路径。请重新同步巨量对象目录。')
       return {
@@ -344,7 +317,7 @@ function PromotionMaterialEditor({ promotion, carrier, requiredMultiLeadExternal
     <BaseMaterialsField value={promotion.base_material_references} assets={assets} platformObjects={platformObjects} loadVideos={loadVideos} loadImages={loadImages} loadPhotos={loadPhotos} onChange={base_material_references => onChange({ base_material_references })}/>
     <div className="delivery-config-material-group delivery-config-material-fields">
       <label><RequiredFieldLabel label={`文案素材（${promotion.copy_items.length}/10）`} missing={missingRequiredFields.has('copy_items')}/><LineListTextarea rows={2} values={promotion.copy_items.map(item => item.text)} limit={10} placeholder="每行一条文案" required invalid={missingRequiredFields.has('copy_items')} onValuesChange={values => onChange({ copy_items: values.map(text => ({ text })) })}/></label>
-      <label><span className="delivery-config-required-label">原生锚点<em>平台条件字段</em></span><input value={promotion.native_anchor_reference?.id ?? ''} placeholder="不填写时不启用" onChange={event => onChange({ native_anchor_reference: updateReference(promotion.native_anchor_reference, event.target.value, 'native_anchor') })}/><small>当前配置只保存原生锚点引用。自动生成模式尚未接入 Runner。</small></label>
+      <label><span className="delivery-config-required-label">原生锚点<em>平台条件字段</em></span><input value={promotion.native_anchor_reference?.id ?? ''} placeholder="不填写时不启用" onChange={event => onChange({ native_anchor_reference: updateReference(promotion.native_anchor_reference, event.target.value, 'native_anchor') })}/><small>当前配置只保存原生锚点引用。自动生成暂不可用。</small></label>
       {carrierUsesOrangeLandingPage(carrier) ? <label><RequiredFieldLabel label="橙子落地页" missing={missingRequiredFields.has('landing_page')}/><select className={missingRequiredFields.has('landing_page') ? 'field-missing' : undefined} value={selectedLandingIsEligible ? promotion.landing_page_reference?.id ?? '' : ''} onChange={event => { const item = platformObjects.find(value => value.object_kind === 'orange_landing_page' && value.platform_object_id === event.target.value); const actions = multiLeadLandingActions(item?.metadata); const ecommerceActions = ecommerceLandingActions(item?.metadata); onChange({ landing_page_reference: item ? { namespace: 'oceanengine', object_kind: 'orange_landing_page', scope: `account:${item.account_id}`, id: item.platform_object_id, version: String(item.version), state: 'resolved', display_name_snapshot: item.display_name || item.platform_object_id, audit_attributes: { connector_platform_object_id: item.id, platform_object_id: item.platform_object_id, ...(ecommerceActions.length ? { ecommerce_external_actions: ecommerceActions.join(',') } : {}), ...(actions.length ? { multi_lead_external_actions: actions.join(',') } : {}), ...(actions.includes('100') ? { multi_conversion_eligible: 'true' } : {}) } } : undefined }) }}><option value="">{requiredMultiLeadExternalAction ? `请选择支持当前优化目标（${requiredMultiLeadExternalAction}）和多留资组件的落地页` : '请选择已导入落地页'}</option>{eligibleLandingPages.map(item => <option key={item.id} value={item.platform_object_id}>{item.display_name || item.platform_object_id}</option>)}</select>{requiredMultiLeadExternalAction && !eligibleLandingPages.length ? <small>当前账户没有支持优化目标 {requiredMultiLeadExternalAction} 和多留资组件的橙子落地页。请同步巨量对象，或更改投放分支。</small> : null}</label> : null}
       {carrier === 'owned_landing_page' ? <label><RequiredFieldLabel label="自研落地页链接" missing={missingRequiredFields.has('landing_page')}/><input className={missingRequiredFields.has('landing_page') ? 'field-missing' : undefined} type="url" placeholder="请输入 HTTPS 落地页链接" value={promotion.landing_page_reference?.object_kind === 'owned_landing_page' ? promotion.landing_page_reference.id ?? '' : ''} onChange={event => onChange({ landing_page_reference: updateReference(promotion.landing_page_reference, event.target.value, 'owned_landing_page') })}/></label> : null}
       <label><span>直达链接方式</span><select value={promotion.settings.direct_link_mode ?? 'automatic'} onChange={event => { const directLinkMode = event.target.value as 'automatic' | 'manual'; onChange({ settings: { ...promotion.settings, direct_link_mode: directLinkMode }, ...(directLinkMode === 'automatic' ? { direct_link_reference: undefined } : {}) }) }}><option value="automatic">自动生成</option><option value="manual">手动填写</option></select></label>
@@ -363,7 +336,6 @@ function PromotionMaterialEditor({ promotion, carrier, requiredMultiLeadExternal
     <div className="delivery-config-material-group">
       <header><b>创意组件</b><small>行动号召最多 10 个。</small></header>
       <div className="delivery-config-material-fields">
-        <label><span>附加创意组件</span><input readOnly value="当前 Runner 暂未支持"/><small>字段保留在正确层级。接入对象选择协议后开放。</small></label>
         <label><RequiredFieldLabel label={`行动号召（${promotion.settings.call_to_action?.length ?? 0}/10）`} missing={missingRequiredFields.has('call_to_action')}/><LineListTextarea rows={3} values={promotion.settings.call_to_action ?? []} limit={10} unique placeholder="每行一个行动号召" required invalid={missingRequiredFields.has('call_to_action')} onValuesChange={call_to_action => onChange({ settings: { ...promotion.settings, call_to_action } })}/></label>
         <ToggleField label="开启智能生成" checked={promotion.settings.smart_generation_enabled ?? false} onChange={smart_generation_enabled => onChange({ settings: { ...promotion.settings, smart_generation_enabled } })}/>
         <ToggleField label="允许客户端下载" checked={promotion.settings.client_download_enabled ?? false} onChange={client_download_enabled => onChange({ settings: { ...promotion.settings, client_download_enabled } })}/>
@@ -406,7 +378,7 @@ function PromotionSettingsEditor({ promotion, nativeContent = false, index, acco
       {!nativeContent ? <ToggleField label="单元评论" checked={promotion.settings.comments_enabled ?? false} onChange={comments_enabled => onChange({ settings: { ...promotion.settings, comments_enabled } })}/> : null}
       <ReferenceObjectPicker label={`所属类别 · ${missingRequiredFields.has('category') ? '必填 · 待补' : '必填'}`} pickerTitle="选择类别" value={promotion.settings.category_reference} objectKind="industry_category" loadPlatformObjects={loadCategories} onChange={category_reference => onChange({ settings: { ...promotion.settings, category_reference } })}/>
       <ReferenceObjectPicker label="品牌名称" pickerTitle="选择或填写品牌" value={promotion.settings.brand_reference} objectKind="brand" loadPlatformObjects={loadBrands} onChange={brand_reference => onChange({ settings: { ...promotion.settings, brand_reference } })}/>
-      <label><span>自定义品牌名称</span><input value={customBrandName} placeholder="账户品牌列表中没有时填写" onChange={event => { const name = event.target.value.trimStart(); onChange({ settings: { ...promotion.settings, brand_reference: name ? { namespace: 'oceanengine', object_kind: 'brand', scope: `account:${accountID}`, id: '-1', state: 'resolved', display_name_snapshot: name, audit_attributes: { platform_object_id: '-1', selection_kind: 'text_option' } } : undefined } }) }}/><small>Runner 会选择“自定义品牌名称”，再填写此值。</small></label>
+      <label><span>自定义品牌名称</span><input value={customBrandName} placeholder="账户品牌列表中没有时填写" onChange={event => { const name = event.target.value.trimStart(); onChange({ settings: { ...promotion.settings, brand_reference: name ? { namespace: 'oceanengine', object_kind: 'brand', scope: `account:${accountID}`, id: '-1', state: 'resolved', display_name_snapshot: name, audit_attributes: { platform_object_id: '-1', selection_kind: 'text_option' } } : undefined } }) }}/><small>自动执行时会选择“自定义品牌名称”，再填写此值。</small></label>
     </div>
   </section>
 }
@@ -428,7 +400,7 @@ function PlatformConfigurationEditor({ projectId, planId, value, onChange, bound
   const missingRequiredCount = promotionRequirements.reduce((count, fields) => count + fields.length, 0)
   const projectExecutionIssues: string[] = []
   if (ocean.project.marketing_purpose === 'application') projectExecutionIssues.push('应用暂不支持：测试账号没有可用优化目标，尚未完成执行校准。')
-  if (ocean.project.marketing_purpose !== 'product_catalog' && !['short_video_image_text', 'manual_delivery'].includes(ocean.project.marketing_scenario)) projectExecutionIssues.push('当前 Runner 只支持“短视频与图文”营销场景。')
+  if (ocean.project.marketing_purpose !== 'product_catalog' && !['short_video_image_text', 'manual_delivery'].includes(ocean.project.marketing_scenario)) projectExecutionIssues.push('自动执行当前只支持“短视频与图文”营销场景。')
   if (optimizationTargetMissing) projectExecutionIssues.push('请选择当前分支允许的优化目标。')
   const projectBidMinor = ocean.project.budget_and_bidding.bid_minor
   const contentMarketing = ocean.project.marketing_purpose === 'content_marketing'
@@ -477,26 +449,25 @@ function PlatformConfigurationEditor({ projectId, planId, value, onChange, bound
     if (account) updateOcean(changeConfigurationAccount(ocean, account))
   }
   return <section className="delivery-config-editor" aria-labelledby="platform-config-editor-title">
-    <header className="delivery-config-editor-intro"><div><span className="section-label">本地配置</span><h3 id="platform-config-editor-title">编辑投放项目和推广单元</h3><p>保存后生成 cookies 计划版本。Playwright RPA 在执行阶段读取该版本。</p></div><span className="delivery-config-local-badge">不会写入巨量</span></header>
-    <DeliveryConfigurationFilling key={planId} projectId={projectId} planId={planId} value={value} boundObjects={boundObjects} disabled={!objectPreview} onChange={onChange}/>
+    <header className="delivery-config-editor-intro"><div><span className="section-label">本地配置</span><h3 id="platform-config-editor-title">编辑投放项目和推广单元</h3><p>保存后生成计划版本。浏览器自动化（RPA）在执行阶段读取该版本。</p></div><div className="delivery-config-editor-actions"><span className="delivery-config-local-badge">不会写入巨量</span><DeliveryConfigurationFilling key={planId} projectId={projectId} planId={planId} value={value} boundObjects={boundObjects} disabled={!objectPreview} onChange={onChange}/></div></header>
     {missingRequiredCount ? <div className="delivery-config-required-summary" role="alert">
       <CircleAlert size={18} aria-hidden="true"/>
-      <div><b>执行前还需填写 {missingRequiredCount} 个必填项</b><ul>{promotionRequirements.flatMap((fields, index) => fields.length ? <li key={ocean.promotions[index].promotion_draft_id}>推广单元 {index + 1}：{fields.map(field => promotionRequiredFieldLabels[field]).join('、')}</li> : [])}</ul><small>可以保存未完成草稿。生成 Runner 计划前必须补全这些字段。</small></div>
+      <div><b>执行前还需填写 {missingRequiredCount} 个必填项</b><ul>{promotionRequirements.flatMap((fields, index) => fields.length ? <li key={ocean.promotions[index].promotion_draft_id}>推广单元 {index + 1}：{fields.map(field => promotionRequiredFieldLabels[field]).join('、')}</li> : [])}</ul><small>可以保存未完成草稿。开始自动执行前必须补全这些字段。</small></div>
     </div> : null}
     {projectExecutionIssues.length ? <div className="delivery-config-required-summary" role="alert">
       <CircleAlert size={18} aria-hidden="true"/>
-      <div><b>当前项目路径不能生成 Runner 计划</b><ul>{projectExecutionIssues.map(issue => <li key={issue}>{issue}</li>)}</ul><small>可以保存草稿，但执行会保持阻塞。</small></div>
+      <div><b>当前配置不能开始自动执行</b><ul>{projectExecutionIssues.map(issue => <li key={issue}>{issue}</li>)}</ul><small>可以保存草稿，但执行会保持阻塞。</small></div>
     </div> : null}
     <fieldset disabled={boundObjects.has(ocean.project.project_draft_id)} className="delivery-config-project-editor">
       <legend className="delivery-config-object-status"><PlanObjectStatus projectId={projectId} object={objectPreview?.objects.find(object => object.internal_id === ocean.project.project_draft_id)} loading={!objectPreview} onEdit={onEditObject}/></legend>
       <div className="delivery-config-subheading"><div><span>01</span><div><h4 id={`object-${ocean.project.project_draft_id}`}>投放项目</h4><p>{boundObjects.has(ocean.project.project_draft_id) ? '项目已创建，当前配置只读。新增单元会使用此项目。' : '设置营销路径、预算、竞价、排期和定向。'}</p></div></div></div>
       <div className="delivery-config-editor-fields delivery-config-editor-fields--wide">
         <AccountChoice value={ocean.project.account_reference} accounts={connectorAccounts} onChange={updateAccount}/>
-        {!accountAvailable ? <div className="delivery-config-account-error" role="alert"><CircleAlert size={16}/><span>计划账户 <code>{accountID || '未设置'}</code> 未绑定当前 Project。请选择已验证账户。</span></div> : null}
+        {!accountAvailable ? <div className="delivery-config-account-error" role="alert"><CircleAlert size={16}/><span>计划账户 <code>{accountID || '未设置'}</code> 未绑定当前项目。请选择已验证账户。</span></div> : null}
         {platformObjectError && !platformObjectError.startsWith('计划账户 ') ? <div className="delivery-config-account-error" role="alert"><CircleAlert size={16}/><span>{platformObjectError}</span></div> : null}
         <label><span>项目名称</span><input name="oceanengine_project_name" autoComplete="off" value={ocean.project.project_name} onChange={event => updateProject({ project_name: event.target.value })}/></label>
         <MarketingPurposeChoice value={ocean.project.marketing_purpose} onChange={updateMarketingPurpose}/>
-        {ocean.project.marketing_purpose !== 'product_catalog' ? <label><span>营销场景</span><select value={ocean.project.marketing_scenario} onChange={event => updateProject({ marketing_scenario: event.target.value })}><option value="short_video_image_text">短视频与图文</option><option value="live_stream" disabled>直播（Runner 暂不支持）</option></select></label> : null}
+        {ocean.project.marketing_purpose !== 'product_catalog' ? <label><span>营销场景</span><select value={ocean.project.marketing_scenario} onChange={event => updateProject({ marketing_scenario: event.target.value })}><option value="short_video_image_text">短视频与图文</option><option value="live_stream" disabled>直播（平台暂不可用）</option></select></label> : null}
         <MarketingProductPicker value={ocean.project.marketing_product_reference} cookiesProducts={products} loadPlatformObjects={loadProducts} onChange={marketing_product_reference => updateProject({ marketing_product_reference })}/>
         {ocean.project.marketing_purpose === 'application' ? <>
           <label><span>应用场景</span><select value={ocean.project.application_scenario ?? ''} onChange={event => updateProject({ application_scenario: event.target.value, application_reference: undefined, application_download_mode: undefined, application_launch_mode: undefined, optimization_target_reference: undefined, ...(event.target.value === 'app_appointment_download' && ['harmony', 'harmonyos'].includes(ocean.project.operating_system ?? '') ? { operating_system: undefined } : {}) })}><option value="">请选择</option><option value="app_download">应用下载</option><option value="app_launch">应用调起</option><option value="app_appointment_download">预约下载</option></select></label>
@@ -575,6 +546,7 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [executionDriver, setExecutionDriver] = useState<DeliveryExecutionDriver>('oceanengine-web-api/session/v1')
+  const [executionApproved, setExecutionApproved] = useState(false)
   const [editableConfiguration, setEditableConfiguration] = useState<PlatformConfiguration>()
   const [platformObjects, setPlatformObjects] = useState<ApiConnectorPlatformObject[]>([])
   const [connectorAccounts, setConnectorAccounts] = useState<ApiConnectorAccount[]>([])
@@ -588,8 +560,7 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
   const boundObjects = useMemo(() => new Set(objectPreview?.objects.filter(object => object.mapping_id || object.action === 'blocked').map(object => object.internal_id) ?? []), [objectPreview])
   const legacyReadOnly = Boolean(selectedPlan?.currentVersion.readOnly || (selectedPlan && !platformConfiguration))
   const showConfiguration = activeView === '配置映射'
-  const showCalibration = activeView === '字段校准与处置'
-  const showPreflight = activeView === '检查与提交'
+  const showPreflight = activeView === '检查与批准'
   const planEditorURL = projectPath(projectId, 'delivery', 'plans', undefined, '计划列表', undefined)
   const referenceIntentIssues = useMemo(() => configuredReferenceIntentIssues(editableConfiguration, selectedPlan), [editableConfiguration, selectedPlan])
 
@@ -601,7 +572,7 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
       if (generation !== refreshGenerationRef.current) return
       setPlans(nextPlans)
       setSelectedId(current => nextPlans.some(plan => plan.id === current) ? current : nextPlans[0]?.id ?? '')
-      setNotice(nextPlans.length ? '已刷新当前 Project 的平台配置。' : '当前 Project 暂无投放计划。')
+      setNotice(nextPlans.length ? '已刷新当前项目的平台配置。' : '当前项目暂无投放计划。')
     } catch (error) {
       if (generation === refreshGenerationRef.current) setNotice(errorMessage(error, '读取平台配置失败。'))
     } finally {
@@ -641,7 +612,7 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
       } } }
     })
   }, [objectPreview, boundObjects, selectedId, platformConfiguration])
-  useEffect(() => { executionStartKeyRef.current = '' }, [executionDriver, selectedId, selectedPlan?.currentVersionNumber])
+  useEffect(() => { executionStartKeyRef.current = ''; setExecutionApproved(false) }, [executionDriver, selectedId, selectedPlan?.currentVersionNumber])
   useEffect(() => {
     let active = true
     setAccountsLoaded(false)
@@ -652,7 +623,7 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
     }).catch(error => {
       if (!active) return
       setConnectorAccounts([])
-      setPlatformObjectError(errorMessage(error, '读取当前 Project 的巨量账户失败。'))
+      setPlatformObjectError(errorMessage(error, '读取当前项目的巨量账户失败。'))
     }).finally(() => {
       if (active) setAccountsLoaded(true)
     })
@@ -667,7 +638,7 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
     if (!accountsLoaded) return
     if (!connectorAccounts.some(account => account.id === accountID)) {
       setPlatformObjects([])
-      setPlatformObjectError(`计划账户 ${accountID} 未绑定当前 Project。请选择已验证账户。`)
+      setPlatformObjectError(`计划账户 ${accountID} 未绑定当前项目。请选择已验证账户。`)
       return
     }
     let active = true
@@ -690,7 +661,7 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
       .catch(error => {
         if (!active) return
         setPlatformObjects([])
-        setPlatformObjectError(errorMessage(error, '读取 Connector 对象失败。'))
+        setPlatformObjectError(errorMessage(error, '读取平台对象失败。'))
       })
     return () => { active = false }
   }, [accountsLoaded, connectorAccounts, editableConfiguration?.payload.ocean_engine?.project?.account_reference?.id, projectId])
@@ -744,11 +715,11 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
     } finally { setBusy(false) }
   }
 
-  return <StateBoundary state={state} contextLabel="智能投放 / 平台配置" errorDetail="当前 Project 的平台配置无法读取。">
+  return <StateBoundary state={state} contextLabel="智能投放 / 平台配置" errorDetail="当前项目的平台配置无法读取。">
     <div className="delivery-config-workspace">
       <section className="delivery-config-toolbar"><label><span>投放计划</span><select name="delivery_plan" autoComplete="off" value={selectedId} onChange={event => setSelectedId(event.target.value)}>{plans.map(plan => <option value={plan.id} key={plan.id}>{plan.currentVersion.name} · V{plan.currentVersionNumber}</option>)}</select></label><a className="secondary-button" href={planEditorURL}>查看投放计划</a></section>
 
-      {!selectedPlan ? <div className="panel-empty">当前 Project 暂无投放计划。<a href={planEditorURL}>前往创建</a></div> : legacyReadOnly ? <section className="delivery-config-config-card">
+      {!selectedPlan ? <div className="panel-empty">当前项目暂无投放计划。<a href={planEditorURL}>前往创建</a></div> : legacyReadOnly ? <section className="delivery-config-config-card">
         <div className="delivery-config-empty-inline"><CircleAlert size={20}/><div><b>历史配置，仅供查看</b><p>这份计划不能继续修改、检查或提交。若要继续投放，请新建计划并选择目标广告平台。</p></div></div>
       </section> : <>
         {editingObject ? <PlatformEntityEditor key={editingObject.id} projectId={projectId} mapping={editingObject} onClose={() => { setEditingObject(undefined); void refresh() }}/> : null}
@@ -756,10 +727,9 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
         {showConfiguration && platformConfiguration && editableConfiguration ? <section className="delivery-config-config-card"><header><div><span>当前计划 · V{selectedPlan.currentVersionNumber}</span><h3>{selectedPlan.currentVersion.name}</h3><p>更新于 {formatTime(selectedPlan.updatedAt)}</p></div><div className="delivery-config-contract"><span>配置草稿</span><button className="primary-button" type="button" onClick={() => void saveConfiguration()} disabled={busy || !objectPreview}><Save size={15} aria-hidden="true"/>{busy ? '保存中…' : '保存'}</button></div></header><PlatformConfigurationEditor key={`${selectedId}:${editableConfiguration?.payload.ocean_engine?.project.account_reference.id}`} projectId={projectId} planId={selectedId} value={editableConfiguration} onChange={setEditableConfiguration} boundObjects={boundObjects} objectPreview={objectPreview} onEditObject={id => {
           const object = objectPreview?.objects.find(value => value.internal_id === id)
           if (object?.mapping_id) void deliveryExecutionApi.getPlatformEntityMapping(projectId, object.mapping_id).then(setEditingObject).catch(error => setNotice(errorMessage(error, '读取项目或单元失败。')))
-        }} products={agencyWorkbench?.projects.find(project => project.id === projectId)?.products ?? currentProject.products ?? []} assets={confirmedAssets} platformObjects={platformObjects} connectorAccounts={connectorAccounts} platformObjectError={platformObjectError} loadDouyinVideos={loadDouyinVideos} loadVideos={loadVideos} loadImages={loadImages} loadProductImages={loadProductImages} loadPhotos={loadPhotos} loadProducts={loadProducts} loadApplications={loadApplications} loadOptimizationTargets={loadOptimizationTargets} loadOptimizationCapabilities={loadOptimizationCapabilities} loadAuthorizedIdentities={loadAuthorizedIdentities} loadCategories={loadCategories} loadBrands={loadBrands}/><details className="delivery-config-mapping-details"><summary>查看 Manifest 字段映射</summary><PlatformConfigurationDetails value={editableConfiguration}/></details></section> : null}
-        {showCalibration && platformConfiguration ? <CalibrationDispositionView value={platformConfiguration}/> : null}
+        }} products={agencyWorkbench?.projects.find(project => project.id === projectId)?.products ?? currentProject.products ?? []} assets={confirmedAssets} platformObjects={platformObjects} connectorAccounts={connectorAccounts} platformObjectError={platformObjectError} loadDouyinVideos={loadDouyinVideos} loadVideos={loadVideos} loadImages={loadImages} loadProductImages={loadProductImages} loadPhotos={loadPhotos} loadProducts={loadProducts} loadApplications={loadApplications} loadOptimizationTargets={loadOptimizationTargets} loadOptimizationCapabilities={loadOptimizationCapabilities} loadAuthorizedIdentities={loadAuthorizedIdentities} loadCategories={loadCategories} loadBrands={loadBrands}/>{import.meta.env.VITE_SHOW_STATE_PREVIEW === 'true' ? <details className="delivery-config-mapping-details"><summary>技术字段详情</summary><PlatformConfigurationDetails value={editableConfiguration}/></details> : null}</section> : null}
         {showPreflight ? <section className="delivery-config-flow-grid delivery-config-flow-grid--preflight"><article className="delivery-config-preflight-card">
-          <header><div><span className="section-label">真实受控执行</span><h3>选择驱动并检查配置</h3></div><strong className="delivery-config-preflight-state">尚未创建执行</strong></header>
+          <header><div><span className="section-label">检查与批准</span><h3>核对配置并创建受控执行</h3></div><strong className="delivery-config-preflight-state">等待人工批准</strong></header>
           <fieldset className="delivery-config-driver-options">
             <legend>执行驱动</legend>
             <label className={executionDriver === 'oceanengine-web-api/session/v1' ? 'selected' : undefined}>
@@ -773,8 +743,9 @@ export function DeliveryConfigurationPage({ state, activeView }: { state: DataSt
           </fieldset>
           <div className="delivery-config-preflight-summary"><b>执行前置检查</b><p>服务端检查结构、预算、日期、引用和平台对象。创建执行后，驱动选择不能更改。</p><small>{executionDriver === 'playwright-rpa/edge/v3' ? 'Prepare 会连接本机 Edge，并停在最终点击边界。' : 'Web API 会使用本地模板，并在每个对象写入前要求一次性确认。'}</small></div>
           {referenceIntentIssues.length ? <div className="delivery-config-empty-inline"><CircleAlert size={20}/><div><b>平台对象未加入投放意图</b><p>{referenceIntentIssues.join('、')}。返回“配置映射”并保存。系统会生成包含这些引用的新计划版本。</p></div></div> : null}
+          <label className="delivery-config-execution-approval"><input type="checkbox" checked={executionApproved} onChange={event => setExecutionApproved(event.target.checked)} disabled={busy}/><span><b>我已核对并批准创建本次执行</b><small>批准绑定当前计划版本、账户、预算、平台配置和执行方式。创建后仍需在执行中心完成最终写入确认。</small></span></label>
           <div className="delivery-config-actions delivery-config-preflight-actions">
-            <button className="primary-button" type="button" onClick={() => void startRealExecution()} disabled={busy || legacyReadOnly || referenceIntentIssues.length > 0 || !objectPreview || objectPreview.objects.some(object => object.action === 'update' || object.action === 'blocked') || !objectPreview.objects.some(object => object.action === 'create')}><Check size={14}/>{busy ? '正在创建…' : `使用${executionDriver === 'playwright-rpa/edge/v3' ? ' Playwright' : ' Web API'}创建执行`}</button>
+            <button className="primary-button" type="button" onClick={() => void startRealExecution()} disabled={busy || !executionApproved || legacyReadOnly || referenceIntentIssues.length > 0 || !objectPreview || objectPreview.objects.some(object => object.action === 'update' || object.action === 'blocked') || !objectPreview.objects.some(object => object.action === 'create')}><Check size={14}/>{busy ? '正在创建…' : `批准并使用${executionDriver === 'playwright-rpa/edge/v3' ? ' Playwright' : ' Web API'}创建执行`}</button>
           </div>
         </article></section> : null}
       </>}

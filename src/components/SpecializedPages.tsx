@@ -54,7 +54,6 @@ const AINativeAdWorkspace = lazy(() => import('../features/ai-native-ad/AINative
 const VideoEditingWorkspaceV2 = lazy(() => import('../features/video-editing/VideoEditingWorkspace').then(module => ({ default: module.VideoEditingWorkspaceV2 })))
 
 export { DeliveryPlanLifecyclePage as DeliveryPlanPage } from './DeliveryPlanLifecyclePage'
-export { DeliveryApprovalCenterPage as ApprovalCenterPage } from './DeliveryApprovalCenterPage'
 
 function IndustrySchema({ module, profile, industry }: { module: string; industry: string; profile: { fields: string[]; format: string } }) {
   return <section className="industry-schema" aria-label={`${industry}${module}配置`}>

@@ -260,7 +260,7 @@ export function OceanEngineSessionSettings({ projectId }: { projectId: string })
   const copy = session ? statusCopy[session.status] : { title: '尚未保存会话', detail: 'Cookie 会话归属当前组织账号。' }
   return <section className="miyun-connection-settings" aria-labelledby="ocean-engine-session-title">
     <div className="miyun-settings-main">
-      <header><div><span>组织会话 · Project 绑定</span><h2 id="ocean-engine-session-title">巨量投放账号</h2><p>Plan 可选择已绑定当前 Project 的验证账号。</p></div><div className="miyun-settings-status-group" aria-live="polite"><span className={`miyun-connection-status ${session?.status === 'ready' ? 'ready' : ''}`}>{session?.status === 'ready' ? <Check size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />}{loadState === 'loading' ? '正在读取…' : copy.title}</span><small>页面同步于 {formatTime(lastSyncedAt)}</small></div></header>
+      <header><div><span>组织会话 · Project 绑定</span><h2 id="ocean-engine-session-title">巨量投放账号</h2><p>投放计划可选择已绑定当前 Project 的验证账号。</p></div><div className="miyun-settings-status-group" aria-live="polite"><span className={`miyun-connection-status ${session?.status === 'ready' ? 'ready' : ''}`}>{session?.status === 'ready' ? <Check size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />}{loadState === 'loading' ? '正在读取…' : copy.title}</span><small>页面同步于 {formatTime(lastSyncedAt)}</small></div></header>
       <div className="miyun-settings-secret-policy"><LockKeyhole size={18} aria-hidden="true" /><p><b>账号和凭据分开保存</b>{copy.detail} 原始账号 ID 和 Cookie 都不会进入校准导出。</p></div>
 
       <div className="oe-connector-flow">
@@ -318,6 +318,6 @@ export function OceanEngineSessionSettings({ projectId }: { projectId: string })
       </div>
       {notice ? <p className="miyun-settings-notice" role="status" aria-live="polite">{notice}</p> : null}
     </div>
-    <aside className="miyun-cookie-guide"><h3>安全边界</h3><ol><li><span>01</span><p>Cookie 会话归属当前组织账号。</p></li><li><span>02</span><p>Plan 只能选择已绑定当前 Project 的账号。</p></li><li><span>03</span><p>Cookie 只提交到服务端加密存储。</p></li><li><span>04</span><p>验证和同步只使用读取请求。</p></li></ol></aside>
+    <aside className="miyun-cookie-guide"><h3>安全边界</h3><ol><li><span>01</span><p>Cookie 会话归属当前组织账号。</p></li><li><span>02</span><p>投放计划只能选择已绑定当前 Project 的账号。</p></li><li><span>03</span><p>Cookie 只提交到服务端加密存储。</p></li><li><span>04</span><p>验证和同步只使用读取请求。</p></li></ol></aside>
   </section>
 }

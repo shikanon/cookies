@@ -786,7 +786,7 @@ func goldenDraft() PlanDraft {
 }
 
 func testPlatformCreateRequest() CreatePlanRequest {
-	return tourPlanRequest("test-runtime", string(TourCaseGoldenPath), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	return platformPlanRequest("test-runtime", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 }
 
 func testPlatformUpdateRequest(plan DeliveryPlan, expectedVersion int, dailyBudgetMinor int64) UpdatePlanRequest {

@@ -83,9 +83,9 @@ OutcomeSimulation 仅保留历史读取；演示执行、指标和模拟告警�
 
 Mechanistic Simulation v1 显式选择本地 Connector 账号。服务读取该账号已保存的七日启动批次先验。模型输出普通情景和跑量号情景。模型不提前识别跑量单元。模型不生成预算或出价变更。显式 CVR 和追踪先验只用于转化诊断。
 
-## 历史 Tour
+## 已下线的投资人走测
 
-准备与复位已下线，旧写入接口返回 HTTP 410。历史记录保持可读，前端忽略 Tour 参数。旧审批页仅查看历史快照；真实投放进入受控执行中心。未配置执行适配器时返回 `EXECUTION_UNAVAILABLE`，不得回退到 Mock。
+走测流程的代码与历史读取接口已删除，`tour-runs/{run}:prepare` 与 `tour-runs/{run}:reset` 仍返回 HTTP 410 以拒绝旧客户端。历史计划记录保持可读，不受影响。真实投放进入受控执行中心。未配置执行适配器时返回 `EXECUTION_UNAVAILABLE`，不得回退到 Mock。
 
 ## 前端信息架构
 

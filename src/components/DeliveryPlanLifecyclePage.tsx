@@ -1,7 +1,7 @@
 import { DeliveryPlanPlatformFields } from './DeliveryPlanPlatformFields'
 import { ScheduleModeOptions } from './DeliveryChoiceFields'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Boxes, History, Plus, Save } from 'lucide-react'
+import { Boxes, ChevronLeft, ChevronRight, History, Plus, Save } from 'lucide-react'
 import {
   deliveryPlanApi,
   type DeliveryPlan,
@@ -40,7 +40,7 @@ const scenarioLabels: Partial<Record<DeliveryScenario | 'unsaved_draft', string>
 }
 
 function scenarioMetadata(scenario: DeliveryScenario | 'unsaved_draft') {
-  return `${scenarioLabels[scenario] ?? '历史记录'} · scenario=${scenario}`
+  return scenarioLabels[scenario] ?? '历史记录'
 }
 
 export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
@@ -59,6 +59,7 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [inspectedVersionNumber, setInspectedVersionNumber] = useState<number>()
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false)
   const preserveEditorState = useRef(false)
 
   const selectedPlan = useMemo(() => plans.find(plan => plan.id === selectedId), [plans, selectedId])
@@ -176,7 +177,7 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
       setIsNew(false)
       setDirty(false)
       setInspectedVersionNumber(saved.currentVersionNumber)
-      setNotice(`${saved.id} 已保存为 V${saved.currentVersionNumber}；source=${saved.source} · scenario=${saved.scenario}。`)
+      setNotice(`${saved.id} 已保存为 V${saved.currentVersionNumber}。`)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '保存投放计划失败')
     } finally {
@@ -189,10 +190,10 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
     contextLabel="智能投放 / 投放计划"
     errorDetail="DeliveryPlan 或服务端预检读取失败。请确认 Go API 与数据库可用后重试。"
   >
-    <div className="delivery-lifecycle-workspace">
+    <div className={`delivery-lifecycle-workspace${versionHistoryOpen ? '' : ' history-collapsed'}`}>
       <aside className="delivery-plan-list" aria-label="Project 投放计划列表">
         <div className="surface-toolbar">
-          <div><span className="section-label">DeliveryPlan</span><h3>计划草稿</h3></div>
+          <div><span className="section-label">投放计划</span><h3>计划草稿</h3></div>
           <button aria-label="新建投放计划" onClick={beginNew}><Plus size={15}/></button>
         </div>
         <div className="delivery-plan-scroll">
@@ -201,7 +202,6 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
             className={plan.id === selectedId ? 'delivery-plan-list-item active' : 'delivery-plan-list-item'}
             onClick={() => selectPlan(plan)}
           >
-            <span>{plan.id}</span>
             <b>{plan.currentVersion.name}</b>
             <small>V{plan.currentVersionNumber} · {scenarioMetadata(plan.scenario)}</small>
           </button>)}
@@ -213,7 +213,7 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
       <main className="delivery-plan-editor">
         <header className="delivery-editor-header">
           <div>
-            <span className="section-label">{isNew ? '新计划' : `${selectedPlan?.id} · V${selectedPlan?.currentVersionNumber}`}</span>
+            <span className="section-label">{isNew ? '新计划' : `当前计划 · V${selectedPlan?.currentVersionNumber}`}</span>
             <h2>{draft.name || '未命名投放计划'}</h2>
             <p>保存只写入 cookies Delivery 草稿并触发服务端校验；平台配置页可查看编译结果，真实操作在受控执行中心完成。</p>
           </div>
@@ -243,9 +243,9 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
         {notice ? <div className="inline-notice" role="status">{notice}</div> : null}
       </main>
 
-      <aside className="delivery-version-panel" aria-label="不可变版本历史">
-        <div className="surface-toolbar"><div><span className="section-label">Immutable</span><h3>版本历史</h3></div><History size={17}/></div>
-        <div className="delivery-version-scroll">
+      <aside className={`delivery-version-panel${versionHistoryOpen ? '' : ' collapsed'}`} aria-label="不可变版本历史">
+        <div className="surface-toolbar"><div><span className="section-label">不可变版本</span><h3>版本历史</h3></div><button type="button" className="delivery-version-toggle" aria-label={versionHistoryOpen ? '折叠版本历史' : '展开版本历史'} aria-expanded={versionHistoryOpen} onClick={() => setVersionHistoryOpen(value => !value)}>{versionHistoryOpen ? <ChevronRight size={17} aria-hidden="true"/> : <><History size={17} aria-hidden="true"/><ChevronLeft size={13} aria-hidden="true"/></>}</button></div>
+        {versionHistoryOpen ? <div className="delivery-version-scroll">
           {selectedPlan?.versions.map(version => <button
             key={version.versionNumber}
             className={inspectedVersionNumber === version.versionNumber ? 'version-history-item active' : 'version-history-item'}
@@ -257,7 +257,7 @@ export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {
             <small>{new Date(version.createdAt).toLocaleString('zh-CN')}</small>
           </button>)}
           {inspectedVersion ? <VersionSnapshot version={inspectedVersion}/> : <div className="panel-empty">保存后可追溯每个不可变版本。</div>}
-        </div>
+        </div> : null}
       </aside>
     </div>
   </StateBoundary>
@@ -321,12 +321,9 @@ function VersionSnapshot({ version }: { version: DeliveryPlanVersion }) {
       <div><dt>广告主</dt><dd>{version.advertiser.name}</dd></div>
       <div><dt>预算</dt><dd>¥{formatMinor(version.budget.totalMinor)}</dd></div>
       <div><dt>排期</dt><dd>{new Date(version.schedule.startAt).toLocaleDateString('zh-CN')} → {new Date(version.schedule.endAt).toLocaleDateString('zh-CN')}</dd></div>
-      <div><dt>策略来源</dt><dd>{version.strategyReference.route ? <a href={version.strategyReference.route}>{version.strategyReference.taskId}@V{version.strategyReference.version}</a> : version.sourceStrategyVersion}</dd></div>
-      <div><dt>素材</dt><dd>{version.creativeReferences.map((item, index) => <div key={index}>{item.route ? <a href={item.route}>{item.reference?.display_name_snapshot || item.assetId}</a> : item.reference?.display_name_snapshot || item.assetId} · {item.reference?.namespace || 'cookies'} · V{item.reference?.version ?? item.version}</div>)}</dd></div>
-      <div><dt>来源 Hash</dt><dd title={version.strategyReference.contentHash}>{version.strategyReference.contentHash?.slice(0, 12) ?? '—'}</dd></div>
-      <div><dt>内容 Hash</dt><dd title={version.canonicalHash}>{version.canonicalHash.slice(0, 12)}</dd></div>
+      <div><dt>策略来源</dt><dd>{version.strategyReference.route ? <a href={version.strategyReference.route}>策略版本 V{version.strategyReference.version}</a> : `策略版本 V${version.strategyReference.version}`}</dd></div>
+      <div><dt>素材</dt><dd>{version.creativeReferences.map((item, index) => <div key={index}>{item.route ? <a href={item.route}>{item.reference?.display_name_snapshot || `素材 ${index + 1}`}</a> : item.reference?.display_name_snapshot || `素材 ${index + 1}`} · V{item.reference?.version ?? item.version}</div>)}</dd></div>
     </dl>
-    <small>source={version.source} · scenario={version.scenario}</small>
   </div>
 }
 

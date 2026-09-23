@@ -48,11 +48,11 @@ func (r MySQLRepository) CreatePlan(ctx context.Context, value DeliveryPlan, ver
 	_, err = tx.ExecContext(ctx, `INSERT INTO delivery_plans (
 		id, organization_id, project_id, creative_package_id, creative_package_hash, creative_version_id,
 		name, objective, budget_cents, start_at, end_at, status, version, platform, source, scenario,
-		tour_run_id, tour_owner_id, tour_case, current_version, created_by, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		current_version, created_by, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		value.ID, value.OrganizationID, value.ProjectID, value.CreativePackageID, value.CreativePackageHash,
 		value.CreativeVersionID, value.Name, value.Objective, value.BudgetCents, value.StartAt, value.EndAt,
-		value.Status, value.Version, value.Platform, value.Source, value.Scenario, nullableString(value.TourRunID), nullableString(value.TourOwnerID), nullableString(value.TourCase), value.CurrentVersionNumber,
+		value.Status, value.Version, value.Platform, value.Source, value.Scenario, value.CurrentVersionNumber,
 		value.CreatedBy, value.CreatedAt, value.UpdatedAt)
 	if err != nil {
 		return DeliveryPlan{}, err
@@ -1081,7 +1081,7 @@ func scanAlert(row rowScanner) (DeliveryAlert, error) {
 	return v, err
 }
 
-const deliveryPlanSelect = `SELECT id, organization_id, project_id, creative_package_id, creative_package_hash, creative_version_id, name, objective, budget_cents, start_at, end_at, status, version, platform, source, scenario, tour_run_id, tour_owner_id, tour_case, current_version, created_by, created_at, updated_at FROM delivery_plans`
+const deliveryPlanSelect = `SELECT id, organization_id, project_id, creative_package_id, creative_package_hash, creative_version_id, name, objective, budget_cents, start_at, end_at, status, version, platform, source, scenario, current_version, created_by, created_at, updated_at FROM delivery_plans`
 const changeSetSelect = `SELECT id, organization_id, project_id, plan_id, plan_version, status, risk_level, preflight_notes, target_snapshot, target_snapshot_hash, recommendation_id, approved_by, approved_at, rejected_by, rejected_at, rejection_reason, version, created_by, created_at, updated_at FROM delivery_change_sets`
 const approvalSelect = `SELECT approval_id, organization_id, project_id, plan_id, plan_version, change_set_id, change_set_version, plan_canonical_hash, target_snapshot_hash, action_hash, configuration_schema_version, configuration_id, configuration_version, configuration_platform, configuration_profile_version, configuration_canonical_hash, intent_schema_version, intent_id, intent_version, intent_canonical_hash, action, scope, budget_limit_minor, currency, approved_by, approved_at, expires_at, source, scenario FROM delivery_approvals`
 
@@ -1091,13 +1091,11 @@ type rowScanner interface {
 
 func scanDeliveryPlan(row rowScanner) (DeliveryPlan, error) {
 	var value DeliveryPlan
-	var tourRunID, tourOwnerID, tourCase sql.NullString
 	err := row.Scan(&value.ID, &value.OrganizationID, &value.ProjectID, &value.CreativePackageID,
 		&value.CreativePackageHash, &value.CreativeVersionID, &value.Name, &value.Objective,
 		&value.BudgetCents, &value.StartAt, &value.EndAt, &value.Status, &value.Version,
-		&value.Platform, &value.Source, &value.Scenario, &tourRunID, &tourOwnerID, &tourCase, &value.CurrentVersionNumber,
+		&value.Platform, &value.Source, &value.Scenario, &value.CurrentVersionNumber,
 		&value.CreatedBy, &value.CreatedAt, &value.UpdatedAt)
-	value.TourRunID, value.TourOwnerID, value.TourCase = tourRunID.String, tourOwnerID.String, tourCase.String
 	return value, err
 }
 

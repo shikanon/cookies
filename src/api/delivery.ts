@@ -393,9 +393,6 @@ export type DeliveryPlan = {
   platform: 'ocean_engine_mock' | DeliveryPlatform
   source: DeliverySource
   scenario: DeliveryScenario
-  tourRunId?: string
-  tourOwnerId?: string
-  tourCase?: DeliveryTourCaseKey
   currentVersionNumber: number
   currentVersion: DeliveryPlanVersion
   versions: DeliveryPlanVersion[]
@@ -749,9 +746,6 @@ type WireDeliveryPlan = {
   platform: 'ocean_engine_mock' | DeliveryPlatform
   source: DeliverySource
   scenario: DeliveryScenario
-  tour_run_id?: string | null
-  tour_owner_id?: string | null
-  tour_case?: DeliveryTourCaseKey | null
   current_version_number: number
   current_version: WireDeliveryPlanVersion
   versions: WireDeliveryPlanVersion[]
@@ -1471,10 +1465,6 @@ function toDeliveryAlert(value: WireDeliveryAlert): DeliveryAlert {
   }
 }
 
-export type DeliveryTourCaseKey = 'golden_path' | 'preflight_failure' | 'approval_expired' | 'plan_stale' | 'partial_execution' | 'result_unknown' | 'review_rejected_alert'
-
-
-
 async function deliveryPlanRequest<T>(projectId: string, path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body !== undefined) headers.set('Content-Type', 'application/json')
@@ -1600,9 +1590,6 @@ function toDeliveryPlan(plan: WireDeliveryPlan): DeliveryPlan {
     platform: plan.platform,
     source: plan.source,
     scenario: plan.scenario,
-    tourRunId: plan.tour_run_id ?? undefined,
-    tourOwnerId: plan.tour_owner_id ?? undefined,
-    tourCase: plan.tour_case ?? undefined,
     currentVersionNumber: plan.current_version_number,
     currentVersion: toDeliveryPlanVersion(plan.current_version),
     versions: plan.versions.map(toDeliveryPlanVersion),

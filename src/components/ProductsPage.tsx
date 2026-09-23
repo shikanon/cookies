@@ -279,7 +279,7 @@ export function ProductsPage({ activeView }: { activeView: string }) {
   return <div className="products-view">
     <div className="table-surface">
       <div className="surface-toolbar">
-        <div><span className="section-label">PRODUCT CATALOG</span><h3>{isMapping ? '巨量映射' : '产品列表'}</h3><span className="products-count">{products.length} 个{isMapping ? '' : '产品'}</span></div>
+        <div><span className="section-label">产品目录</span><h3>{isMapping ? '巨量映射' : '产品列表'}</h3><span className="products-count">{products.length} 个{isMapping ? '' : '产品'}</span></div>
         <div className="products-toolbar-actions">
           <button aria-label="刷新" onClick={() => void refreshScopedProducts()} disabled={busy}><RefreshCw size={15}/></button>
           <button className="primary-button" onClick={openCreate} disabled={busy}><Plus size={15}/>新建产品</button>
@@ -324,7 +324,7 @@ export function ProductsPage({ activeView }: { activeView: string }) {
 
     {!isMapping && selected ? <div className="products-detail">
       <header>
-        <div><span className="section-label">{categoryLabel(selected.category)}对象</span><h2>{selected.name}</h2><p>cookies 产品是事实源；巨量商品 ID 只是平台映射。</p></div>
+        <div><span className="section-label">{categoryLabel(selected.category)}对象</span><h2>{selected.name}</h2><p>产品资料以 Cookies 目录为准；巨量商品 ID 只是平台映射。</p></div>
         <span className="products-detail-id">{selected.id}</span>
       </header>
       <dl>
@@ -349,7 +349,7 @@ export function ProductsPage({ activeView }: { activeView: string }) {
     {dialog ? <div className="task-dialog-backdrop" role="dialog" aria-modal="true" onClick={() => { if (!busy) setDialog(null) }}>
       <form className="products-dialog" onSubmit={event => { event.preventDefault(); void submitDialog() }} onClick={event => event.stopPropagation()}>
         <header>
-          <div><span className="section-label">{dialog.mode === 'edit' ? 'EDIT PRODUCT' : 'NEW PRODUCT'}</span><h3>{dialog.mode === 'edit' ? `编辑 ${dialog.product.name}` : '新建产品'}</h3></div>
+          <div><span className="section-label">{dialog.mode === 'edit' ? '编辑产品' : '新建产品'}</span><h3>{dialog.mode === 'edit' ? `编辑 ${dialog.product.name}` : '新建产品'}</h3></div>
           <button type="button" aria-label="关闭" onClick={() => setDialog(null)} disabled={busy}><X size={16}/></button>
         </header>
 
